@@ -26,6 +26,7 @@ async function j(env, method, path, body) {
     headers: {
       Authorization: "Bearer " + env.GITHUB_TOKEN,
       Accept: "application/vnd.github+json",
+      "User-Agent": "spine-broker",
       "X-GitHub-Api-Version": "2022-11-28",
       "Content-Type": "application/json",
     },

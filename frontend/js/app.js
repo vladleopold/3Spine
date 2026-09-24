@@ -18,7 +18,7 @@
     status: $("status"),
   };
 
-  const BROKER = "https://spine-broker.REPLACE_SUBDOMAIN.workers.dev";
+  const BROKER = "https://spine-broker.leopolds2010.workers.dev";
   const MAX_ZIP = 35 * 1024 * 1024;
 
   let files = [];
