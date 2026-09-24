@@ -4,8 +4,6 @@
   const $ = (id) => document.getElementById(id);
 
   const els = {
-    backendUrl: $("backend-url"),
-    saveUrl: $("save-url"),
     health: $("health"),
     dropzone: $("dropzone"),
     pickFolder: $("pick-folder"),
@@ -22,19 +20,14 @@
 
   let files = [];
   let lastToken = null;
+  let activeServer = "http://127.0.0.1:8080";
 
-  const LS_KEY = "spine-backend-url";
-
-  /* Кандидаты адреса сервера для автоопределения (в порядке приоритета).
-     Backend живёт в Linux-контейнере (Docker) рядом с пользователем — на этой
-     же машине или в локальной сети, поэтому пробуем loopback и имя хоста. */
+  /* Адрес сервера определяется автоматически — ничего вводить не нужно.
+     Backend живёт в Linux-контейнере (Docker) на этой же машине или в
+     локальной сети, поэтому пробуем loopback и имя хоста. */
   function backendCandidates() {
     const set = new Set();
-    const manual = (els.backendUrl.value || "").trim().replace(/\/+$/, "");
-    const param = new URLSearchParams(location.search).get("server");
     const host = location.hostname;
-    if (param) set.add(param.replace(/\/+$/, ""));
-    if (manual) set.add(manual);
     set.add("http://127.0.0.1:8080");
     set.add("http://localhost:8080");
     if (host && host !== "localhost" && host !== "127.0.0.1") set.add("http://" + host + ":8080");
@@ -42,13 +35,8 @@
     return Array.from(set);
   }
 
-  function backendUrl() {
-    return els.backendUrl.value ? els.backendUrl.value.trim().replace(/\/+$/, "") : "";
-  }
-
   function activeUrl() {
-    const v = backendUrl();
-    return v || backendCandidates()[0] || "http://127.0.0.1:8080";
+    return activeServer;
   }
 
   function logLink(text, cls) {
@@ -112,8 +100,7 @@
     for (const url of backendCandidates()) {
       const j = await probe(url);
       if (j) {
-        els.backendUrl.value = url;
-        localStorage.setItem(LS_KEY, url);
+        activeServer = url;
         els.health.textContent = "✓ сервер онлайн";
         els.health.className = "health ok";
         return true;
@@ -185,17 +172,6 @@
     setStatus("готов", "");
   });
 
-  /* ---------------- backend url ---------------- */
-
-  els.backendUrl.value = localStorage.getItem(LS_KEY) || "";
-  els.saveUrl.addEventListener("click", () => {
-    localStorage.setItem(LS_KEY, backendUrl());
-    checkHealth();
-  });
-  els.backendUrl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { localStorage.setItem(LS_KEY, backendUrl()); checkHealth(); }
-  });
-
   /* ---------------- start ---------------- */
 
   async function buildZip() {
@@ -255,7 +231,7 @@
       }
     } catch (e) {
       log("Ошибка сервера: " + e.message, "err");
-      log("Проверьте адрес сервера (⚙ салфетка справа вверху) и что Linux-раннер запущен.", "dim");
+      log("Не удалось связаться с Linux-сервером конвертации.", "dim");
       setStatus("ошибка", "err");
     } finally {
       els.start.disabled = files.length === 0;
