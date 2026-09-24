@@ -41,20 +41,13 @@ jobs:
           python3 .codespace/convert.py input.zip output.zip
           unzip -l output.zip
 
-      - name: Compile block → .spine (Spine Editor, версия по JSON; не ломает результат без редактора)
-        env:
-          SPINE_EDITOR: ${{ secrets.SPINE_EDITOR }}
-        run: |
-          set -euo pipefail
-          python3 .codespace/compile_block.py output.zip output.zip
-          unzip -l output.zip
-
-      - name: Publish results to results branch
+      - name: Publish baseline results (json + images) to results branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           JOB="$(git log -1 --format=%s)"
+          echo "$JOB" > job-id.txt
           rm -rf publish && mkdir publish && cp output.zip publish/
           cd publish
           git init -q
@@ -63,9 +56,66 @@ jobs:
           git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
 
+      - name: Upload conversion artifact for compile block
+        uses: actions/upload-artifact@v4
+        with:
+          name: convert-output
+          path: |
+            output.zip
+            job-id.txt
+          if-no-files-found: error
+
       - name: Clean inbox branch (no loop on delete event)
         if: always()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" --delete inbox || true
+
+  compile:
+    needs: convert
+    continue-on-error: true
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Overlay tooling from main
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth 1
+          git checkout origin/main -- .codespace
+          git status --short
+
+      - name: Download conversion artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: convert-output
+          path: work
+          run-id: ${{ github.run_id }}
+
+      - name: Compile block → .spine (licensed Spine Editor; версия по JSON)
+        env:
+          SPINE_EDITOR: ${{ secrets.SPINE_EDITOR }}
+        run: |
+          set -euo pipefail
+          test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
+          SPINE="${SPINE_EDITOR:-/Applications/Spine.app/Contents/MacOS/Spine}"
+          SPINE_EDITOR="$SPINE" python3 .codespace/compile_block.py work/output.zip work/output.zip
+          unzip -l work/output.zip
+
+      - name: Publish final results (with .spine) to results branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          JOB="$(cat work/job-id.txt 2>/dev/null || true)"
+          [ -n "${JOB}" ] || JOB="${{ github.event.head_commit.message }}"
+          rm -rf publish && mkdir publish && cp work/output.zip publish/
+          cd publish
+          git init -q
+          git checkout -q -b results
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add output.zip
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} +<spine> $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
