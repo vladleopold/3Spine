@@ -44,7 +44,7 @@ jobs:
 
       - name: Copy input ZIP into the Codespace
         run: |
-          gh codespace cp -c "${{ steps.cs.outputs.codespace }}" /tmp/input.zip remote:/tmp/input.zip
+          cat /tmp/input.zip | gh codespace ssh -c "${{ steps.cs.outputs.codespace }}" -- sh -c 'cat > /tmp/input.zip'
 
       - name: Convert inside Codespace (Linux native converter)
         run: |
@@ -53,7 +53,7 @@ jobs:
 
       - name: Fetch result ZIP
         run: |
-          gh codespace cp -c "${{ steps.cs.outputs.codespace }}" remote:/tmp/output.zip /tmp/output.zip
+          gh codespace ssh -c "${{ steps.cs.outputs.codespace }}" -- cat /tmp/output.zip > /tmp/output.zip
           unzip -l /tmp/output.zip
 
       - name: Verify plum.json
