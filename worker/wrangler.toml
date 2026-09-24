@@ -1,7 +1,7 @@
 name = "spine-broker"
 main = "src/index.js"
 compatibility_date = "2024-11-01"
-account_id = "d9c9f1882a0a73e0a592e4470b85e0b4"
+account_id = "66130f1dbb60b0cf0ddcad52ebe645d1"
 
 [observability]
 enabled = false

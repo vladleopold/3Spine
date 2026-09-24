@@ -35,6 +35,15 @@ jobs:
             echo "REFRESH_RESP=$RESP"
           } >> "$GITHUB_ENV"
 
+      - name: Rotate CF_WRANGLER_OAUTH (dash rotates refresh tokens)
+        env:
+          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          NEW_RT="$(printf '%s' "${REFRESH_RESP}" | jq -r '.refresh_token // empty')"
+          test -n "${NEW_RT}" || { echo "no new refresh token in response"; exit 0; }
+          printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}" --repo
+
       - name: Deploy worker to Cloudflare
         working-directory: worker
         run: npx wrangler@latest deploy
@@ -44,12 +53,3 @@ jobs:
         env:
           GH_TOKEN_VALUE: ${{ secrets.ACCESS_TOKEN }}
         run: printf '%s' "${GH_TOKEN_VALUE}" | npx wrangler@latest secret put GITHUB_TOKEN
-
-      - name: Rotate CF_WRANGLER_OAUTH (dash rotates refresh tokens)
-        env:
-          GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
-        run: |
-          set -euo pipefail
-          NEW_RT="$(printf '%s' "${REFRESH_RESP}" | jq -r '.refresh_token // empty')"
-          test -n "${NEW_RT}" || { echo "no new refresh token in response"; exit 0; }
-          printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}" --repo
