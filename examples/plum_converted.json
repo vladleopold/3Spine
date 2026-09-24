@@ -1,0 +1,660 @@
+{
+  "skeleton": {
+    "hash": "oYyeXmsvfrVA4zgidIXxgLRIpLM",
+    "spine": "3.8.99",
+    "x": -131.93698120117188,
+    "y": -88.85400390625,
+    "width": 274.9369812011719,
+    "height": 174.85400390625
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "bone",
+      "parent": "root",
+      "x": -30.0,
+      "y": -10.0
+    },
+    {
+      "name": "Light_plum_1",
+      "parent": "bone",
+      "x": -12.236976623535156,
+      "y": 8.545997619628906,
+      "scaleX": 2.299999952316284,
+      "scaleY": 2.299999952316284
+    },
+    {
+      "name": "bone2",
+      "parent": "root",
+      "x": 40.0,
+      "y": -10.0
+    },
+    {
+      "name": "Light_plum_2",
+      "parent": "bone2",
+      "x": 11.399005889892578,
+      "y": 6.806999206542969,
+      "scaleX": 2.200000047683716,
+      "scaleY": 2.200000047683716
+    }
+  ],
+  "slots": [
+    {
+      "name": "plum2",
+      "bone": "bone2",
+      "color": "ffffff00",
+      "attachment": "plum2"
+    },
+    {
+      "name": "Light_plum_2",
+      "bone": "Light_plum_2",
+      "color": "ffffff00",
+      "attachment": "plum_light_0001",
+      "blend": "additive"
+    },
+    {
+      "name": "plum",
+      "bone": "bone",
+      "color": "ffffff00",
+      "attachment": "plum"
+    },
+    {
+      "name": "Light_plum_1",
+      "bone": "Light_plum_1",
+      "color": "ffffff00",
+      "attachment": "plum_light_0001",
+      "blend": "additive"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "attachments": {
+        "Light_plum_1": {
+          "plum_light_0001": {
+            "type": "region",
+            "path": "plum_light_0001",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0002": {
+            "type": "region",
+            "path": "plum_light_0002",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0003": {
+            "type": "region",
+            "path": "plum_light_0003",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0004": {
+            "type": "region",
+            "path": "plum_light_0004",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0005": {
+            "type": "region",
+            "path": "plum_light_0005",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0006": {
+            "type": "region",
+            "path": "plum_light_0006",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0007": {
+            "type": "region",
+            "path": "plum_light_0007",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0008": {
+            "type": "region",
+            "path": "plum_light_0008",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0009": {
+            "type": "region",
+            "path": "plum_light_0009",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0010": {
+            "type": "region",
+            "path": "plum_light_0010",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0011": {
+            "type": "region",
+            "path": "plum_light_0011",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0012": {
+            "type": "region",
+            "path": "plum_light_0012",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0013": {
+            "type": "region",
+            "path": "plum_light_0013",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0014": {
+            "type": "region",
+            "path": "plum_light_0014",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0015": {
+            "type": "region",
+            "path": "plum_light_0015",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0016": {
+            "type": "region",
+            "path": "plum_light_0016",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0017": {
+            "type": "region",
+            "path": "plum_light_0017",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0018": {
+            "type": "region",
+            "path": "plum_light_0018",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0019": {
+            "type": "region",
+            "path": "plum_light_0019",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          },
+          "plum_light_0020": {
+            "type": "region",
+            "path": "plum_light_0020",
+            "width": 78.0,
+            "height": 76.0,
+            "x": 3.814697265625e-06,
+            "y": 4.76837158203125e-07
+          }
+        },
+        "Light_plum_2": {
+          "plum_light_0001": {
+            "type": "region",
+            "path": "plum_light_0001",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0002": {
+            "type": "region",
+            "path": "plum_light_0002",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0003": {
+            "type": "region",
+            "path": "plum_light_0003",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0004": {
+            "type": "region",
+            "path": "plum_light_0004",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0005": {
+            "type": "region",
+            "path": "plum_light_0005",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0006": {
+            "type": "region",
+            "path": "plum_light_0006",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0007": {
+            "type": "region",
+            "path": "plum_light_0007",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0008": {
+            "type": "region",
+            "path": "plum_light_0008",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0009": {
+            "type": "region",
+            "path": "plum_light_0009",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0010": {
+            "type": "region",
+            "path": "plum_light_0010",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0011": {
+            "type": "region",
+            "path": "plum_light_0011",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0012": {
+            "type": "region",
+            "path": "plum_light_0012",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0013": {
+            "type": "region",
+            "path": "plum_light_0013",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0014": {
+            "type": "region",
+            "path": "plum_light_0014",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0015": {
+            "type": "region",
+            "path": "plum_light_0015",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0016": {
+            "type": "region",
+            "path": "plum_light_0016",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0017": {
+            "type": "region",
+            "path": "plum_light_0017",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0018": {
+            "type": "region",
+            "path": "plum_light_0018",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0019": {
+            "type": "region",
+            "path": "plum_light_0019",
+            "width": 78.0,
+            "height": 76.0
+          },
+          "plum_light_0020": {
+            "type": "region",
+            "path": "plum_light_0020",
+            "width": 78.0,
+            "height": 76.0
+          }
+        },
+        "plum": {
+          "plum": {
+            "type": "region",
+            "path": "plum",
+            "width": 174.0,
+            "height": 166.0,
+            "x": -6.0,
+            "y": 13.0
+          }
+        },
+        "plum2": {
+          "plum2": {
+            "type": "region",
+            "path": "plum2",
+            "width": 169.0,
+            "height": 161.0,
+            "x": 18.5,
+            "y": 12.5
+          }
+        }
+      }
+    }
+  ],
+  "animations": {
+    "win": {
+      "slots": {
+        "Light_plum_1": {
+          "color": [
+            {
+              "time": 0.0,
+              "color": "ffffff95"
+            }
+          ],
+          "attachment": [
+            {
+              "time": 0.0,
+              "name": null
+            },
+            {
+              "time": 0.03333333507180214,
+              "name": "plum_light_0001"
+            },
+            {
+              "time": 0.06666667014360428,
+              "name": "plum_light_0002"
+            },
+            {
+              "time": 0.10000000149011612,
+              "name": "plum_light_0003"
+            },
+            {
+              "time": 0.13333334028720856,
+              "name": "plum_light_0004"
+            },
+            {
+              "time": 0.1666666716337204,
+              "name": "plum_light_0005"
+            },
+            {
+              "time": 0.20000000298023224,
+              "name": "plum_light_0006"
+            },
+            {
+              "time": 0.23333333432674408,
+              "name": "plum_light_0007"
+            },
+            {
+              "time": 0.2666666805744171,
+              "name": "plum_light_0008"
+            },
+            {
+              "time": 0.30000001192092896,
+              "name": "plum_light_0009"
+            },
+            {
+              "time": 0.3333333432674408,
+              "name": "plum_light_0010"
+            },
+            {
+              "time": 0.36666667461395264,
+              "name": "plum_light_0011"
+            },
+            {
+              "time": 0.4000000059604645,
+              "name": "plum_light_0012"
+            },
+            {
+              "time": 0.4333333373069763,
+              "name": "plum_light_0013"
+            },
+            {
+              "time": 0.46666666865348816,
+              "name": "plum_light_0014"
+            },
+            {
+              "time": 0.5,
+              "name": "plum_light_0015"
+            },
+            {
+              "time": 0.5333333611488342,
+              "name": "plum_light_0016"
+            },
+            {
+              "time": 0.5666666626930237,
+              "name": "plum_light_0017"
+            },
+            {
+              "time": 0.6000000238418579,
+              "name": "plum_light_0018"
+            },
+            {
+              "time": 0.6333333253860474,
+              "name": "plum_light_0019"
+            },
+            {
+              "time": 0.6666666865348816,
+              "name": "plum_light_0020"
+            },
+            {
+              "time": 0.699999988079071,
+              "name": null
+            }
+          ]
+        },
+        "Light_plum_2": {
+          "color": [
+            {
+              "time": 0.0,
+              "color": "ffffff4f"
+            }
+          ],
+          "attachment": [
+            {
+              "time": 0.0,
+              "name": null
+            },
+            {
+              "time": 0.10000000149011612,
+              "name": "plum_light_0001"
+            },
+            {
+              "time": 0.13333334028720856,
+              "name": "plum_light_0002"
+            },
+            {
+              "time": 0.1666666716337204,
+              "name": "plum_light_0003"
+            },
+            {
+              "time": 0.20000000298023224,
+              "name": "plum_light_0004"
+            },
+            {
+              "time": 0.23333333432674408,
+              "name": "plum_light_0005"
+            },
+            {
+              "time": 0.2666666805744171,
+              "name": "plum_light_0006"
+            },
+            {
+              "time": 0.30000001192092896,
+              "name": "plum_light_0007"
+            },
+            {
+              "time": 0.3333333432674408,
+              "name": "plum_light_0008"
+            },
+            {
+              "time": 0.36666667461395264,
+              "name": "plum_light_0009"
+            },
+            {
+              "time": 0.4000000059604645,
+              "name": "plum_light_0010"
+            },
+            {
+              "time": 0.4333333373069763,
+              "name": "plum_light_0011"
+            },
+            {
+              "time": 0.46666666865348816,
+              "name": "plum_light_0012"
+            },
+            {
+              "time": 0.5,
+              "name": "plum_light_0013"
+            },
+            {
+              "time": 0.5333333611488342,
+              "name": "plum_light_0014"
+            },
+            {
+              "time": 0.5666666626930237,
+              "name": "plum_light_0015"
+            },
+            {
+              "time": 0.6000000238418579,
+              "name": "plum_light_0016"
+            },
+            {
+              "time": 0.6333333253860474,
+              "name": "plum_light_0017"
+            },
+            {
+              "time": 0.6666666865348816,
+              "name": "plum_light_0018"
+            },
+            {
+              "time": 0.699999988079071,
+              "name": "plum_light_0019"
+            },
+            {
+              "time": 0.7333333492279053,
+              "name": "plum_light_0020"
+            },
+            {
+              "time": 0.7666666507720947,
+              "name": null
+            }
+          ]
+        },
+        "plum": {
+          "color": [
+            {
+              "time": 0.0,
+              "color": "ffffffff"
+            }
+          ]
+        },
+        "plum2": {
+          "color": [
+            {
+              "time": 0.0,
+              "color": "ffffffff"
+            }
+          ]
+        }
+      },
+      "bones": {
+        "bone": {
+          "scale": [
+            {
+              "time": 0.0,
+              "x": 1.0,
+              "y": 1.0
+            },
+            {
+              "time": 0.10000000149011612,
+              "x": 1.1200000047683716,
+              "y": 1.1200000047683716
+            },
+            {
+              "time": 0.5,
+              "x": 1.0700000524520874,
+              "y": 1.0700000524520874
+            },
+            {
+              "time": 0.6666666865348816,
+              "x": 0.8199999928474426,
+              "y": 0.8199999928474426
+            },
+            {
+              "time": 1.0,
+              "x": 1.0,
+              "y": 1.0
+            }
+          ]
+        },
+        "bone2": {
+          "scale": [
+            {
+              "time": 0.0,
+              "x": 1.0,
+              "y": 1.0
+            },
+            {
+              "time": 0.1666666716337204,
+              "x": 1.1200000047683716,
+              "y": 1.1200000047683716
+            },
+            {
+              "time": 0.5333333611488342,
+              "x": 1.0700000524520874,
+              "y": 1.0700000524520874
+            },
+            {
+              "time": 0.7333333492279053,
+              "x": 0.8199999928474426,
+              "y": 0.8199999928474426
+            },
+            {
+              "time": 1.0,
+              "x": 1.0,
+              "y": 1.0
+            }
+          ]
+        }
+      }
+    }
+  }
+}

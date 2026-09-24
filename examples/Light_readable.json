@@ -1,0 +1,544 @@
+{
+  "skeleton": {
+    "hash": "4pWLXJf3JJDny9C7DHejSkif40s",
+    "spine": "3.8.99",
+    "x": -143.55,
+    "y": -94.13,
+    "width": 284.29,
+    "height": 173.28
+  },
+  "bones": [
+    {
+      "name": "root"
+    },
+    {
+      "name": "bone",
+      "parent": "root",
+      "x": -42
+    },
+    {
+      "name": "Light",
+      "parent": "bone",
+      "x": -12.63,
+      "y": -7.49,
+      "scaleX": 2.28,
+      "scaleY": 2.28
+    },
+    {
+      "name": "bone2",
+      "parent": "root",
+      "x": 50
+    },
+    {
+      "name": "Light2",
+      "parent": "bone2",
+      "x": 4.93,
+      "y": -7.89,
+      "scaleX": 2.2,
+      "scaleY": 2.2
+    }
+  ],
+  "slots": [
+    {
+      "name": "cherry2",
+      "bone": "bone2",
+      "color": "ffffff00",
+      "attachment": "cherry2"
+    },
+    {
+      "name": "Light_2",
+      "bone": "Light2",
+      "color": "ffffff00",
+      "attachment": "cherry_lights_0001",
+      "blend": "additive"
+    },
+    {
+      "name": "cherry",
+      "bone": "bone",
+      "color": "ffffff00",
+      "attachment": "cherry"
+    },
+    {
+      "name": "Light_1",
+      "bone": "Light",
+      "color": "ffffff00",
+      "attachment": "cherry_lights_0001",
+      "blend": "additive"
+    }
+  ],
+  "skins": [
+    {
+      "name": "default",
+      "attachments": {
+        "Light_1": {
+          "cherry_lights_0001": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0002": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0003": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0004": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0005": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0006": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0007": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0008": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0009": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0010": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0011": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0012": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0013": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0014": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0015": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0016": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0017": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0018": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0019": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0020": {
+            "width": 78,
+            "height": 76
+          }
+        },
+        "Light_2": {
+          "cherry_lights_0001": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0002": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0003": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0004": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0005": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0006": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0007": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0008": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0009": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0010": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0011": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0012": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0013": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0014": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0015": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0016": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0017": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0018": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0019": {
+            "width": 78,
+            "height": 76
+          },
+          "cherry_lights_0020": {
+            "width": 78,
+            "height": 76
+          }
+        },
+        "cherry": {
+          "cherry": {
+            "x": -11.5,
+            "y": -6,
+            "width": 161,
+            "height": 166
+          }
+        },
+        "cherry2": {
+          "cherry2": {
+            "x": 6.5,
+            "y": -8,
+            "width": 155,
+            "height": 162
+          }
+        }
+      }
+    }
+  ],
+  "animations": {
+    "win": {
+      "slots": {
+        "Light_1": {
+          "attachment": [
+            {
+              "name": null
+            },
+            {
+              "time": 0.03333,
+              "name": "cherry_lights_0001"
+            },
+            {
+              "time": 0.06667,
+              "name": "cherry_lights_0002"
+            },
+            {
+              "time": 0.1,
+              "name": "cherry_lights_0003"
+            },
+            {
+              "time": 0.13333,
+              "name": "cherry_lights_0004"
+            },
+            {
+              "time": 0.16667,
+              "name": "cherry_lights_0005"
+            },
+            {
+              "time": 0.2,
+              "name": "cherry_lights_0006"
+            },
+            {
+              "time": 0.23333,
+              "name": "cherry_lights_0007"
+            },
+            {
+              "time": 0.26667,
+              "name": "cherry_lights_0008"
+            },
+            {
+              "time": 0.3,
+              "name": "cherry_lights_0009"
+            },
+            {
+              "time": 0.33333,
+              "name": "cherry_lights_0010"
+            },
+            {
+              "time": 0.36667,
+              "name": "cherry_lights_0011"
+            },
+            {
+              "time": 0.4,
+              "name": "cherry_lights_0012"
+            },
+            {
+              "time": 0.43333,
+              "name": "cherry_lights_0013"
+            },
+            {
+              "time": 0.46667,
+              "name": "cherry_lights_0014"
+            },
+            {
+              "time": 0.5,
+              "name": "cherry_lights_0015"
+            },
+            {
+              "time": 0.53333,
+              "name": "cherry_lights_0016"
+            },
+            {
+              "time": 0.56667,
+              "name": "cherry_lights_0017"
+            },
+            {
+              "time": 0.6,
+              "name": "cherry_lights_0018"
+            },
+            {
+              "time": 0.63333,
+              "name": "cherry_lights_0019"
+            },
+            {
+              "time": 0.66667,
+              "name": "cherry_lights_0020"
+            },
+            {
+              "time": 0.7,
+              "name": null
+            }
+          ],
+          "color": [
+            {
+              "color": "ffffff95"
+            }
+          ]
+        },
+        "Light_2": {
+          "attachment": [
+            {
+              "name": null
+            },
+            {
+              "time": 0.06667,
+              "name": "cherry_lights_0001"
+            },
+            {
+              "time": 0.1,
+              "name": "cherry_lights_0002"
+            },
+            {
+              "time": 0.13333,
+              "name": "cherry_lights_0003"
+            },
+            {
+              "time": 0.16667,
+              "name": "cherry_lights_0004"
+            },
+            {
+              "time": 0.2,
+              "name": "cherry_lights_0005"
+            },
+            {
+              "time": 0.23333,
+              "name": "cherry_lights_0006"
+            },
+            {
+              "time": 0.26667,
+              "name": "cherry_lights_0007"
+            },
+            {
+              "time": 0.3,
+              "name": "cherry_lights_0008"
+            },
+            {
+              "time": 0.33333,
+              "name": "cherry_lights_0009"
+            },
+            {
+              "time": 0.36667,
+              "name": "cherry_lights_0010"
+            },
+            {
+              "time": 0.4,
+              "name": "cherry_lights_0011"
+            },
+            {
+              "time": 0.43333,
+              "name": "cherry_lights_0012"
+            },
+            {
+              "time": 0.46667,
+              "name": "cherry_lights_0013"
+            },
+            {
+              "time": 0.5,
+              "name": "cherry_lights_0014"
+            },
+            {
+              "time": 0.53333,
+              "name": "cherry_lights_0015"
+            },
+            {
+              "time": 0.56667,
+              "name": "cherry_lights_0016"
+            },
+            {
+              "time": 0.6,
+              "name": "cherry_lights_0017"
+            },
+            {
+              "time": 0.63333,
+              "name": "cherry_lights_0018"
+            },
+            {
+              "time": 0.66667,
+              "name": "cherry_lights_0019"
+            },
+            {
+              "time": 0.7,
+              "name": "cherry_lights_0020"
+            },
+            {
+              "time": 0.73333,
+              "name": null
+            }
+          ],
+          "color": [
+            {
+              "color": "ffffff64"
+            }
+          ]
+        },
+        "cherry": {
+          "color": [
+            {
+              "color": "ffffffff"
+            }
+          ]
+        },
+        "cherry2": {
+          "color": [
+            {
+              "color": "ffffffff"
+            }
+          ]
+        }
+      },
+      "bones": {
+        "bone": {
+          "rotate": [
+            {},
+            {
+              "time": 0.5,
+              "angle": -5
+            },
+            {
+              "time": 0.66667,
+              "angle": 2
+            },
+            {
+              "time": 1
+            }
+          ],
+          "scale": [
+            {},
+            {
+              "time": 0.1,
+              "x": 1.12,
+              "y": 1.12
+            },
+            {
+              "time": 0.5,
+              "x": 1.07,
+              "y": 1.07
+            },
+            {
+              "time": 0.66667,
+              "x": 0.88,
+              "y": 0.88
+            },
+            {
+              "time": 1
+            }
+          ]
+        },
+        "bone2": {
+          "rotate": [
+            {},
+            {
+              "time": 0.53333,
+              "angle": -5
+            },
+            {
+              "time": 0.73333,
+              "angle": 2
+            },
+            {
+              "time": 1
+            }
+          ],
+          "scale": [
+            {},
+            {
+              "time": 0.16667,
+              "x": 1.12,
+              "y": 1.12
+            },
+            {
+              "time": 0.53333,
+              "x": 1.07,
+              "y": 1.07
+            },
+            {
+              "time": 0.73333,
+              "x": 0.88,
+              "y": 0.88
+            },
+            {
+              "time": 1
+            }
+          ]
+        }
+      }
+    }
+  }
+}
