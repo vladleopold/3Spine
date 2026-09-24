@@ -22,22 +22,11 @@ jobs:
           tar xf /tmp/linux -C /tmp/spine
           find /tmp/spine -maxdepth 3 -type d
 
-      - name: Prepare input json
-        run: |
-          python3 - <<'PY'
-          import json
-          d = json.load(open("examples/plum.skel", "rb"))
-          rel = d if isinstance(d, dict) else {}
-          print("examples read ok")
-          PY
-          cp examples/plum.skel /tmp/in.skel 2>/dev/null || true
-          ls -la examples/
-
       - name: Run headless import → save .spine (trial)
         run: |
           cd /tmp/spine/SpineTrial
           ls -la
-          timeout 300 xvfb-run -a ./SpineTrial.sh -i /tmp/in.skel -o /tmp/out.spine -r 2>&1 | tail -40 || true
+          timeout 300 xvfb-run -a ./SpineTrial.sh -i "$GITHUB_WORKSPACE/examples/plum.json" -o /tmp/out.spine -r 2>&1 | tail -40 || true
           echo "---- result ----"
           ls -la /tmp/out.spine 2>/dev/null && file /tmp/out.spine || echo "NO /tmp/out.spine produced"
 
