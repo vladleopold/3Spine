@@ -45,3 +45,19 @@ jobs:
           curl -fsS http://127.0.0.1:18080/health
           echo
           docker rm -f spine-backend-test
+
+  # ---- E2E: Linux + Docker (GitHub-hosted runner — локально ничего не нужно) ----
+  linux-e2e:
+    runs-on: ubuntu-latest
+    needs: backend-container
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Native converter executes on Linux via Docker
+        run: |
+          docker build -t spine-backend:runner ./backend
+          mkdir -p /tmp/shr
+          docker run --rm -v "$PWD/examples/plum.skel:/data/plum.skel:ro" -v /tmp/shr:/data spine-backend:runner \
+            /opt/spine-converter/converter/SpineSkeletonDataConverter /data/plum.skel /data/plum.json
+          docker run --rm -i -v /tmp/shr:/data spine-backend:runner \
+            python3 -c "import json; d=json.load(open('/data/plum.json')); assert d['skeleton']['spine'].startswith('3.8'); print('E2E OK — spine', d['skeleton']['spine'], '| bones', len(d['bones']))"

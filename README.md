@@ -9,8 +9,8 @@ Linux-контейнера (Docker)**. Локально Linux не нужен.
 │  GitHub Pages (GUI)  │ ──────────────────────────────────▶ │  Linux-контейнер (any Docker host)      │
 │  выбор папки, Start, │ ◀────────────────────────────────── │  ├─ backend/server.py   (HTTP :8080)    │
 │  лог, скачивание     │     result ZIP (JSON + images)      │  ├─ backend/converter/*  (SpineC++ ELF)│
-└──────────────────────┘                                      │  └─ GitHub Actions self-hosted runner    │
-                                                            └────────────────────────────────────────┘
+└──────────────────────┘                                      │  └─ GitHub Actions (Linux + Docker)   │
+                                                             └────────────────────────────────────────┘
 ```
 
 - **Frontend** (`frontend/`) — статика на GitHub Pages. GUI сам находит сервер.
@@ -18,7 +18,7 @@ Linux-контейнера (Docker)**. Локально Linux не нужен.
   запускает нативный `SpineSkeletonDataConverter` на каждый `.skel`, отдаёт
   результат (JSON + изображения).
 - **Docker** — `backend/Dockerfile` + `docker-compose.yml`:
-  `backend` (сервис :8080) и `runner` (self-hosted runner, Linux).
+  `backend` (сервис :8080) и `runner` (GitHub Actions, Linux + Docker).
 - Конвертер — Linux ELF, работает **только** в контейнере. Python-парсер не используется.
 
 ## Репозиторий
@@ -27,18 +27,16 @@ Linux-контейнера (Docker)**. Локально Linux не нужен.
 vladleopold/3Spine   (новый, отдельный — spine-link не затрагивается)
 ```
 
-## Quick start (двумя командами, на любой машине с Docker)
+## Quick start
 
-```bash
-git clone git@github.com:vladleopold/3Spine.git && cd 3Spine
-cp .env.example .env          # впишите ACCESS_TOKEN (repo scope)
-docker compose up -d --build  # поднимет backend :8080 + self-hosted runner
-```
+Локально ничего устанавливать не нужно. Вся работа идёт на Linux прямо
+в GitHub Actions (у него уже есть Docker):
 
-- GUI: https://vladleopold.github.io/3Spine/ (ничего не вводить — адрес сервера
-  определяется автоматически как `127.0.0.1:8080`/`localhost:8080`).
-- Runner регистрируется автоматически (VS Code / compose) и выполняет
-  `.github/workflows/converter-test.yml` на Linux прямо в контейнере.
+- CI/CD `converter-test.yml` (push в `main`): собирает образ `ubuntu:24.04`,
+  гоняет настоящий C++-конвертер на реальных `.skel` в контейнере, проверяет
+  HTTP-сервис и сквозной E2E — всё на GitHub-hosted Linux.
+- GUI: https://vladleopold.github.io/3Spine/ (адрес сервера определяется
+  автоматически как `127.0.0.1:8080`/`localhost:8080` и не требует ввода).
 
 ## Установка на целевой машине
 
@@ -60,15 +58,6 @@ curl http://127.0.0.1:8080/health   # → {"status":"ok","converter":true}
 sudo ./setup/install_server.sh    # systemd :8080
 ./setup/install_runner.sh vladleopold/3Spine <REG_TOKEN>
 ```
-
-## Self-hosted runner из Visual Studio / VS Code
-
-1. Откройте репозиторий в VS Code (+ расширение GitHub Actions).
-2. `docker compose up -d runner` (или запустите образ `ghcr.io/myoung34/github-runner`
-   с переменными из `.env`) — контейнер сам зарегистрирует runner
-   `spine-linux-x64` с метками `self-hosted, linux, X64`.
-3. Runner появится в repo → Settings → Actions → Runners, после чего
-   `converter-test.yml` (job `self-hosted-runner`) выполняется на нём.
 
 ## GitHub Pages
 
