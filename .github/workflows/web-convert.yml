@@ -28,6 +28,12 @@ jobs:
           test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }
           python3 .codespace/prepare_input.py input.zip input.zip
 
+      - name: Unpack block → /images (atlases → subfolders)
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet Pillow
+          python3 .codespace/unpack_block.py input.zip input.zip
+
       - name: Convert input.zip (native Linux converter)
         run: |
           set -euo pipefail
