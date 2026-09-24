@@ -34,12 +34,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          JOB="$(git log -1 --format=%s)"
           rm -rf publish && mkdir publish && cp output.zip publish/
           cd publish
           git init -q
           git checkout -q -b results
           git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add output.zip
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results $(date -u +%FT%TZ)"
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
 
       - name: Clean inbox branch (no loop on delete event)

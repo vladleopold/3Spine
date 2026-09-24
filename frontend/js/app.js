@@ -4,14 +4,7 @@
   const $ = (id) => document.getElementById(id);
 
   const els = {
-    ghStatus: $("gh-status"),
-    ghLogin: $("gh-login"),
-    ghModal: $("gh-modal"),
-    ghToken: $("gh-token"),
-    ghRemember: $("gh-remember"),
-    ghSave: $("gh-save"),
-    ghCancel: $("gh-cancel"),
-    ghErr: $("gh-err"),
+    srv: $("srv"),
     dropzone: $("dropzone"),
     pickFolder: $("pick-folder"),
     folderInput: $("folder-input"),
@@ -25,84 +18,13 @@
     status: $("status"),
   };
 
-  const GH_REPO = "vladleopold/3Spine";
-  const BR_INBOX = "inbox";
-  const BR_RESULTS = "results";
-  const RESULT_FILE = "output.zip";
-  const TOKEN_KEY = "spine-gh";
-  const TOKEN_KEY_LS = "spine-gh-persist";
-  const MAX_ZIP = 45 * 1024 * 1024;
+  const BROKER = "https://spine-broker.REPLACE_SUBDOMAIN.workers.dev";
+  const MAX_ZIP = 35 * 1024 * 1024;
 
   let files = [];
-  let ghToken = null;
-  let ghUser = null;
   let lastZip = null;
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  /* ---------------- GitHub API ---------------- */
-
-  async function gh(method, path, body) {
-    const r = await fetch("https://api.github.com" + path, {
-      method,
-      headers: {
-        Authorization: "Bearer " + ghToken,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!r.ok) {
-      let msg = "HTTP " + r.status;
-      try { msg = (await r.json()).message || msg; } catch (_) { /* ignore */ }
-      throw new Error(msg);
-    }
-    return r.status === 204 ? null : r.json();
-  }
-
-  async function connectGH(token) {
-    const prev = ghToken;
-    ghToken = token;
-    try {
-      ghUser = await gh("GET", "/user");
-      return ghUser;
-    } catch (e) {
-      ghToken = prev;
-      ghUser = null;
-      throw e;
-    }
-  }
-
-  function setGHStatus() {
-    if (ghUser) {
-      els.ghStatus.textContent = "GitHub: @" + ghUser.login;
-      els.ghStatus.className = "health ok";
-      els.ghLogin.textContent = "Сменить токен";
-    } else {
-      els.ghStatus.textContent = "GitHub: не подключён";
-      els.ghStatus.className = "health bad";
-      els.ghLogin.textContent = "Подключить GitHub";
-    }
-  }
-
-  function saveToken() {
-    sessionStorage.setItem(TOKEN_KEY, ghToken);
-    if (els.ghRemember.checked) localStorage.setItem(TOKEN_KEY_LS, ghToken);
-    else localStorage.removeItem(TOKEN_KEY_LS);
-  }
-
-  async function initGH() {
-    const token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY_LS);
-    if (!token) { setGHStatus(); return; }
-    try {
-      await connectGH(token);
-    } catch (_) {
-      sessionStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(TOKEN_KEY_LS);
-    }
-    setGHStatus();
-  }
 
   /* ---------------- UI helpers ---------------- */
 
@@ -121,7 +43,6 @@
   }
 
   function renderFileList() {
-    els.fileCount.textContent = files.length;
     els.fileList.innerHTML = "";
     const skels = files.filter((f) => /\.skel$/i.test(f.name));
     const others = files.filter((f) => !/\.skel$/i.test(f.name));
@@ -137,44 +58,26 @@
       d.textContent = "... и ещё " + (others.length - 60) + " файлов";
       els.fileList.appendChild(d);
     }
-    const skCount = skels.length;
     els.fileSummary.classList.toggle("hidden", files.length === 0);
-    els.fileCount.textContent = files.length + " (скелетов: " + skCount + ")";
-    els.start.disabled = files.length === 0 || skCount === 0;
+    els.fileCount.textContent = files.length + " (скелетов: " + skels.length + ")";
+    els.start.disabled = files.length === 0 || skels.length === 0;
   }
 
-  /* ---------------- GitHub auth modal ---------------- */
-
-  function openModal() {
-    els.ghErr.classList.add("hidden");
-    els.ghToken.value = "";
-    els.ghModal.classList.remove("hidden");
-    els.ghToken.focus();
-  }
-  function closeModal() {
-    els.ghModal.classList.add("hidden");
-  }
-
-  els.ghLogin.addEventListener("click", openModal);
-  els.ghCancel.addEventListener("click", closeModal);
-  els.ghModal.addEventListener("click", (e) => { if (e.target === els.ghModal) closeModal(); });
-  els.ghToken.addEventListener("keydown", (e) => { if (e.key === "Enter") els.ghSave.click(); });
-
-  els.ghSave.addEventListener("click", async () => {
-    const token = els.ghToken.value.trim();
-    if (!token) { els.ghErr.textContent = "Введите токен"; els.ghErr.classList.remove("hidden"); return; }
+  async function checkServer() {
     try {
-      const u = await connectGH(token);
-      saveToken();
-      closeModal();
-      setGHStatus();
-      log("Подключено: @" + u.login, "ok");
-    } catch (e) {
-      els.ghErr.textContent = "Токен не принят: " + e.message;
-      els.ghErr.classList.remove("hidden");
-      setGHStatus();
+      const r = await fetch(BROKER + "/", { method: "GET" });
+      if (r.ok) {
+        els.srv.textContent = "сервер: онлайн";
+        els.srv.className = "health ok";
+      } else {
+        els.srv.textContent = "сервер: не отвечает";
+        els.srv.className = "health bad";
+      }
+    } catch (_) {
+      els.srv.textContent = "сервер: недоступен";
+      els.srv.className = "health bad";
     }
-  });
+  }
 
   /* ---------------- folder pick ---------------- */
 
@@ -196,6 +99,7 @@
     const items = e.dataTransfer.items;
     const collected = [];
     async function walk(item, path) {
+      if (!item) return;
       if (item.isFile) {
         const f = await new Promise((res) => item.file(res));
         if (!path) path = f.name;
@@ -236,7 +140,7 @@
     setStatus("готов", "");
   });
 
-  /* ---------------- zip / base64 ---------------- */
+  /* ---------------- zip ---------------- */
 
   async function buildZip() {
     const zip = new JSZip();
@@ -250,81 +154,40 @@
     });
   }
 
-  function blobToBase64(blob) {
-    return new Promise((res, rej) => {
-      const fr = new FileReader();
-      fr.onload = () => res(String(fr.result).split(",")[1] || "");
-      fr.onerror = () => rej(fr.error);
-      fr.readAsDataURL(blob);
+  /* ---------------- convert via broker -> Actions ---------------- */
+
+  async function startConvert(blob) {
+    log("> Отправляем на сервер (" + (blob.size / 1048576).toFixed(1) + " МБ)…", "dim");
+    const r = await fetch(BROKER + "/convert", {
+      method: "POST",
+      body: blob,
+      headers: { "Content-Type": "application/octet-stream" },
     });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ("сервер: HTTP " + r.status));
+    return data.job;
   }
 
-  function b64ToBytes(b64) {
-    const bin = atob(b64);
-    const len = bin.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
-
-  /* ---------------- convert via GitHub Actions ---------------- */
-
-  async function pushInputZip(blob) {
-    log("> Отправляем архив в GitHub (ветка " + BR_INBOX + ")…", "dim");
-    const b64 = await blobToBase64(blob);
-    const blobRes = await gh("POST", "/repos/" + GH_REPO + "/git/blobs", {
-      content: b64, encoding: "base64",
-    });
-    const wf = await gh("GET", "/repos/" + GH_REPO + "/contents/.github/workflows/web-convert.yml");
-    let parent = null;
-    try {
-      const ref = await gh("GET", "/repos/" + GH_REPO + "/git/ref/heads/" + BR_INBOX);
-      parent = ref.object.sha;
-    } catch (_) { /* ветки ещё нет */ }
-    const tree = await gh("POST", "/repos/" + GH_REPO + "/git/trees", {
-      tree: [
-        { path: ".github/workflows/web-convert.yml", mode: "100644", type: "blob", sha: wf.sha },
-        { path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha },
-      ],
-    });
-    const commit = await gh("POST", "/repos/" + GH_REPO + "/git/commits", {
-      message: "convert " + new Date().toISOString(),
-      tree: tree.sha,
-      parents: parent ? [parent] : [],
-    });
-    if (parent) {
-      await gh("PATCH", "/repos/" + GH_REPO + "/git/refs/heads/" + BR_INBOX, { sha: commit.sha, force: true });
-    } else {
-      await gh("POST", "/repos/" + GH_REPO + "/git/refs", { ref: "refs/heads/" + BR_INBOX, sha: commit.sha });
-    }
-    log("> Загружено, Actions поднимает Linux…", "dim");
-  }
-
-  async function waitForResults(t0) {
-    const deadline = Date.now() + 5 * 60 * 1000;
+  async function waitStatus(job, t0) {
+    const deadline = t0 + 5 * 60 * 1000;
     let lastLog = 0;
     while (Date.now() < deadline) {
-      try {
-        const br = await gh("GET", "/repos/" + GH_REPO + "/branches/" + BR_RESULTS);
-        const date = Date.parse(br.commit.commit.committer.date);
-        if (!isNaN(date) && date >= t0 - 5000) return br;
-      } catch (_) { /* ещё нет результата */ }
-      if (Date.now() - lastLog > 7000) { log("… конвертация в Actions…", "dim"); lastLog = Date.now(); }
-      await sleep(5000);
+      const r = await fetch(BROKER + "/status?job=" + encodeURIComponent(job), { method: "GET" });
+      const d = await r.json().catch(() => ({}));
+      if (d.ready) return;
+      if (Date.now() - lastLog > 7000) { log("… конвертация в GitHub Actions…", "dim"); lastLog = Date.now(); }
+      await sleep(4000);
     }
     throw new Error("Превышено время ожидания (5 минут)");
   }
 
-  async function fetchResultBlob(sha) {
-    const tree = await gh("GET", "/repos/" + GH_REPO + "/git/trees/" + sha + "?recursive=1");
-    let entry = null;
-    for (const t of tree.tree) {
-      if (t.type === "blob" && t.path === RESULT_FILE) { entry = t; break; }
+  async function fetchResult(job) {
+    const r = await fetch(BROKER + "/download?job=" + encodeURIComponent(job), { method: "GET" });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.error || ("HTTP " + r.status));
     }
-    if (!entry) throw new Error("Результат не найден в ветке " + BR_RESULTS);
-    const b = await gh("GET", "/repos/" + GH_REPO + "/git/blobs/" + entry.sha);
-    const bytes = b64ToBytes(b.content);
-    return new Blob([bytes], { type: "application/zip" });
+    return r.blob();
   }
 
   async function extractLog() {
@@ -336,13 +199,11 @@
   /* ---------------- start / download ---------------- */
 
   els.start.addEventListener("click", async () => {
-    if (!ghUser) { openModal(); log("Сначала подключите GitHub (токен нужен только для запуска).", "info"); return; }
     els.start.disabled = true;
     els.download.classList.add("hidden");
     lastZip = null;
     els.log.textContent = "";
-    setStatus("конвертация…", "run");
-    log("> Пакуем файлы…", "dim");
+    setStatus("пакуем…", "run");
     let blob;
     try {
       blob = await buildZip();
@@ -358,13 +219,15 @@
       els.start.disabled = false;
       return;
     }
-    log("> ZIP собран (" + (blob.size / 1048576).toFixed(1) + " МБ), отправляем в GitHub…", "dim");
-    const t0 = Date.now();
     try {
-      await pushInputZip(blob);
-      const br = await waitForResults(t0);
+      const t0 = Date.now();
+      log("> Пакуем и отправляем…", "dim");
+      const job = await startConvert(blob);
+      log("> Задача: " + job, "dim");
+      setStatus("конвертация…", "run");
+      await waitStatus(job, t0);
       log("> Результат готов, скачиваем…", "dim");
-      lastZip = await fetchResultBlob(br.commit.sha);
+      lastZip = await fetchResult(job);
       const logText = await extractLog();
       if (logText) {
         for (const line of logText.split("\n")) {
@@ -394,6 +257,6 @@
   });
 
   /* init */
-  initGH();
+  checkServer();
   renderFileList();
 })();
