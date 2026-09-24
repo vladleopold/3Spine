@@ -24,13 +24,31 @@
   let lastToken = null;
 
   const LS_KEY = "spine-backend-url";
-  const DEFAULT_URL = "http://127.0.0.1:8080";
 
-  /* ---------------- helpers ---------------- */
+  /* Кандидаты адреса сервера для автоопределения (в порядке приоритета).
+     Backend живёт в Linux-контейнере (Docker) рядом с пользователем — на этой
+     же машине или в локальной сети, поэтому пробуем loopback и имя хоста. */
+  function backendCandidates() {
+    const set = new Set();
+    const manual = (els.backendUrl.value || "").trim().replace(/\/+$/, "");
+    const param = new URLSearchParams(location.search).get("server");
+    const host = location.hostname;
+    if (param) set.add(param.replace(/\/+$/, ""));
+    if (manual) set.add(manual);
+    set.add("http://127.0.0.1:8080");
+    set.add("http://localhost:8080");
+    if (host && host !== "localhost" && host !== "127.0.0.1") set.add("http://" + host + ":8080");
+    if (host && host !== "localhost" && host !== "127.0.0.1") set.add("http://" + host.split(".").slice(-3).join(".") + ":8080");
+    return Array.from(set);
+  }
 
   function backendUrl() {
-    const v = (els.backendUrl.value || "").trim().replace(/\/+$/, "");
-    return v || DEFAULT_URL;
+    return els.backendUrl.value ? els.backendUrl.value.trim().replace(/\/+$/, "") : "";
+  }
+
+  function activeUrl() {
+    const v = backendUrl();
+    return v || backendCandidates()[0] || "http://127.0.0.1:8080";
   }
 
   function logLink(text, cls) {
@@ -74,22 +92,36 @@
     els.start.disabled = files.length === 0 || skCount === 0;
   }
 
-  /* ---------------- health ---------------- */
+  /* ---------------- health / auto-discovery ---------------- */
 
-  async function checkHealth() {
+  async function probe(url) {
     try {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 4000);
-      const r = await fetch(backendUrl() + "/health", { signal: ctl.signal });
+      const r = await fetch(url + "/health", { signal: ctl.signal, cache: "no-store" });
       clearTimeout(t);
-      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!r.ok) return null;
       const j = await r.json();
-      els.health.textContent = "✓ " + (j.converter ? "сервер онлайн" : "сервер онлайн");
-      els.health.className = "health ok";
+      return j && j.status === "ok" ? j : null;
     } catch (e) {
-      els.health.textContent = "✗ недоступен";
-      els.health.className = "health bad";
+      return null;
     }
+  }
+
+  async function checkHealth() {
+    for (const url of backendCandidates()) {
+      const j = await probe(url);
+      if (j) {
+        els.backendUrl.value = url;
+        localStorage.setItem(LS_KEY, url);
+        els.health.textContent = "✓ сервер онлайн";
+        els.health.className = "health ok";
+        return true;
+      }
+    }
+    els.health.textContent = "✗ сервер не найден";
+    els.health.className = "health bad";
+    return false;
   }
 
   /* ---------------- folder pick ---------------- */
@@ -155,7 +187,7 @@
 
   /* ---------------- backend url ---------------- */
 
-  els.backendUrl.value = localStorage.getItem(LS_KEY) || DEFAULT_URL;
+  els.backendUrl.value = localStorage.getItem(LS_KEY) || "";
   els.saveUrl.addEventListener("click", () => {
     localStorage.setItem(LS_KEY, backendUrl());
     checkHealth();
@@ -196,7 +228,7 @@
     }
     log("> ZIP собран (" + (blob.size / 1024 / 1024).toFixed(1) + " МБ), отправляем на сервер…", "dim");
     try {
-      const r = await fetch(backendUrl() + "/api/convert", {
+      const r = await fetch(activeUrl() + "/api/convert", {
         method: "POST",
         headers: { "Content-Type": "application/zip" },
         body: blob,
@@ -233,7 +265,7 @@
   els.download.addEventListener("click", () => {
     if (!lastToken) return;
     const a = document.createElement("a");
-    a.href = backendUrl() + "/results/" + lastToken + ".zip";
+    a.href = activeUrl() + "/results/" + lastToken + ".zip";
     a.download = "spine-converted.zip";
     document.body.appendChild(a);
     a.click();

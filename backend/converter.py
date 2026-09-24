@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-Run the native SpineSkeletonDataConverter (Linux ELF) over a folder of .skel
-files and collect converted JSON + matching images.
+Run the native SpineSkeletonDataConverter over a folder of .skel files and
+collect converted JSON + matching images.
 
-This uses ONLY the real C++ converter binary — no Python re-parsing fallbacks.
+The converter is a Linux ELF binary and always runs inside a Linux container
+(see Dockerfile / docker-compose.yml) — never as a Python re-parse.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-CONVERTER = Path(__file__).resolve().parent / "converter" / "SpineSkeletonDataConverter"
-TIMEOUT = int(__import__("os").environ.get("SPINE_CONVERT_TIMEOUT", 120))
+BASE = Path(__file__).resolve().parent
+
+CONVERTER = BASE / "converter" / "SpineSkeletonDataConverter"
+TIMEOUT = int(os.environ.get("SPINE_CONVERT_TIMEOUT", 120))
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tga"}
 
@@ -26,7 +30,7 @@ def converter_path() -> Path:
 
 
 def binary_ok() -> bool:
-    return CONVERTER.is_file() and __import__("os").access(CONVERTER, __import__("os").X_OK)
+    return CONVERTER.is_file() and os.access(CONVERTER, os.X_OK)
 
 
 def is_binary_spine(path: Path) -> bool:

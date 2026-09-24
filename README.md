@@ -1,114 +1,89 @@
-# Spine Converter — web GUI + native Linux converter (v1.0)
+# Spine Converter — web GUI + Linux-конвертер в Docker (v1.0)
 
 Конвертация Spine-скелетов (`.skel` → читаемый JSON) **настоящим**
-`SpineSkeletonDataConverter` (C++, работает на Linux), с GUI в браузере.
-
-## Как это устроено
+`SpineSkeletonDataConverter` (C++, Linux ELF), который исполняется **внутри
+Linux-контейнера (Docker)**. Локально Linux не нужен.
 
 ```
-┌─────────────────┐   загрузка ZIP (.skel + картинки)
-│  GitHub Pages   │ ────────────────────────────────▶  ┌─────────────────────────────┐
-│  (frontend GUI) │  ◀────────────────────────────────  │ Linux-машина (self-hosted  │
-│  выбор папки,   │   результат ZIP (JSON + images)    │ runner + HTTP service :8080)│
-│  Start, лог,    │                                    │  backend/server.py           │
-│  скачивание     │                                    │  ├─ backend/converter/       │
-└─────────────────┘                                    │  │  └─ SpineSkeletonDataConverter  │
-                                                       └─────────────────────────────┘
+┌──────────────────────┐    upload ZIP (.skel + images)     ┌────────────────────────────────────────┐
+│  GitHub Pages (GUI)  │ ──────────────────────────────────▶ │  Linux-контейнер (any Docker host)      │
+│  выбор папки, Start, │ ◀────────────────────────────────── │  ├─ backend/server.py   (HTTP :8080)    │
+│  лог, скачивание     │     result ZIP (JSON + images)      │  ├─ backend/converter/*  (SpineC++ ELF)│
+└──────────────────────┘                                      │  └─ GitHub Actions self-hosted runner    │
+                                                            └────────────────────────────────────────┘
 ```
 
-- **Frontend** (`frontend/`) — статика на GitHub Pages: выбор папки (webkitdirectory),
-  кнопка **Start**, лог, скачивание результата. JSZip встроен, CDN не нужен.
-- **Backend** (`backend/`) — HTTP-сервис на чистом Python stdlib (без pip-зависимостей).
-  Принимает ZIP, распаковывает, для каждого `.skel` запускает настоящий
-  `SpineSkeletonDataConverter`, собирает результат (JSON + сопутствующие изображения)
-  обратно в ZIP.
-- **Конвертер** — `backend/converter/SpineSkeletonDataConverter` — нативный Linux ELF,
-  непреобразованный Python-парсер **не используется**.
+- **Frontend** (`frontend/`) — статика на GitHub Pages. GUI сам находит сервер.
+- **Backend** (`backend/`) — `server.py` (чистый Python stdlib). Принимает ZIP,
+  запускает нативный `SpineSkeletonDataConverter` на каждый `.skel`, отдаёт
+  результат (JSON + изображения).
+- **Docker** — `backend/Dockerfile` + `docker-compose.yml`:
+  `backend` (сервис :8080) и `runner` (self-hosted runner, Linux).
+- Конвертер — Linux ELF, работает **только** в контейнере. Python-парсер не используется.
 
-## 1. Git репозиторий
+## Репозиторий
 
-Создайте **НОВЫЙ** GitHub-репозиторий (например `spine-converter`) и запушьте проект.
+```text
+vladleopold/3Spine   (новый, отдельный — spine-link не затрагивается)
+```
+
+## Quick start (двумя командами, на любой машине с Docker)
 
 ```bash
-# локально (в этой папке) уже создаётся git-репозиторий
-git init
-git add .
-git commit -m "Spine Converter v1.0 — web GUI + native Linux converter"
-git remote add origin git@github.com:YOUR_USER/spine-converter.git
-git push -u origin main
+git clone git@github.com:vladleopold/3Spine.git && cd 3Spine
+cp .env.example .env          # впишите ACCESS_TOKEN (repo scope)
+docker compose up -d --build  # поднимет backend :8080 + self-hosted runner
 ```
 
-## 2. GitHub Pages
+- GUI: https://vladleopold.github.io/3Spine/ (ничего не вводить — адрес сервера
+  определяется автоматически как `127.0.0.1:8080`/`localhost:8080`).
+- Runner регистрируется автоматически (VS Code / compose) и выполняет
+  `.github/workflows/converter-test.yml` на Linux прямо в контейнере.
 
-1. Репозиторий → **Settings → Pages** → Source: **GitHub Actions**.
-2. Деплой происходит по workflow `.github/workflows/pages.yml` (при пуше в `main`).
-3. GUI будет доступен по: `https://YOUR_USER.github.io/spine-converter/`
+## Установка на целевой машине
 
-## 3. Linux-машина (раннер + сервис)
+### Способ А — Docker (рекомендуется)
 
-На Linux-сервере (внешний IP или VPN) с git + python3 + sudo:
+Нужен только Docker (на Linux / macOS / Windows — любая ОС, внутри Linux):
 
 ```bash
-sudo apt-get update && sudo apt-get install -y git python3 curl jq
+cp .env.example .env   # ACCESS_TOKEN
+docker compose up -d --build
+curl http://127.0.0.1:8080/health   # → {"status":"ok","converter":true}
 ```
 
-### 3.1 Self-hosted runner
+Скрипты: `setup/up.sh`, `setup/down.sh`.
 
-1. Репозиторий GitHub → **Settings → Actions → Runners → New self-hosted runner** —
-   скопируйте **registration token**.
-2. Запустите:
-```bash
-./setup/install_runner.sh YOUR_USER/spine-converter <TOKEN>
-```
-Раннер зарегистрирован как `self-hosted / linux / X64` (нужен для
-`.github/workflows/converter-test.yml`).
-
-### 3.2 Backend-сервис
+### Способ Б — без Docker (native Linux)
 
 ```bash
-sudo ./setup/install_server.sh
-sudo ufw allow 8080/tcp   # при необходимости
+sudo ./setup/install_server.sh    # systemd :8080
+./setup/install_runner.sh vladleopold/3Spine <REG_TOKEN>
 ```
 
-Проверка:
-```bash
-curl http://<IP LINUX МАШИНЫ>:8080/health
-# → {"status":"ok","converter":true,"version":"1.0"}
-```
+## Self-hosted runner из Visual Studio / VS Code
 
-## 4. Использование
+1. Откройте репозиторий в VS Code (+ расширение GitHub Actions).
+2. `docker compose up -d runner` (или запустите образ `ghcr.io/myoung34/github-runner`
+   с переменными из `.env`) — контейнер сам зарегистрирует runner
+   `spine-linux-x64` с метками `self-hosted, linux, X64`.
+3. Runner появится в repo → Settings → Actions → Runners, после чего
+   `converter-test.yml` (job `self-hosted-runner`) выполняется на нём.
 
-1. Откройте GUI: `https://YOUR_USER.github.io/spine-converter/`
-2. В правом верхнем углу введите адрес сервера: `http://<IP>:8080` → **Сохранить**
-   (индикатор станет зелёным `✓ сервер онлайн`).
-3. **Выбрать папку…** — укажите папку со Spine-файлами.
-4. **Start** — файлы упакуются, уйдут на сервер, конвертируются настоящим конвертером.
-5. В логе — результат по каждому файлу; **Скачать результат** — забрать ZIP.
+## GitHub Pages
 
-## Структура репозитория
-
-```
-SpineConverter/
-├── frontend/          # GitHub Pages GUI (index.html, app.js, style.css, JSZip)
-├── backend/
-│   ├── server.py      # HTTP-сервис (stdlib): /api/convert, /results/<token>.zip, /health
-│   ├── converter.py   # запуск SpineSkeletonDataConverter по папке
-│   └── converter/     # нативный Linux-конвертер (ELF)
-│       └── SpineSkeletonDataConverter
-├── setup/
-│   ├── install_runner.sh   # установка self-hosted runner
-│   └── install_server.sh   # установка systemd-сервиса :8080
-├── test/sample38.json      # фикстура для smoke-теста
-└── .github/workflows/
-    ├── pages.yml           # деплой frontend на Pages
-    └── converter-test.yml  # smoke-тест конвертера (self-hosted runner)
-```
+Pages включается workflow `.github/workflows/pages.yml` (push в `main`).
+Использование:
+1. Откройте https://vladleopold.github.io/3Spine/ .
+2. Индикатор «✓ сервер онлайн» загорится автоматически, когда backend-контейнер
+   с :8080 доступен с той же машины/сети.
+3. **Выбрать папку…** → **Start** → лог → **Скачать результат**.
 
 ## Безопасность
 
-- Сервис привязан к `0.0.0.0:8080` без аутентификации — это приватный инструмент.
-  Рекомендуется закрыть порт firewall'ом с доступом только для офиса/VPN, либо выставить
-  сервис за reverse-proxy (nginx/caddy) с Basic Auth.
-- Лимит загрузки: **500 МБ** (`SPINE_MAX_BYTES`), результаты хранятся 24 ч.
-- CORS открыт только для `localhost` и `https://<ваш-user>.github.io`
-  (задаётся в `ALLOWED_ORIGINS` в `backend/server.py`).
+- Сервис на `0.0.0.0:8080` без аутентификации — рекомендация: закрыть порт
+  firewall'ом (доступ только из сети пользователя) или за reverse-proxy + Basic Auth.
+- Лимит загрузки 500 МБ, результаты живут 24 ч.
+- CORS — только `localhost`, `127.0.0.1` и `https://vladleopold.github.io`.
+- Включён Private Network Access (`Access-Control-Allow-Private-Network: true`),
+  чтобы https-Pages мог работать с локальным backend.

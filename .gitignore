@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 backend/results/
+.env
 .vscode/
 .idea/
 *.log
+runner/
+actions-runner/

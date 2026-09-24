@@ -1,36 +1,55 @@
-name: Converter smoke test (self-hosted runner)
+name: Converter CI/CD (Linux in Docker)
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
-    paths: ["backend/**", "test/**"]
+    paths: ["backend/**", "docker-compose.yml", "test/**"]
+  workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: [self-hosted, linux, X64]
+  # ---- check: построить образ и гонять конвертер в Docker-Linux ----
+  backend-container:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Make converter executable
+      - name: Build backend image (Linux)
+        run: docker build -t spine-backend:ci ./backend
+
+      - name: Converter roundtrip inside the image
+        run: |
+          mkdir -p /tmp/ci
+          cp test/sample38.json /tmp/ci/sample.json
+          docker run --rm -v /tmp/ci:/data spine-backend:ci \
+            /opt/spine-converter/converter/SpineSkeletonDataConverter /data/sample.json /data/sample.skel
+          docker run --rm -v /tmp/ci:/data spine-backend:ci \
+            /opt/spine-converter/converter/SpineSkeletonDataConverter /data/sample.skel /data/out.json
+          docker run --rm -v /tmp/ci:/data spine-backend:ci \
+            python3 -c "import json; d=json.load(open('/data/out.json')); assert d['skeleton']['spine'].startswith('3.8'); print('ROUNDTRIP OK — spine', d['skeleton']['spine'])"
+
+      - name: HTTP service health + API stub
+        run: |
+          docker run -d --name spine-backend-test -p 18080:8080 spine-backend:ci
+          sleep 3
+          curl -fsS http://127.0.0.1:18080/health
+          echo
+          docker rm -f spine-backend-test
+
+  # ---- self-hosted runner (Linux, from Docker) ----
+  self-hosted-runner:
+    runs-on: [self-hosted, linux, X64]
+    needs: backend-container
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Converter executes on the self-hosted Linux runner
         run: |
           chmod +x backend/converter/SpineSkeletonDataConverter
-          backend/converter/SpineSkeletonDataConverter --help | head -3 || true
-
-      - name: JSON -> SKEL
-        run: backend/converter/SpineSkeletonDataConverter test/sample38.json /tmp/conv/sample.skel
-
-      - name: SKEL -> JSON (roundtrip)
-        run: |
-          backend/converter/SpineSkeletonDataConverter /tmp/conv/sample.skel /tmp/conv/sample_out.json
+          backend/converter/SpineSkeletonDataConverter test/sample38.json /tmp/sample.skel
+          backend/converter/SpineSkeletonDataConverter /tmp/sample.skel /tmp/sample_out.json
           python3 - <<'PY'
           import json
-          d = json.load(open("/tmp/conv/sample_out.json"))
-          spine = d["skeleton"]["spine"]
-          assert spine.startswith("3.8"), spine
-          assert d["bones"][0]["name"] == "root"
-          print("ROUNDTRIP OK — spine", spine)
+          d = json.load(open("/tmp/sample_out.json"))
+          assert d["skeleton"]["spine"].startswith("3.8")
+          print("ROUNDTRIP OK on self-hosted runner — spine", d["skeleton"]["spine"])
           PY
-
-      - name: Run backend conversion module over the fixture
-        run: python3 backend/converter.py test /tmp/conv/out

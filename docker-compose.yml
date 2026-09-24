@@ -1,0 +1,42 @@
+services:
+  # ---- Linux backend service (converter) ----
+  backend:
+    build: ./backend
+    image: spine-converter-backend:1.0
+    container_name: spine-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SPINE_RESULT_DIR: /opt/spine-converter/results
+      SPINE_MAX_BYTES: 524288000
+    volumes:
+      - backend-results:/opt/spine-converter/results
+
+  # ---- GitHub Actions self-hosted runner (Linux) ----
+  # Автоматически регистрирует runner в репозитории vladleopold/3Spine.
+  # ACCESS_TOKEN — Personal Access Token (repo scope), задаётся в .env.
+  # Запуск: docker compose up -d runner
+  runner:
+    image: ghcr.io/myoung34/github-runner:latest
+    container_name: spine-runner
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUNNER_SCOPE: repo
+      REPO_URL: ${REPO_URL:-https://github.com/vladleopold/3Spine}
+      ACCESS_TOKEN: ${ACCESS_TOKEN:?set ACCESS_TOKEN in .env}
+      RUNNER_NAME: spine-linux-x64
+      RUNNER_LABELS: ${RUNNER_LABELS:-self-hosted,linux,X64}
+      RUNNER_WORKDIR: /tmp/runner-work
+      RUN_AS_ROOT: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner-work:/tmp/runner-work
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  backend-results:
+  runner-work:

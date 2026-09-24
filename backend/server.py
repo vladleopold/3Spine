@@ -54,7 +54,7 @@ class Handler(BaseHTTPRequestHandler):
         if CORS_ANY:
             return True
         origin = self.headers.get("Origin", "")
-        return any(origin == o or origin.startswith(o + "/") for o in ALLOWED_ORIGINS)
+        return any(origin == o or origin.startswith(o + "/") or origin.startswith(o + ":") for o in ALLOWED_ORIGINS)
 
     def _cors_headers(self, extra: dict | None = None):
         if self._origin_ok():
@@ -63,6 +63,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Private Network Access: public (GitHub Pages) -> local backend
+        self.send_header("Access-Control-Allow-Private-Network", "true")
         for k, v in (extra or {}).items():
             self.send_header(k, str(v))
 
