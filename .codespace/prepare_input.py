@@ -52,6 +52,51 @@ def find_hashed_files(src: str) -> list[str]:
     return found
 
 
+def is_binary_spine(path: str) -> bool:
+    """True, если файл — бинарный Spine-скелет (не валидный JSON по содержанию).
+    Формат .skel: [len][hash][len][version: N.N.N(M.M)][body...]."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(128)
+    except OSError:
+        return False
+    if head.startswith((b"{", b"[")):
+        return False
+    if not 1 <= head[0] <= 64:
+        return False
+    m = re.search(rb"\d+\.\d+(\.\d+)?", head)
+    if not m:
+        return False
+    p = m.start()
+    return p >= 2 and 1 <= head[p - 1] <= 32
+
+
+def fix_misnamed_json(src: str, loglines: list[str]) -> int:
+    """Спецслучай: .json, внутри которого на самом деле бинарный .skel
+    (юзер программно переименовал skel→json) → возвращаем расширение .skel.
+    Дальше блок-конвертации сделает из него настоящий JSON для Spine."""
+    fixed = 0
+    for root, _, files in os.walk(src):
+        for f in sorted(files):
+            if not f.lower().endswith(".json"):
+                continue
+            p = os.path.join(root, f)
+            if not is_binary_spine(p):
+                continue
+            base = os.path.splitext(f)[0]
+            target = os.path.join(root, base + ".skel")
+            i = 2
+            while os.path.exists(target):
+                target = os.path.join(root, f"{base}_{i}.skel")
+                i += 1
+            os.rename(p, target)
+            fixed += 1
+            msg = f"magic-detect: {f} → {os.path.basename(target)} (бинарь skel под видом json)"
+            print(msg)
+            loglines.append(msg)
+    return fixed
+
+
 def main() -> None:
     zin, zout = sys.argv[1], sys.argv[2]
     tmp = tempfile.mkdtemp()
@@ -74,6 +119,10 @@ def main() -> None:
         else:
             print("hash-analyzer: хеш-имён не найдено → первый путь (без переименования)")
             loglines.append("hash-analyzer: хеш-имён нет — путь без переименования")
+
+        fixed_json = fix_misnamed_json(src, loglines)
+        if fixed_json:
+            loglines.append(f"magic-detect: всего исправлено расширений: {fixed_json}")
 
         with open(os.path.join(src, "prepare-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")

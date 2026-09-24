@@ -33,14 +33,35 @@ def main():
         skels = []
         for root, _, files in os.walk(src):
             for f in files:
-                if f.lower().endswith(".skel"):
+                if f.lower().endswith((".skel", ".json")):
                     skels.append(os.path.join(root, f))
 
-        ok = failed = 0
+        ok = failed = kept = 0
         for sk in sorted(skels):
             rel = os.path.relpath(sk, src)
-            outjson = os.path.join(dst, os.path.splitext(rel)[0] + ".json")
+            if sk.lower().endswith(".json"):
+                outjson = os.path.join(dst, rel)
+            else:
+                outjson = os.path.join(dst, os.path.splitext(rel)[0] + ".json")
             os.makedirs(os.path.dirname(outjson), exist_ok=True)
+
+            is_spine_json = False
+            if sk.lower().endswith(".json"):
+                try:
+                    with open(sk, encoding="utf-8") as f:
+                        d = json.load(f)
+                    is_spine_json = bool(isinstance(d, dict)
+                                         and d.get("skeleton", {}).get("spine"))
+                except Exception:
+                    is_spine_json = False
+
+            if sk.lower().endswith(".json") and not is_spine_json:
+                shutil.copy2(sk, outjson)
+                kept += 1
+                print(f"KEEP: {rel} (не Spine-скелет, копирую как есть)")
+                loglines.append(f"KEEP: {rel}")
+                continue
+
             try:
                 subprocess.run([CONVERTER, sk, outjson], check=True, capture_output=True)
                 with open(outjson, encoding="utf-8") as f:
@@ -64,7 +85,7 @@ def main():
                     os.makedirs(os.path.dirname(outpath), exist_ok=True)
                     shutil.copy2(full, outpath)
 
-        loglines.append(f"done: {ok} ok, {failed} failed")
+        loglines.append(f"done: {ok} ok, {failed} failed, {kept} kept")
         with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
 
@@ -75,7 +96,7 @@ def main():
                     rel = os.path.relpath(full, dst)
                     z.write(full, rel)
 
-        print(f"done: {ok} ok, {failed} failed")
+        print(f"done: {ok} ok, {failed} failed, {kept} kept")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
