@@ -44,12 +44,12 @@ jobs:
 
       - name: Converter executes on the self-hosted Linux runner
         run: |
-          chmod +x backend/converter/SpineSkeletonDataConverter
-          backend/converter/SpineSkeletonDataConverter test/sample38.json /tmp/sample.skel
-          backend/converter/SpineSkeletonDataConverter /tmp/sample.skel /tmp/sample_out.json
-          python3 - <<'PY'
-          import json
-          d = json.load(open("/tmp/sample_out.json"))
-          assert d["skeleton"]["spine"].startswith("3.8")
-          print("ROUNDTRIP OK on self-hosted runner — spine", d["skeleton"]["spine"])
-          PY
+          docker build -t spine-backend:runner ./backend
+          mkdir -p /tmp/shr
+          cp test/sample38.json /tmp/shr/sample.json
+          docker run --rm -v /tmp/shr:/data spine-backend:runner \
+            /opt/spine-converter/converter/SpineSkeletonDataConverter /data/sample.json /data/sample.skel
+          docker run --rm -v /tmp/shr:/data spine-backend:runner \
+            /opt/spine-converter/converter/SpineSkeletonDataConverter /data/sample.skel /data/out.json
+          docker run --rm -v /tmp/shr:/data spine-backend:runner \
+            python3 -c "import json; d=json.load(open('/data/out.json')); assert d['skeleton']['spine'].startswith('3.8'); print('ROUNDTRIP OK on self-hosted runner — spine', d['skeleton']['spine'])"
