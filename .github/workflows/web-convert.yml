@@ -15,6 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Overlay tooling from main (inbox has only input.zip + workflow)
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth 1
+          git checkout origin/main -- .codespace backend
+          git status --short
+
       - name: Convert input.zip (native Linux converter)
         run: |
           set -euo pipefail

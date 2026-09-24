@@ -275,13 +275,17 @@
     const blobRes = await gh("POST", "/repos/" + GH_REPO + "/git/blobs", {
       content: b64, encoding: "base64",
     });
+    const wf = await gh("GET", "/repos/" + GH_REPO + "/contents/.github/workflows/web-convert.yml");
     let parent = null;
     try {
       const ref = await gh("GET", "/repos/" + GH_REPO + "/git/ref/heads/" + BR_INBOX);
       parent = ref.object.sha;
     } catch (_) { /* ветки ещё нет */ }
     const tree = await gh("POST", "/repos/" + GH_REPO + "/git/trees", {
-      tree: [{ path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha }],
+      tree: [
+        { path: ".github/workflows/web-convert.yml", mode: "100644", type: "blob", sha: wf.sha },
+        { path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha },
+      ],
     });
     const commit = await gh("POST", "/repos/" + GH_REPO + "/git/commits", {
       message: "convert " + new Date().toISOString(),
