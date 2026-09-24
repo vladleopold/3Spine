@@ -1,0 +1,48 @@
+name: test-spine-linux
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
+
+      - name: Download Spine Linux (trial launcher)
+        run: |
+          curl -sL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
+            "https://jp.esotericsoftware.com/launcher/linux" -o /tmp/linux.gz
+          gzip -d /tmp/linux.gz
+          mkdir -p /tmp/spine
+          tar xf /tmp/linux -C /tmp/spine
+          find /tmp/spine -maxdepth 3 -type d
+
+      - name: Prepare input json
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open("examples/plum.skel", "rb"))
+          rel = d if isinstance(d, dict) else {}
+          print("examples read ok")
+          PY
+          cp examples/plum.skel /tmp/in.skel 2>/dev/null || true
+          ls -la examples/
+
+      - name: Run headless import → save .spine (trial)
+        run: |
+          cd /tmp/spine/SpineTrial
+          ls -la
+          timeout 300 xvfb-run -a ./SpineTrial.sh -i /tmp/in.skel -o /tmp/out.spine -r 2>&1 | tail -40 || true
+          echo "---- result ----"
+          ls -la /tmp/out.spine 2>/dev/null && file /tmp/out.spine || echo "NO /tmp/out.spine produced"
+
+      - name: Show logs
+        if: always()
+        run: |
+          ls -la "${HOME}/.esotericsoftware" 2>/dev/null || true
+          find "${HOME}" -maxdepth 4 -iname "*spine*" -newermt "-30 minutes" 2>/dev/null | head -20 || true
