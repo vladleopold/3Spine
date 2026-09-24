@@ -1,0 +1,56 @@
+name: test-spine-linux
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install x11/gl deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            xvfb x11-xserver-utils x11-utils x11-xkb-utils \
+            libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 \
+            libgtk-3-0t64 libxtst6 libxrender1 libxrandr2 libxinerama1 \
+            libxcursor1 libxi6 libasound2t64 fonts-liberation || true
+          sudo ldconfig || true
+
+      - name: Download Spine Linux launcher
+        run: |
+          curl -sL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
+            "https://jp.esotericsoftware.com/launcher/linux" -o /tmp/linux.gz
+          gzip -d /tmp/linux.gz
+          mkdir -p /tmp/spine
+          tar xf /tmp/linux -C /tmp/spine
+
+      - name: Install license file
+        env:
+          SPINE_LICENSE_B64: ${{ secrets.SPINE_LICENSE_B64 }}
+        run: |
+          mkdir -p "$HOME/.spine/settings"
+          printf '%s' "$SPINE_LICENSE_B64" | base64 -d > "$HOME/.spine/settings/launcher-1.json"
+          ls -la "$HOME/.spine/settings/"
+
+      - name: Run headless import to save .spine
+        run: |
+          cd /tmp/spine/SpineTrial
+          timeout 900 xvfb-run -a ./SpineTrial.sh \
+            -i "$GITHUB_WORKSPACE/examples/plum_readable.json" -o /tmp/out.spine -r 2>&1 | tail -60 || true
+          echo "---- result ----"
+          ls -la /tmp/out.spine 2>/dev/null || echo "NO /tmp/out.spine produced"
+
+      - name: Dump logs
+        if: always()
+        run: |
+          for d in "$HOME/.spine" "$HOME/.spinetrial" "$HOME/.esotericsoftware"; do
+            echo "=== $d ==="
+            ls -la "$d" 2>/dev/null || true
+            for f in "$d"/spine.log "$d"/*.log; do
+              [ -f "$f" ] && { echo "--- $f ---"; tail -60 "$f"; }
+            done
+            true
+          done
+          find "$HOME" -maxdepth 3 -iname "*.spine" 2>/dev/null | head
