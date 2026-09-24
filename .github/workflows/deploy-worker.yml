@@ -42,7 +42,7 @@ jobs:
           set -euo pipefail
           NEW_RT="$(printf '%s' "${REFRESH_RESP}" | jq -r '.refresh_token // empty')"
           test -n "${NEW_RT}" || { echo "no new refresh token in response"; exit 0; }
-          printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}" --repo
+          printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}"
 
       - name: Deploy worker to Cloudflare
         working-directory: worker
