@@ -49,7 +49,7 @@ jobs:
       - name: Convert inside Codespace (Linux native converter)
         run: |
           gh codespace ssh -c "${{ steps.cs.outputs.codespace }}" -- \
-            bash -lc "python3 /workspaces/*/.codespace/convert.py /tmp/input.zip /tmp/output.zip"
+            'date && cd /workspaces/3Spine && python3 .codespace/convert.py /tmp/input.zip /tmp/output.zip && ls -la /tmp/output.zip'
 
       - name: Fetch result ZIP
         run: |
