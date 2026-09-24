@@ -1,0 +1,36 @@
+name: Converter smoke test (self-hosted runner)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["backend/**", "test/**"]
+
+jobs:
+  test:
+    runs-on: [self-hosted, linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make converter executable
+        run: |
+          chmod +x backend/converter/SpineSkeletonDataConverter
+          backend/converter/SpineSkeletonDataConverter --help | head -3 || true
+
+      - name: JSON -> SKEL
+        run: backend/converter/SpineSkeletonDataConverter test/sample38.json /tmp/conv/sample.skel
+
+      - name: SKEL -> JSON (roundtrip)
+        run: |
+          backend/converter/SpineSkeletonDataConverter /tmp/conv/sample.skel /tmp/conv/sample_out.json
+          python3 - <<'PY'
+          import json
+          d = json.load(open("/tmp/conv/sample_out.json"))
+          spine = d["skeleton"]["spine"]
+          assert spine.startswith("3.8"), spine
+          assert d["bones"][0]["name"] == "root"
+          print("ROUNDTRIP OK — spine", spine)
+          PY
+
+      - name: Run backend conversion module over the fixture
+        run: python3 backend/converter.py test /tmp/conv/out

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spine Converter — v1.0</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" type="image/png" href="icon.png">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 48 48" width="34" height="34">
+        <g fill="none" stroke="#f2a65a" stroke-width="4" stroke-linecap="round">
+          <line x1="24" y1="8" x2="24" y2="30"/>
+          <line x1="24" y1="20" x2="10" y2="12"/>
+          <line x1="24" y1="20" x2="38" y2="12"/>
+          <line x1="24" y1="20" x2="14" y2="36"/>
+          <line x1="24" y1="20" x2="34" y2="36"/>
+        </g>
+        <circle cx="24" cy="8" r="4" fill="#fff" stroke="none"/>
+        <circle cx="24" cy="30" r="4" fill="#f2a65a" stroke="none"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Spine Converter</h1>
+      <span class="ver">v1.0</span>
+    </div>
+  </div>
+  <div class="conn">
+    <label for="backend-url">Сервер конвертации</label>
+    <input id="backend-url" type="text" spellcheck="false" placeholder="http://192.168.1.10:8080">
+    <button id="save-url" class="btn ghost" title="Сохранить адрес сервера">Сохранить</button>
+    <span id="health" class="health">—</span>
+  </div>
+</header>
+
+<main>
+  <section class="pick">
+    <div id="dropzone" class="dropzone" tabindex="0">
+      <div class="dz-icon">📁</div>
+      <p class="dz-title">Выберите папку со Spine-файлами</p>
+      <p class="dz-sub">будут найдены все <code>.skel</code> во вложенных папках и собраны сопутствующие изображения</p>
+      <button id="pick-folder" class="btn primary">Выбрать папку…</button>
+      <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+    </div>
+    <div id="file-summary" class="file-summary hidden">
+      <p>Выбрано файлов: <b id="file-count">0</b></p>
+      <div id="file-list" class="file-list"></div>
+    </div>
+  </section>
+
+  <section class="actions">
+    <button id="start" class="btn primary big" disabled>Start</button>
+    <button id="download" class="btn success big hidden">Скачать результат</button>
+    <button id="clear" class="btn ghost">Очистить</button>
+  </section>
+
+  <section class="logs">
+    <div class="logs-head">
+      <span>Лог</span>
+      <span id="status" class="status">готов</span>
+    </div>
+    <pre id="log" class="log"></pre>
+  </section>
+</main>
+
+<footer>Spine Converter · macOS · v1.0</footer>
+
+<script src="js/jszip.min.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

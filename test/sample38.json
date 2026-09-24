@@ -1,0 +1,19 @@
+{
+  "skeleton": {
+    "hash": "fixture",
+    "spine": "3.8.99",
+    "x": 0,
+    "y": 0,
+    "width": 0,
+    "height": 0,
+    "images": "."
+  },
+  "bones": [
+    { "name": "root" }
+  ],
+  "slots": [],
+  "skins": [
+    { "name": "default", "attachments": {} }
+  ],
+  "animations": {}
+}
