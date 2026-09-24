@@ -14,8 +14,9 @@ jobs:
           sudo apt-get install -y -q \
             xvfb x11-xserver-utils x11-utils x11-xkb-utils \
             libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 \
-            libgtk-3-0 libgtk-3-0t64 libxtst6 libxrender1 libxrandr2 libxinerama1 libxcursor1 libxi6 libasound2 ttf-mscorefonts-installer || true
-          ldconfig
+            libgtk-3-0t64 libxtst6 libxrender1 libxrandr2 libxinerama1 \
+            libxcursor1 libxi6 libasound2t64 || true
+          sudo ldconfig || true
 
       - name: Download Spine Linux (trial launcher)
         run: |
