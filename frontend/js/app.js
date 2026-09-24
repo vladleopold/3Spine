@@ -4,7 +4,14 @@
   const $ = (id) => document.getElementById(id);
 
   const els = {
-    health: $("health"),
+    ghStatus: $("gh-status"),
+    ghLogin: $("gh-login"),
+    ghModal: $("gh-modal"),
+    ghToken: $("gh-token"),
+    ghRemember: $("gh-remember"),
+    ghSave: $("gh-save"),
+    ghCancel: $("gh-cancel"),
+    ghErr: $("gh-err"),
     dropzone: $("dropzone"),
     pickFolder: $("pick-folder"),
     folderInput: $("folder-input"),
@@ -18,36 +25,92 @@
     status: $("status"),
   };
 
+  const GH_REPO = "vladleopold/3Spine";
+  const BR_INBOX = "inbox";
+  const BR_RESULTS = "results";
+  const RESULT_FILE = "output.zip";
+  const TOKEN_KEY = "spine-gh";
+  const TOKEN_KEY_LS = "spine-gh-persist";
+  const MAX_ZIP = 45 * 1024 * 1024;
+
   let files = [];
-  let lastToken = null;
-  let activeServer = "http://127.0.0.1:8080";
+  let ghToken = null;
+  let ghUser = null;
+  let lastZip = null;
 
-  /* Адрес сервера определяется автоматически — ничего вводить не нужно.
-     Backend живёт в Linux-контейнере (Docker) на этой же машине или в
-     локальной сети, поэтому пробуем loopback и имя хоста. */
-  function backendCandidates() {
-    const set = new Set();
-    const host = location.hostname;
-    set.add("http://127.0.0.1:8080");
-    set.add("http://localhost:8080");
-    if (host && host !== "localhost" && host !== "127.0.0.1") set.add("http://" + host + ":8080");
-    if (host && host !== "localhost" && host !== "127.0.0.1") set.add("http://" + host.split(".").slice(-3).join(".") + ":8080");
-    return Array.from(set);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /* ---------------- GitHub API ---------------- */
+
+  async function gh(method, path, body) {
+    const r = await fetch("https://api.github.com" + path, {
+      method,
+      headers: {
+        Authorization: "Bearer " + ghToken,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { msg = (await r.json()).message || msg; } catch (_) { /* ignore */ }
+      throw new Error(msg);
+    }
+    return r.status === 204 ? null : r.json();
   }
 
-  function activeUrl() {
-    return activeServer;
+  async function connectGH(token) {
+    const prev = ghToken;
+    ghToken = token;
+    try {
+      ghUser = await gh("GET", "/user");
+      return ghUser;
+    } catch (e) {
+      ghToken = prev;
+      ghUser = null;
+      throw e;
+    }
   }
 
-  function logLink(text, cls) {
+  function setGHStatus() {
+    if (ghUser) {
+      els.ghStatus.textContent = "GitHub: @" + ghUser.login;
+      els.ghStatus.className = "health ok";
+      els.ghLogin.textContent = "Сменить токен";
+    } else {
+      els.ghStatus.textContent = "GitHub: не подключён";
+      els.ghStatus.className = "health bad";
+      els.ghLogin.textContent = "Подключить GitHub";
+    }
+  }
+
+  function saveToken() {
+    sessionStorage.setItem(TOKEN_KEY, ghToken);
+    if (els.ghRemember.checked) localStorage.setItem(TOKEN_KEY_LS, ghToken);
+    else localStorage.removeItem(TOKEN_KEY_LS);
+  }
+
+  async function initGH() {
+    const token = sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY_LS);
+    if (!token) { setGHStatus(); return; }
+    try {
+      await connectGH(token);
+    } catch (_) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY_LS);
+    }
+    setGHStatus();
+  }
+
+  /* ---------------- UI helpers ---------------- */
+
+  function log(text, cls) {
     const span = document.createElement("span");
     if (cls) span.className = cls;
     span.textContent = text;
     els.log.appendChild(span);
-  }
-
-  function log(text, cls) {
-    logLink(text, cls);
     els.log.append("\n");
     els.log.scrollTop = els.log.scrollHeight;
   }
@@ -80,36 +143,38 @@
     els.start.disabled = files.length === 0 || skCount === 0;
   }
 
-  /* ---------------- health / auto-discovery ---------------- */
+  /* ---------------- GitHub auth modal ---------------- */
 
-  async function probe(url) {
+  function openModal() {
+    els.ghErr.classList.add("hidden");
+    els.ghToken.value = "";
+    els.ghModal.classList.remove("hidden");
+    els.ghToken.focus();
+  }
+  function closeModal() {
+    els.ghModal.classList.add("hidden");
+  }
+
+  els.ghLogin.addEventListener("click", openModal);
+  els.ghCancel.addEventListener("click", closeModal);
+  els.ghModal.addEventListener("click", (e) => { if (e.target === els.ghModal) closeModal(); });
+  els.ghToken.addEventListener("keydown", (e) => { if (e.key === "Enter") els.ghSave.click(); });
+
+  els.ghSave.addEventListener("click", async () => {
+    const token = els.ghToken.value.trim();
+    if (!token) { els.ghErr.textContent = "Введите токен"; els.ghErr.classList.remove("hidden"); return; }
     try {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 4000);
-      const r = await fetch(url + "/health", { signal: ctl.signal, cache: "no-store" });
-      clearTimeout(t);
-      if (!r.ok) return null;
-      const j = await r.json();
-      return j && j.status === "ok" ? j : null;
+      const u = await connectGH(token);
+      saveToken();
+      closeModal();
+      setGHStatus();
+      log("Подключено: @" + u.login, "ok");
     } catch (e) {
-      return null;
+      els.ghErr.textContent = "Токен не принят: " + e.message;
+      els.ghErr.classList.remove("hidden");
+      setGHStatus();
     }
-  }
-
-  async function checkHealth() {
-    for (const url of backendCandidates()) {
-      const j = await probe(url);
-      if (j) {
-        activeServer = url;
-        els.health.textContent = "✓ сервер онлайн";
-        els.health.className = "health ok";
-        return true;
-      }
-    }
-    els.health.textContent = "✗ сервер не найден";
-    els.health.className = "health bad";
-    return false;
-  }
+  });
 
   /* ---------------- folder pick ---------------- */
 
@@ -146,7 +211,6 @@
       }
     }
     for (const item of items) await walk(item.webkitGetAsEntry ? item.webkitGetAsEntry() : null, "");
-    // dedupe
     const seen = new Set();
     files = collected.filter((f) => {
       const k = f.webkitRelativePath || f.name;
@@ -164,7 +228,7 @@
 
   els.clear.addEventListener("click", () => {
     files = [];
-    lastToken = null;
+    lastZip = null;
     els.folderInput.value = "";
     els.log.textContent = "";
     els.download.classList.add("hidden");
@@ -172,7 +236,7 @@
     setStatus("готов", "");
   });
 
-  /* ---------------- start ---------------- */
+  /* ---------------- zip / base64 ---------------- */
 
   async function buildZip() {
     const zip = new JSZip();
@@ -186,10 +250,92 @@
     });
   }
 
+  function blobToBase64(blob) {
+    return new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(",")[1] || "");
+      fr.onerror = () => rej(fr.error);
+      fr.readAsDataURL(blob);
+    });
+  }
+
+  function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+    return bytes;
+  }
+
+  /* ---------------- convert via GitHub Actions ---------------- */
+
+  async function pushInputZip(blob) {
+    log("> Отправляем архив в GitHub (ветка " + BR_INBOX + ")…", "dim");
+    const b64 = await blobToBase64(blob);
+    const blobRes = await gh("POST", "/repos/" + GH_REPO + "/git/blobs", {
+      content: b64, encoding: "base64",
+    });
+    let parent = null;
+    try {
+      const ref = await gh("GET", "/repos/" + GH_REPO + "/git/ref/heads/" + BR_INBOX);
+      parent = ref.object.sha;
+    } catch (_) { /* ветки ещё нет */ }
+    const tree = await gh("POST", "/repos/" + GH_REPO + "/git/trees", {
+      tree: [{ path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha }],
+    });
+    const commit = await gh("POST", "/repos/" + GH_REPO + "/git/commits", {
+      message: "convert " + new Date().toISOString(),
+      tree: tree.sha,
+      parents: parent ? [parent] : [],
+    });
+    if (parent) {
+      await gh("PATCH", "/repos/" + GH_REPO + "/git/refs/heads/" + BR_INBOX, { sha: commit.sha, force: true });
+    } else {
+      await gh("POST", "/repos/" + GH_REPO + "/git/refs", { ref: "refs/heads/" + BR_INBOX, sha: commit.sha });
+    }
+    log("> Загружено, Actions поднимает Linux…", "dim");
+  }
+
+  async function waitForResults(t0) {
+    const deadline = Date.now() + 5 * 60 * 1000;
+    let lastLog = 0;
+    while (Date.now() < deadline) {
+      try {
+        const br = await gh("GET", "/repos/" + GH_REPO + "/branches/" + BR_RESULTS);
+        const date = Date.parse(br.commit.commit.committer.date);
+        if (!isNaN(date) && date >= t0 - 5000) return br;
+      } catch (_) { /* ещё нет результата */ }
+      if (Date.now() - lastLog > 7000) { log("… конвертация в Actions…", "dim"); lastLog = Date.now(); }
+      await sleep(5000);
+    }
+    throw new Error("Превышено время ожидания (5 минут)");
+  }
+
+  async function fetchResultBlob(sha) {
+    const tree = await gh("GET", "/repos/" + GH_REPO + "/git/trees/" + sha + "?recursive=1");
+    let entry = null;
+    for (const t of tree.tree) {
+      if (t.type === "blob" && t.path === RESULT_FILE) { entry = t; break; }
+    }
+    if (!entry) throw new Error("Результат не найден в ветке " + BR_RESULTS);
+    const b = await gh("GET", "/repos/" + GH_REPO + "/git/blobs/" + entry.sha);
+    const bytes = b64ToBytes(b.content);
+    return new Blob([bytes], { type: "application/zip" });
+  }
+
+  async function extractLog() {
+    const z = await JSZip.loadAsync(lastZip);
+    const f = z.file("convert-log.txt");
+    return f ? f.async("string") : "";
+  }
+
+  /* ---------------- start / download ---------------- */
+
   els.start.addEventListener("click", async () => {
+    if (!ghUser) { openModal(); log("Сначала подключите GitHub (токен нужен только для запуска).", "info"); return; }
     els.start.disabled = true;
     els.download.classList.add("hidden");
-    lastToken = null;
+    lastZip = null;
     els.log.textContent = "";
     setStatus("конвертация…", "run");
     log("> Пакуем файлы…", "dim");
@@ -202,53 +348,48 @@
       els.start.disabled = false;
       return;
     }
-    log("> ZIP собран (" + (blob.size / 1024 / 1024).toFixed(1) + " МБ), отправляем на сервер…", "dim");
+    if (blob.size > MAX_ZIP) {
+      log("Архив слишком большой: " + (blob.size / 1048576).toFixed(1) + " МБ (лимит " + (MAX_ZIP / 1048576) + " МБ).", "err");
+      setStatus("ошибка", "err");
+      els.start.disabled = false;
+      return;
+    }
+    log("> ZIP собран (" + (blob.size / 1048576).toFixed(1) + " МБ), отправляем в GitHub…", "dim");
+    const t0 = Date.now();
     try {
-      const r = await fetch(activeUrl() + "/api/convert", {
-        method: "POST",
-        headers: { "Content-Type": "application/zip" },
-        body: blob,
-      });
-      if (!r.ok) {
-        let msg = "HTTP " + r.status;
-        try { msg = (await r.json()).error || msg; } catch (_) { /* ignore */ }
-        throw new Error(msg);
+      await pushInputZip(blob);
+      const br = await waitForResults(t0);
+      log("> Результат готов, скачиваем…", "dim");
+      lastZip = await fetchResultBlob(br.commit.sha);
+      const logText = await extractLog();
+      if (logText) {
+        for (const line of logText.split("\n")) {
+          if (!line.trim()) continue;
+          const cls = /^FAIL/.test(line) ? "err" : /^OK/.test(line) ? "ok" : /^done/.test(line) ? "info" : "dim";
+          log(line, cls);
+        }
       }
-      const j = await r.json();
-      for (const line of j.logs || []) {
-        const cls = /FAIL|\bошибка\b/i.test(line) ? "err"
-                   : /^OK|успешно|скопировано/i.test(line) ? "ok"
-                   : /^\S|→/.test(line) ? "info" : "dim";
-        log(String(line), cls);
-      }
-      lastToken = j.token;
-      if (j.ok > 0) {
-        log("==== Готово: " + (j.ok || 0) + " OK, " + (j.failed || 0) + " failed ====", "ok");
-        els.download.classList.remove("hidden");
-        setStatus("готово", "ok");
-      } else {
-        setStatus("ошибок больше, чем результатов", "err");
-      }
+      setStatus("готово", "ok");
+      els.download.classList.remove("hidden");
     } catch (e) {
-      log("Ошибка сервера: " + e.message, "err");
-      log("Не удалось связаться с Linux-сервером конвертации.", "dim");
+      log("Ошибка: " + e.message, "err");
       setStatus("ошибка", "err");
     } finally {
-      els.start.disabled = files.length === 0;
+      els.start.disabled = false;
     }
   });
 
   els.download.addEventListener("click", () => {
-    if (!lastToken) return;
+    if (!lastZip) return;
     const a = document.createElement("a");
-    a.href = activeUrl() + "/results/" + lastToken + ".zip";
+    a.href = URL.createObjectURL(lastZip);
     a.download = "spine-converted.zip";
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => a.remove(), 500);
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   });
 
   /* init */
-  checkHealth();
-  setInterval(checkHealth, 15000);
+  initGH();
+  renderFileList();
 })();

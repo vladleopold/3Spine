@@ -1,0 +1,43 @@
+name: Web convert (site → Actions)
+
+on:
+  push:
+    branches: [inbox]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    if: ${{ !github.event.deleted }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Convert input.zip (native Linux converter)
+        run: |
+          set -euo pipefail
+          test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }
+          python3 .codespace/convert.py input.zip output.zip
+          unzip -l output.zip
+
+      - name: Publish results to results branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          rm -rf publish && mkdir publish && cp output.zip publish/
+          cd publish
+          git init -q
+          git checkout -q -b results
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add output.zip
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
+
+      - name: Clean inbox branch (no loop on delete event)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" --delete inbox || true

@@ -13,6 +13,7 @@ IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 def main():
     zin, zout = sys.argv[1], sys.argv[2]
     tmp = tempfile.mkdtemp()
+    loglines = []
     try:
         src = os.path.join(tmp, "in")
         dst = os.path.join(tmp, "out")
@@ -48,9 +49,11 @@ def main():
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 ok += 1
                 print(f"OK:   {rel}")
+                loglines.append(f"OK:   {rel}")
             except Exception as e:
                 failed += 1
                 print(f"FAIL: {rel}: {e}")
+                loglines.append(f"FAIL: {rel}: {e}")
 
         for root, _, files in os.walk(src):
             for f in files:
@@ -60,6 +63,10 @@ def main():
                     outpath = os.path.join(dst, rel)
                     os.makedirs(os.path.dirname(outpath), exist_ok=True)
                     shutil.copy2(full, outpath)
+
+        loglines.append(f"done: {ok} ok, {failed} failed")
+        with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(loglines) + "\n")
 
         with zipfile.ZipFile(zout, "w", zipfile.ZIP_DEFLATED) as z:
             for root, _, files in os.walk(dst):
