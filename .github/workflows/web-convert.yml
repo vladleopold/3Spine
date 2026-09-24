@@ -22,6 +22,12 @@ jobs:
           git checkout origin/main -- .codespace backend
           git status --short
 
+      - name: Hash analyzer → rename (hash→asset_name) if hashed
+        run: |
+          set -euo pipefail
+          test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }
+          python3 .codespace/prepare_input.py input.zip input.zip
+
       - name: Convert input.zip (native Linux converter)
         run: |
           set -euo pipefail
