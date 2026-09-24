@@ -41,6 +41,14 @@ jobs:
           python3 .codespace/convert.py input.zip output.zip
           unzip -l output.zip
 
+      - name: Compile block → .spine (Spine Editor, версия по JSON; не ломает результат без редактора)
+        env:
+          SPINE_EDITOR: ${{ secrets.SPINE_EDITOR }}
+        run: |
+          set -euo pipefail
+          python3 .codespace/compile_block.py output.zip output.zip
+          unzip -l output.zip
+
       - name: Publish results to results branch
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
