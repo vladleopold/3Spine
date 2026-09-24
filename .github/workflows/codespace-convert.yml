@@ -1,0 +1,67 @@
+name: Codespace convert (win - stop)
+
+on:
+  workflow_dispatch:
+
+env:
+  GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
+
+jobs:
+  codespace-convert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build test input ZIP from real fixtures
+        run: |
+          mkdir -p /tmp/in
+          cp examples/*.skel /tmp/in/
+          (cd /tmp/in && zip -qr /tmp/input.zip .)
+
+      - name: Create Codespace (Linux) for the repo
+        id: cs
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPO_ID=$(gh api "repos/$REPO" --jq .id)
+          BODY=$(jq -n --arg json "$REPO_ID" --arg dev ".devcontainer/devcontainer.json" --arg ref "main" \
+            '{repository_id:($json|tonumber), devcontainer_path:$dev, ref:$ref}')
+          RESP=$(gh api -X POST user/codespaces --input <(echo "$BODY") 2>&1) || { echo "$RESP"; exit 1; }
+          NAME=$(echo "$RESP" | jq -r .name)
+          echo "codespace=$NAME" >> "$GITHUB_OUTPUT"
+          echo "name: $NAME"
+          for i in $(seq 1 60); do
+            ST=$(gh api "user/codespaces/$NAME" --jq '.state' 2>/dev/null || echo "")
+            echo "state: $ST"
+            case "$ST" in
+              Available) exit 0 ;;
+              Creating|Queued|Provisioning|Unknown) sleep 10 ;;
+              *) echo "unexpected state: $ST"; exit 1 ;;
+            esac
+          done
+          echo "codespace not ready in time" ; exit 1
+
+      - name: Copy input ZIP into the Codespace
+        run: |
+          gh codespace cp -c "${{ steps.cs.outputs.codespace }}" /tmp/input.zip remote:/tmp/input.zip
+
+      - name: Convert inside Codespace (Linux native converter)
+        run: |
+          gh codespace ssh -c "${{ steps.cs.outputs.codespace }}" -- \
+            bash -lc "python3 /workspaces/*/.codespace/convert.py /tmp/input.zip /tmp/output.zip"
+
+      - name: Fetch result ZIP
+        run: |
+          gh codespace cp -c "${{ steps.cs.outputs.codespace }}" remote:/tmp/output.zip /tmp/output.zip
+          unzip -l /tmp/output.zip
+
+      - name: Verify plum.json
+        run: |
+          unzip -p /tmp/output.zip plum.json | python3 -c "import sys,json; d=json.load(sys.stdin); print('VERIFY OK — spine', d['skeleton']['spine'], '| bones', len(d['bones']))"
+
+      - name: Stop Codespace (shut down)
+        if: always()
+        run: |
+          gh api -X POST "user/codespaces/${{ steps.cs.outputs.codespace }}/stop" 2>&1 || true
+          gh api "user/codespaces/${{ steps.cs.outputs.codespace }}" --jq .state 2>/dev/null || echo "stopped"
