@@ -282,25 +282,30 @@ def main() -> None:
             vflag = ["-u", ver] if ver else []
             rc = run_preview(base_cmd() + vflag + ["-i", target, "-o", outdir, "-e", settings_path],
                              logfile=logpath)
-            if rc != 0:
+            got = ""
+            for root, _d, files in os.walk(outdir):
+                for fn in sorted(files):
+                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        got = os.path.join(root, fn)
+                        break
+                if got:
+                    break
+            if not got:
                 try:
                     with open(logpath, encoding="utf-8", errors="replace") as f:
-                        tail = [ln for ln in f.read().split("\n") if ln.strip()][-4:]
+                        tail = [ln for ln in f.read().split("\n") if ln.strip()][-6:]
+                    print(f"compile-block: preview editor rc={rc}, файлов нет: {os.path.basename(target)}")
                     for ln in tail:
                         print("compile-block: preview editor: " + ln[:200])
                 except OSError:
-                    pass
-                shutil.rmtree(outdir, ignore_errors=True)
-                return False
-            try:
-                for fn in sorted(os.listdir(outdir)):
-                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                        shutil.move(os.path.join(outdir, fn), want)
-                        shutil.rmtree(outdir, ignore_errors=True)
-                        return True
-            except OSError:
-                pass
+                    print(f"compile-block: preview editor rc={rc}, лог недоступен")
             shutil.rmtree(outdir, ignore_errors=True)
+            if got:
+                try:
+                    shutil.move(got, want)
+                    return True
+                except OSError:
+                    return False
             return False
 
         def make_preview(spine_path: str, rel: str, ver: str = "", json_hint: str = "") -> str:
