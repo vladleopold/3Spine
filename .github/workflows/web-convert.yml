@@ -75,7 +75,7 @@ jobs:
   compile:
     needs: convert
     continue-on-error: true
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -95,15 +95,44 @@ jobs:
           path: work
           run-id: ${{ github.run_id }}
 
-      - name: Compile block → .spine (licensed Spine Editor; версия по JSON)
+      - name: Install x11/gl deps (headless Spine)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q \
+            xvfb x11-xserver-utils x11-utils x11-xkb-utils \
+            libgl1 libgl1-mesa-dri libglx-mesa0 libegl1 \
+            libgtk-3-0t64 libxtst6 libxrender1 libxrandr2 libxinerama1 \
+            libxcursor1 libxi6 libasound2t64 fonts-liberation || true
+          sudo ldconfig || true
+
+      - name: Download licensed Spine Linux launcher
         env:
-          SPINE_EDITOR: ${{ secrets.SPINE_EDITOR }}
+          SPINE_LINUX_URL: ${{ secrets.SPINE_LINUX_URL }}
+        run: |
+          set -euo pipefail
+          curl -sL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
+            "$SPINE_LINUX_URL" -o /tmp/linux.gz
+          gzip -d /tmp/linux.gz
+          mkdir -p /tmp/spine
+          tar xf /tmp/linux -C /tmp/spine
+          ls /tmp/spine
+
+      - name: Compile block → .spine (Spine Linux, версия по JSON)
+        env:
+          SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
+          SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
-          SPINE="${SPINE_EDITOR:-/Applications/Spine.app/Contents/MacOS/Spine}"
-          SPINE_EDITOR="$SPINE" python3 .codespace/compile_block.py work/output.zip work/output.zip
+          printf '#!/bin/sh\nexec xvfb-run -a /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
+          chmod +x /tmp/spine-run.sh
+          python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
+
+      - name: Logout Spine license
+        if: always()
+        run: |
+          timeout 300 xvfb-run -a /tmp/spine/Spine/Spine.sh -l 2>&1 | tail -20 || true
 
       - name: Publish final results (with .spine) to results branch
         env:

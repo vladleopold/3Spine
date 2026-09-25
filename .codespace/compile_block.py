@@ -34,7 +34,10 @@ def main() -> None:
                         shutil.copyfileobj(f, o)
 
         compiled = skipped = failed = 0
+        license_code = os.environ.get("SPINE_LICENSE", "")
         has_editor = bool(shutil.which(spine)) or (os.path.exists(spine) and os.access(spine, os.X_OK))
+        if license_code:
+            loglines.append("compile-block: активация лицензии через stdin (SPINE_LICENSE задан)")
         if not has_editor:
             msg = (f"compile-block: WARN Spine Editor не найден (SPINE_EDITOR={spine}) — "
                    f"файлов .spine не создано, остаются JSON/.skel указанной версии")
@@ -63,8 +66,15 @@ def main() -> None:
                     out_spine = os.path.join(root, os.path.splitext(f)[0] + ".spine")
                     os.makedirs(os.path.dirname(out_spine), exist_ok=True)
                     try:
-                        r = subprocess.run([spine, "-i", p, "-o", out_spine, "-r"],
-                                           capture_output=True, text=True, timeout=600)
+                        cmd = [spine]
+                        if ver:
+                            cmd += ["-u", ver]
+                        cmd += ["-i", p, "-o", out_spine, "-r"]
+                        r = subprocess.run(
+                            cmd,
+                            input=(license_code + "\n") if license_code else None,
+                            capture_output=True, text=True, timeout=1800,
+                        )
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             compiled += 1
                             m = f"compile-block: ✓ {f} → {os.path.basename(out_spine)} (Spine {ver})"
