@@ -123,6 +123,39 @@ def main() -> None:
                 say(f"compile-block: ЭТАП 1 итог: {ok1}/{len(skels)} skel→json, {time.time() - started:.1f}s")
 
             # ── ЭТАП 2: .json → .spine ──────────────────────────────────────────
+            restore_tool = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "spine_restore", "spine_restore.py")
+            native = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "..", "backend", "converter", "SpineSkeletonDataConverter")
+
+            def regen_with_other_engine(src_json: str) -> str:
+                """Редактор не взял JSON — перегенерируем его другим движком."""
+                base = os.path.splitext(src_json)[0]
+                skel = base + ".skel"
+                if not os.path.exists(skel):
+                    return ""
+                alt = base + ".alt.json"
+                if os.path.exists(alt):
+                    os.remove(alt)
+                # приоритет: Spine Restore Tool, затем нативный
+                if os.path.exists(restore_tool):
+                    try:
+                        r = subprocess.run([sys.executable, restore_tool, skel, "-o", alt],
+                                           capture_output=True, text=True, timeout=900,
+                                           input=(license_code + "\n") if license_code else None)
+                        if r.returncode == 0 and os.path.exists(alt) and os.path.getsize(alt) > 0:
+                            return alt
+                    except Exception:
+                        pass
+                if os.path.exists(native) and os.access(native, os.X_OK):
+                    try:
+                        subprocess.run([native, skel, alt], capture_output=True, timeout=900)
+                        if os.path.exists(alt) and os.path.getsize(alt) > 0:
+                            return alt
+                    except Exception:
+                        pass
+                return ""
+
             jobs = []
             for root, _, files in os.walk(src):
                 for f in sorted(files):
@@ -163,6 +196,21 @@ def main() -> None:
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
                         if idx < len(attempts) - 1:
                             time.sleep(1.5 + idx)
+
+                    # запасной путь: другой движок → другой JSON → снова в редактор
+                    alt = regen_with_other_engine(p)
+                    if alt:
+                        say(f"compile-block: {rel}: редактор не принял JSON, пробую alt из другого движка")
+                        tail2 = ["-i", alt, "-o", out_spine, "-r"]
+                        for cmd in [base_cmd() + ["-u", ver] + tail2, base_cmd() + tail2]:
+                            rc = run(cmd)
+                            if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                                return rel, True, (f"compile-block: ✓ {rel} → "
+                                                   f"{os.path.basename(out_spine)} (Spine {ver}, alt-JSON)")
+                        try:
+                            os.remove(alt)
+                        except OSError:
+                            pass
                     return rel, False, f"compile-block: FAIL {rel} (json→spine): rc={rc}"
 
                 results = [json_to_spine(jobs[0])]

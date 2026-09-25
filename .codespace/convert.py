@@ -166,6 +166,12 @@ def main():
                             os.remove(tmp)
                         except OSError:
                             pass
+                # исходный бинарник оставляем рядом: если редактор не примет
+                # этот JSON, compile-этап перегенерирует его другим движком
+                if not sk.lower().endswith(".json"):
+                    raw_out = os.path.join(dst, rel)
+                    os.makedirs(os.path.dirname(raw_out), exist_ok=True)
+                    shutil.copy2(sk, raw_out)
                 route = info["kind"] + "/" + used
                 return rel, "OK", "OK:   %s [%s]" % (rel, route), ""
 
