@@ -48,7 +48,8 @@ jobs:
           set -euo pipefail
           JOB="$(git log -1 --format=%s)"
           echo "$JOB" > job-id.txt
-          rm -rf publish && mkdir publish && cp output.zip publish/
+          cp output.zip /tmp/publish-output.zip
+          rm -rf publish && mkdir publish
           cd publish
           git init -q
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
@@ -58,6 +59,7 @@ jobs:
             git checkout -q --orphan results
             git rm -rq --cached . 2>/dev/null || true
           fi
+          cp /tmp/publish-output.zip output.zip
           git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A output.zip
           git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} $(date -u +%FT%TZ)"
           git push -q origin results
@@ -150,7 +152,8 @@ jobs:
           [ -n "${JOB}" ] || JOB="${{ github.event.head_commit.message }}"
           SAFE="$(printf '%s' "$JOB" | tr -c 'A-Za-z0-9._-' '_')"
           NOW="$(date -u +%FT%TZ)"
-          rm -rf publish && mkdir publish && cp work/output.zip publish/
+          cp work/output.zip /tmp/publish-output.zip
+          rm -rf publish && mkdir publish
           cd publish
           git init -q
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
@@ -160,9 +163,11 @@ jobs:
             git checkout -q --orphan results
             git rm -rq --cached . 2>/dev/null || true
           fi
-          cp work/output.zip "history/${SAFE}.zip"
-          BYTES="$(stat -c %s work/output.zip)"
-          SPINE="$(unzip -l work/output.zip | grep -c '\.spine$' || true)"
+          mkdir -p history
+          cp /tmp/publish-output.zip output.zip
+          cp /tmp/publish-output.zip "history/${SAFE}.zip"
+          BYTES="$(stat -c %s /tmp/publish-output.zip)"
+          SPINE="$(unzip -l /tmp/publish-output.zip | grep -c '\.spine$' || true)"
           JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
           import json, os
           path = "history/index.json"

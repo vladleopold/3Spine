@@ -44,6 +44,25 @@ jobs:
           test -n "${NEW_RT}" || { echo "no new refresh token in response"; exit 0; }
           printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}"
 
+      - name: Ensure KV namespace for visit stats
+        working-directory: worker
+        run: |
+          set -euo pipefail
+          TITLE="spine-broker-visits"
+          ID="$(npx wrangler@latest kv namespace list --json | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .id' | head -1)"
+          if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+            ID="$(npx wrangler@latest kv namespace create "$TITLE" --json | jq -r '.id')"
+            echo "created KV namespace $TITLE ($ID)"
+          else
+            echo "using existing KV namespace $TITLE ($ID)"
+          fi
+          if ! grep -q 'binding = "VISITS"' wrangler.toml; then
+            printf '\n[[kv_namespaces]]\nbinding = "VISITS"\nid = "%s"\n' "$ID" >> wrangler.toml
+          else
+            KV_ID="$ID" python3 -c 'import os,re; p="wrangler.toml"; s=open(p).read(); s=re.sub(r"(binding = \"VISITS\"\nid = \")[^\"]*", lambda m: m.group(1)+os.environ["KV_ID"], s); open(p,"w").write(s)'
+          fi
+          tail -5 wrangler.toml
+
       - name: Deploy worker to Cloudflare
         working-directory: worker
         run: npx wrangler@latest deploy

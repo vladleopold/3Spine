@@ -70,9 +70,18 @@ body {
   padding: 3px 9px; border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--muted);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.health .dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px rgba(148,163,184,.15);
+  transition: background .15s, box-shadow .15s;
 }
 .health.ok   { color: var(--ok);      border-color: rgba(63,185,80,.5);  background: rgba(63,185,80,.1); }
 .health.bad  { color: var(--danger);  border-color: rgba(248,81,73,.5);  background: rgba(248,81,73,.1); }
+.health.ok  .dot { background: var(--ok);     box-shadow: 0 0 0 3px rgba(63,185,80,.22); }
+.health.bad .dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(248,81,73,.22); }
 
 /* ---------- layout ---------- */
 main {
@@ -234,6 +243,14 @@ footer {
   color: var(--muted);
   border-top: 1px solid var(--border);
 }
+.stats-line {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.stats-line b { color: var(--text); font-weight: 600; }
+.foot-note { opacity: .75; }
 
 .hidden { display: none !important; }
 

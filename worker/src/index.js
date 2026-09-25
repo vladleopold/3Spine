@@ -74,32 +74,35 @@ function safeName(job) {
   return String(job || "").replace(/[^A-Za-z0-9._-]/g, "_");
 }
 
-async function handleHistory(request, env) {
+async function historyItems(env) {
   let res;
   try {
     res = await resultsTree(env);
   } catch (_) {
-    return json({ items: [] });
+    return [];
   }
   const index = (res.tree.tree || []).find((t) => t.type === "blob" && t.path === "history/index.json");
   if (index) {
     try {
       const blob = await j(env, "GET", `/repos/${REPO}/git/blobs/${index.sha}`);
       const data = JSON.parse(atob(blob.content.replace(/\n/g, "")));
-      if (data && Array.isArray(data.items)) return json({ items: data.items });
+      if (data && Array.isArray(data.items)) return data.items;
     } catch (_) { /* fall back to tree scan */ }
   }
-  const items = (res.tree.tree || [])
+  return (res.tree.tree || [])
     .filter((t) => t.type === "blob" && /^history\/.+\.zip$/.test(t.path))
     .map((t) => ({
       job: t.path.replace(/^history\//, "").replace(/\.zip$/, ""),
       file: t.path,
       bytes: t.size || 0,
-      date: (res.branch.commit.commit.committer && res.branch.commit.commit.committer.date) || "",
+      date: ((res.branch.commit.commit.committer || {}).date) || "",
       spine: false,
     }))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  return json({ items });
+}
+
+async function handleHistory(request, env) {
+  return json({ items: await historyItems(env) });
 }
 
 async function handleConvert(request, env) {
@@ -196,6 +199,33 @@ async function handleDownload(request, env) {
   });
 }
 
+async function handleVisit(request, env) {
+  if (!env.VISITS) return json({ visits: null, tracked: false });
+  const total = await env.VISITS.get("visits", { type: "json", cacheTtl: 0 }).catch(() => null);
+  const visits = (total && Number(total.value)) || 0;
+  const next = visits + 1;
+  await env.VISITS.put("visits", JSON.stringify({ value: next, updated: new Date().toISOString() }));
+  return json({ visits: next, tracked: true });
+}
+
+async function handleStats(request, env) {
+  let visits = null;
+  if (env.VISITS) {
+    try {
+      const v = await env.VISITS.get("visits", { type: "json", cacheTtl: 0 });
+      visits = v ? Number(v.value) || 0 : 0;
+    } catch (_) { /* ignore */ }
+  }
+  const items = await historyItems(env);
+  const totalBytes = items.reduce((a, b) => a + (Number(b.bytes) || 0), 0);
+  return json({
+    visits,
+    conversions: items.length,
+    totalBytes,
+    last: items.length ? items[0].date || "" : "",
+  });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -216,6 +246,12 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/history") {
         return await handleHistory(request, env);
+      }
+      if (request.method === "GET" && url.pathname === "/visit") {
+        return await handleVisit(request, env);
+      }
+      if (request.method === "GET" && url.pathname === "/stats") {
+        return await handleStats(request, env);
       }
       return json({ error: "not found" }, 404);
     } catch (e) {

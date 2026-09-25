@@ -18,6 +18,7 @@
     status: $("status"),
     histRefresh: $("hist-refresh"),
     histList: $("history-list"),
+    statsLine: $("stats-line"),
   };
 
   const BROKER = "https://spine-broker.leopolds2010.workers.dev";
@@ -69,15 +70,38 @@
     try {
       const r = await fetch(BROKER + "/", { method: "GET" });
       if (r.ok) {
-        els.srv.textContent = "сервер: онлайн";
+        els.srv.title = "Сервер конвертации работает";
         els.srv.className = "health ok";
       } else {
-        els.srv.textContent = "сервер: не отвечает";
+        els.srv.title = "Сервер конвертации не отвечает (HTTP " + r.status + ")";
         els.srv.className = "health bad";
       }
     } catch (_) {
-      els.srv.textContent = "сервер: недоступен";
+      els.srv.title = "Сервер конвертации недоступен";
       els.srv.className = "health bad";
+    }
+  }
+
+  /* ---------------- stats ---------------- */
+
+  async function registerVisit() {
+    try {
+      await fetch(BROKER + "/visit", { method: "GET" });
+    } catch (_) { /* ignore */ }
+  }
+
+  async function loadStats() {
+    try {
+      const r = await fetch(BROKER + "/stats", { method: "GET" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+      const visits = d.visits === null || d.visits === undefined ? "—" : d.visits;
+      const conversions = d.conversions || 0;
+      const size = fmtBytes(d.totalBytes || 0);
+      els.statsLine.innerHTML =
+        "посещений: <b>" + visits + "</b> · конвертаций: <b>" + conversions + "</b> · архивов: <b>" + size + "</b>";
+    } catch (_) {
+      els.statsLine.textContent = "статистика недоступна";
     }
   }
 
@@ -275,7 +299,10 @@
     }
   }
 
-  els.histRefresh.addEventListener("click", loadHistory);
+  els.histRefresh.addEventListener("click", () => {
+    loadHistory();
+    loadStats();
+  });
 
   /* ---------------- start / download ---------------- */
 
@@ -320,6 +347,7 @@
       setStatus("готово", "ok");
       els.download.classList.remove("hidden");
       loadHistory();
+      loadStats();
     } catch (e) {
       log("Ошибка: " + e.message, "err");
       setStatus("ошибка", "err");
@@ -342,4 +370,5 @@
   checkServer();
   renderFileList();
   loadHistory();
+  registerVisit().then(loadStats);
 })();
