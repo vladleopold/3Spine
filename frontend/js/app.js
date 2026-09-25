@@ -474,6 +474,34 @@
     loadStats();
   });
 
+  /* ---------------- summary ---------------- */
+
+  async function logSummary() {
+    try {
+      const z = await JSZip.loadAsync(lastZip);
+      let spine = 0, json = 0, skel = 0, img = 0, other = 0;
+      const corruptFile = z.file("corrupt-list.txt");
+      let corrupt = [];
+      if (corruptFile) corrupt = (await corruptFile.async("string")).split("\n").filter(Boolean);
+      z.forEach((path, file) => {
+        if (file.dir || /\.tmp\.json$|\.v4\.json$|\.alt\.json$/.test(path)) return;
+        if (/\.spine$/.test(path)) spine++;
+        else if (/\.json$/.test(path)) json++;
+        else if (/\.skel$/.test(path)) skel++;
+        else if (/\.(png|jpg|jpeg|gif|webp|avif|bmp)$/i.test(path)) img++;
+        else other++;
+      });
+      let line = "итого: .spine " + spine + " · json " + json + " · skel " + skel +
+                 " · картинок " + img;
+      if (corrupt.length) line += " · битых файлов " + corrupt.length + " (конвертация невозможна)";
+      log(line, "info");
+      for (const c of corrupt.slice(0, 5)) log("  битый: " + c, "err");
+      if (corrupt.length > 5) log("  … и ещё " + (corrupt.length - 5) + " битых (см. corrupt-list.txt)", "err");
+    } catch (e) {
+      /* сводка не критична */
+    }
+  }
+
   /* ---------------- start / download ---------------- */
 
   els.start.addEventListener("click", async () => {

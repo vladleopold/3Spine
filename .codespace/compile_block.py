@@ -283,6 +283,34 @@ def main() -> None:
             with open(os.path.join(src, "compile-log.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(loglines) + "\n")
 
+        # человекочитаемый отчёт по прогону
+        try:
+            spine_n = sum(1 for r, _d, fs2 in os.walk(src) for f2 in fs2 if f2.endswith(".spine"))
+            json_n = sum(1 for r, _d, fs2 in os.walk(src) for f2 in fs2 if f2.endswith(".json"))
+            skel_n = sum(1 for r, _d, fs2 in os.walk(src) for f2 in fs2 if f2.endswith(".skel"))
+            img_n = sum(1 for r, _d, fs2 in os.walk(src) for f2 in fs2
+                        if f2.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp")))
+            report = [
+                "Spine Converter — отчёт о конвертации",
+                "=" * 44,
+                "",
+                f"Файлов .spine (проекты редактора): {spine_n}",
+                f"Файлов .json (данные Spine):        {json_n}",
+                f"Файлов .skel (исходные бинарники):   {skel_n}",
+                f"Картинок после распаковки атласов:   {img_n}",
+                "",
+            ]
+            if known_corrupt:
+                report.append(f"БИТЫЕ ФАЙЛЫ ({len(known_corrupt)}) — перезаписаны текстовым режимом,")
+                report.append("исходные байты утеряны, конвертация невозможна. Нужен чистый архив:")
+                report.extend("  " + p for p in sorted(known_corrupt))
+                report.append("")
+            report.append("Логи: prepare-log.txt, convert-log.txt, compile-log.txt, corrupt-list.txt")
+            with open(os.path.join(src, "REPORT.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(report) + "\n")
+        except Exception as e:
+            print(f"compile-block: отчёт не собран: {e}")
+
         with zipfile.ZipFile(zout, "w", zipfile.ZIP_DEFLATED) as z:
             for root, _, files in os.walk(src):
                 for f in files:
