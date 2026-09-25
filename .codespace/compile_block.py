@@ -89,7 +89,7 @@ def main() -> None:
                 "sequence": {"start": 1, "digits": 4, "prefix": "", "suffix": ""},
             }, f)
 
-        def make_preview(spine_path: str, rel: str) -> str:
+        def make_preview(spine_path: str, rel: str, ver: str = "") -> str:
             """Рендерит первый кадр .spine в PNG для галереи на сайте."""
             flat = rel.replace(os.sep, "__").replace("/", "__")
             if flat.lower().endswith(".spine"):
@@ -98,11 +98,12 @@ def main() -> None:
             want = os.path.join(preview_root, flat + ".png")
             if os.path.exists(want):
                 return ""
-            run(base_cmd() + ["-i", spine_path, "-o", want, "-e", export_settings])
+            vflag = ["-u", ver] if ver else []
+            run(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", export_settings])
             if not os.path.exists(want):
                 outdir = os.path.join(preview_root, flat + "_dir")
                 os.makedirs(outdir, exist_ok=True)
-                run(base_cmd() + ["-i", spine_path, "-o", outdir, "-e", export_settings])
+                run(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", export_settings])
                 for fn in sorted(os.listdir(outdir)):
                     if fn.lower().endswith(".png"):
                         shutil.move(os.path.join(outdir, fn), want)
@@ -266,7 +267,7 @@ def main() -> None:
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             if not fallback and os.environ.get("SPINE_PREVIEW", "1") == "1":
-                                png = make_preview(out_spine, rel)
+                                png = make_preview(out_spine, rel, ver)
                                 if png:
                                     print(f"compile-block: preview {png}")
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
@@ -282,7 +283,11 @@ def main() -> None:
                             rc = run(cmd)
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                                 if os.environ.get("SPINE_PREVIEW", "1") == "1":
-                                    make_preview(out_spine, rel)
+                                    make_preview(out_spine, rel, ver)
+                                try:
+                                    os.remove(alt)
+                                except OSError:
+                                    pass
                                 return rel, True, (f"compile-block: ✓ {rel} → "
                                                    f"{os.path.basename(out_spine)} (Spine {ver}, alt-JSON)")
                         try:
