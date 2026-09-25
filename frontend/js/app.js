@@ -7,7 +7,9 @@
     srv: $("srv"),
     dropzone: $("dropzone"),
     pickFolder: $("pick-folder"),
+    pickZip: $("pick-zip"),
     folderInput: $("folder-input"),
+    zipInput: $("zip-input"),
     fileSummary: $("file-summary"),
     fileCount: $("file-count"),
     fileList: $("file-list"),
@@ -23,6 +25,8 @@
 
   const BROKER = "https://spine-broker.leopolds2010.workers.dev";
   const MAX_ZIP = 35 * 1024 * 1024;
+  const MAX_UNPACKED = 400 * 1024 * 1024;
+  const MAX_FILES = 5000;
 
   let files = [];
   let lastZip = null;
@@ -123,10 +127,83 @@
       "посещений: <b>" + visitsText + "</b> · конвертаций: <b>" + conversions + "</b> · архивов: <b>" + fmtBytes(totalBytes) + "</b>";
   }
 
+  /* ---------------- zip input ---------------- */
+
+  function safeRelPath(p) {
+    return String(p || "")
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter((seg) => seg && seg !== "." && seg !== "..")
+      .join("/");
+  }
+
+  async function expandZip(file) {
+    const out = [];
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(file);
+    } catch (e) {
+      throw new Error("не удалось прочитать zip: " + (e && e.message ? e.message : e));
+    }
+    const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
+    if (names.length > MAX_FILES) {
+      throw new Error("в архиве " + names.length + " файлов — максимум " + MAX_FILES);
+    }
+    let total = 0;
+    const pending = [];
+    for (const name of names) {
+      const rel = safeRelPath(name);
+      if (!rel) continue;
+      const entry = zip.files[name];
+      pending.push(
+        entry.async("blob").then((blob) => {
+          total += blob.size;
+          if (total > MAX_UNPACKED) throw new Error("распакованный архив больше " + (MAX_UNPACKED / 1048576) + " МБ");
+          const base = rel.split("/").pop();
+          const nf = new File([blob], base, { type: blob.type, lastModified: Date.now() });
+          Object.defineProperty(nf, "webkitRelativePath", { value: rel, configurable: true });
+          out.push(nf);
+        })
+      );
+    }
+    await Promise.all(pending);
+    return out;
+  }
+
+  async function useZipFile(file) {
+    if (!file) return;
+    setStatus("распаковываем zip…", "run");
+    log("> Распаковка " + file.name + "…", "dim");
+    try {
+      const expanded = await expandZip(file);
+      files = dedupe(expanded);
+      renderFileList();
+      log("> Из архива извлечено файлов: " + expanded.length, "dim");
+      setStatus("готов", "");
+    } catch (e) {
+      log("Ошибка: " + e.message, "err");
+      setStatus("ошибка", "err");
+    }
+  }
+
+  function dedupe(list) {
+    const seen = new Set();
+    return list.filter((f) => {
+      const k = f.webkitRelativePath || f.name;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
   /* ---------------- folder pick ---------------- */
 
   els.pickFolder.addEventListener("click", () => els.folderInput.click());
-  els.dropzone.addEventListener("click", () => els.folderInput.click());
+  els.pickZip.addEventListener("click", () => els.zipInput.click());
+  els.dropzone.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    els.folderInput.click();
+  });
   els.dropzone.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); els.folderInput.click(); }
   });
@@ -142,10 +219,12 @@
     els.dropzone.classList.remove("drag");
     const items = e.dataTransfer.items;
     const collected = [];
+    const zips = [];
     async function walk(item, path) {
       if (!item) return;
       if (item.isFile) {
         const f = await new Promise((res) => item.file(res));
+        if (/\.zip$/i.test(f.name)) { zips.push(f); return; }
         if (!path) path = f.name;
         Object.defineProperty(f, "webkitRelativePath", { value: path, configurable: true });
         collected.push(f);
@@ -159,14 +238,32 @@
       }
     }
     for (const item of items) await walk(item.webkitGetAsEntry ? item.webkitGetAsEntry() : null, "");
-    const seen = new Set();
-    files = collected.filter((f) => {
-      const k = f.webkitRelativePath || f.name;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
+
+    if (zips.length) {
+      const expanded = [];
+      for (const z of zips) {
+        try {
+          expanded.push(...(await expandZip(z)));
+        } catch (e) {
+          log("Ошибка: " + e.message, "err");
+        }
+      }
+      if (expanded.length) {
+        files = dedupe([...collected, ...expanded]);
+        log("> Из zip извлечено файлов: " + expanded.length, "dim");
+      } else {
+        files = dedupe(collected);
+      }
+    } else {
+      files = dedupe(collected);
+    }
     renderFileList();
+  });
+
+  els.zipInput.addEventListener("change", () => {
+    const f = (els.zipInput.files || [])[0];
+    els.zipInput.value = "";
+    useZipFile(f);
   });
 
   els.folderInput.addEventListener("change", () => {
@@ -178,6 +275,7 @@
     files = [];
     lastZip = null;
     els.folderInput.value = "";
+    els.zipInput.value = "";
     els.log.textContent = "";
     els.download.classList.add("hidden");
     renderFileList();

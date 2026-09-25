@@ -37,10 +37,12 @@
   <section class="pick">
     <div id="dropzone" class="dropzone" tabindex="0">
       <div class="dz-icon">📁</div>
-      <p class="dz-title">Выберите папку со Spine-файлами</p>
+      <p class="dz-title">Перетащите папку или zip-архив</p>
       <p class="dz-sub">binary json, skel, txt, atlas, xml, png, jpeg, gif, webp, avif convert to Spine</p>
       <button id="pick-folder" class="btn primary">Выбрать папку…</button>
+      <button id="pick-zip" class="btn ghost">или zip-архив…</button>
       <input id="folder-input" type="file" webkitdirectory directory multiple hidden>
+      <input id="zip-input" type="file" accept=".zip,application/zip" hidden>
     </div>
     <div id="file-summary" class="file-summary hidden">
       <p>Выбрано файлов: <b id="file-count">0</b></p>
