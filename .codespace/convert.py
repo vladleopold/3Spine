@@ -137,8 +137,8 @@ def main():
                 shutil.copy2(sk, outjson)
                 return rel, "KEEP", "KEEP: %s (не Spine-скелет, копирую как есть)" % rel, ""
 
-            tmp_native = outjson + ".native.tmp"
-            tmp_restore = outjson + ".restore.tmp"
+            tmp_native = outjson[:-5] + ".native.tmp.json"
+            tmp_restore = outjson[:-5] + ".restore.tmp.json"
             engines = {
                 "native": lambda: convert_with_native(sk, tmp_native),
                 "restore-tool": lambda: convert_with_restore(sk, tmp_restore),
