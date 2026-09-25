@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(HERE, "hash_to_name"))
 
 from hash_to_name import is_hash_name                     # SHA-256 детектор  # noqa: E402
 from restore_names_cli import process_folder as restore_names  # hash → asset_name  # noqa: E402
+from manifest_resolver import apply_manifest_names       # hash → имя по манифестам игры  # noqa: E402
 
 
 def unzip(zin_path: str, dst: str) -> None:
@@ -112,10 +113,27 @@ def main() -> None:
             print(f"hash-analyzer: найдено {len(hashed)} файлов с SHA-256 хеш-именами "
                   f"→ запускаю блок переименования (hash → asset_name)")
             loglines.append(f"hash-analyzer: {len(hashed)} файлов с хеш-именами")
-            renamed = restore_names(Path(src), dry_run=False, recursive=True)
-            loglines.append(f"hash-to-name: переименовано {renamed} файлов, "
-                            f"осталось хеш-имён: {len(find_hashed_files(src))}")
-            print(f"hash-to-name: итого переименовано {renamed} файлов")
+
+            # 1) манифесты игры: единственный источник, который знает ВСЕ имена
+            by_manifest, m_details = apply_manifest_names(src, dry_run=False)
+            if by_manifest:
+                loglines.append(f"hash-to-name(манифест): переименовано {by_manifest} файлов")
+                print(f"hash-to-name(манифест): переименовано {by_manifest} файлов")
+                for line in m_details[:20]:
+                    print("  " + line)
+                if len(m_details) > 20:
+                    print(f"  … и ещё {len(m_details) - 20}")
+
+            # 2) остаток — эвристики атласов/xml/json (restore_names_cli)
+            left = find_hashed_files(src)
+            if left:
+                print(f"hash-to-name: осталось {len(left)} хеш-имён → эвристики атласов/ссылок")
+                renamed = restore_names(Path(src), dry_run=False, recursive=True)
+                loglines.append(f"hash-to-name(эвристики): переименовано {renamed}, "
+                                f"осталось хеш-имён: {len(find_hashed_files(src))}")
+                print(f"hash-to-name: итого переименовано эвристиками {renamed} файлов")
+            else:
+                loglines.append("hash-to-name: все хеш-имена разрешены через манифест")
         else:
             print("hash-analyzer: хеш-имён не найдено → первый путь (без переименования)")
             loglines.append("hash-analyzer: хеш-имён нет — путь без переименования")
