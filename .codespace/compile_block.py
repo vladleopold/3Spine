@@ -103,9 +103,15 @@ def main() -> None:
                 d.pop("padding", None)
                 d["sequence"] = None
             elif i == 3:
-                d["class"] = "export-image"
-                d["extension"] = ".png"
-                d["folder"] = ""
+                d["class"] = "export-png"
+            elif i == 4:
+                d["class"] = "com.esotericsoftware.spine.editor.export.ExportImage"
+            elif i == 5:
+                d["class"] = "com.esotericsoftware.spine.editor.export.ExportImage"
+                d.pop("background", None)
+                d.pop("pma", None)
+                d["sequence"] = None
+                d["singleFrame"] = True
             return d
 
         def _write_settings(i: int) -> bool:
@@ -156,8 +162,10 @@ def main() -> None:
         def make_preview(spine_path: str, rel: str, ver: str = "") -> str:
             """Рендерит первый кадр .spine в PNG для галереи на сайте."""
             flat = rel.replace(os.sep, "__").replace("/", "__")
-            if flat.lower().endswith(".spine"):
-                flat = flat[:-6]
+            for _e in (".spine", ".json"):
+                if flat.lower().endswith(_e):
+                    flat = flat[:-len(_e)]
+                    break
             os.makedirs(preview_root, exist_ok=True)
             want = os.path.join(preview_root, flat + ".png")
             if os.path.exists(want):
@@ -166,7 +174,7 @@ def main() -> None:
             if not atlas_png:
                 return ""
             vflag = ["-u", ver] if ver else []
-            variants = [preview_variant[0]] if preview_variant[0] is not None else [0, 1, 2, 3]
+            variants = [preview_variant[0]] if preview_variant[0] is not None else [4, 5, 3, 0, 1, 2]
             for vi in variants:
                 if os.path.exists(want):
                     break
@@ -194,7 +202,7 @@ def main() -> None:
             entry = {
                 "png": "previews/" + os.path.basename(want),
                 "spine": rel,
-                "name": os.path.basename(rel)[:-6] if rel.lower().endswith(".spine") else os.path.basename(rel),
+                "name": flat,
                 "bytes": os.path.getsize(want),
                 "kind": kind,
             }
