@@ -71,6 +71,54 @@ def main() -> None:
                     with z.open(name) as f, open(target, "wb") as o:
                         shutil.copyfileobj(f, o)
 
+        previews: list = []
+        preview_root = os.path.join(src, "previews")
+        export_settings = os.path.join(tmp, "preview.export.json")
+        with open(export_settings, "w", encoding="utf-8") as f:
+            json.dump({
+                "class": "export-image",
+                "format": "png",
+                "singleFrame": True,
+                "scale": 1,
+                "width": 0,
+                "height": 0,
+                "padding": 0,
+                "transparent": True,
+                "background": None,
+                "pma": False,
+                "sequence": {"start": 1, "digits": 4, "prefix": "", "suffix": ""},
+            }, f)
+
+        def make_preview(spine_path: str, rel: str) -> str:
+            """Рендерит первый кадр .spine в PNG для галереи на сайте."""
+            flat = rel.replace(os.sep, "__").replace("/", "__")
+            if flat.lower().endswith(".spine"):
+                flat = flat[:-6]
+            os.makedirs(preview_root, exist_ok=True)
+            want = os.path.join(preview_root, flat + ".png")
+            if os.path.exists(want):
+                return ""
+            run(base_cmd() + ["-i", spine_path, "-o", want, "-e", export_settings])
+            if not os.path.exists(want):
+                outdir = os.path.join(preview_root, flat + "_dir")
+                os.makedirs(outdir, exist_ok=True)
+                run(base_cmd() + ["-i", spine_path, "-o", outdir, "-e", export_settings])
+                for fn in sorted(os.listdir(outdir)):
+                    if fn.lower().endswith(".png"):
+                        shutil.move(os.path.join(outdir, fn), want)
+                        break
+                shutil.rmtree(outdir, ignore_errors=True)
+            if not os.path.exists(want):
+                return ""
+            entry = {
+                "png": "previews/" + os.path.basename(want),
+                "spine": rel,
+                "name": os.path.basename(rel)[:-6] if rel.lower().endswith(".spine") else os.path.basename(rel),
+                "bytes": os.path.getsize(want),
+            }
+            previews.append(entry)
+            return entry["png"]
+
         has_editor = bool(shutil.which(spine)) or (os.path.exists(spine) and os.access(spine, os.X_OK))
         if not has_editor:
             say(f"compile-block: WARN Spine Editor не найден (SPINE_EDITOR={spine}) — "
@@ -217,6 +265,10 @@ def main() -> None:
                         used = ("версия " + ver) if (ver and idx == 0 and not fallback) else "последняя"
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                            if not fallback and os.environ.get("SPINE_PREVIEW", "1") == "1":
+                                png = make_preview(out_spine, rel)
+                                if png:
+                                    print(f"compile-block: preview {png}")
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
                         if idx < len(attempts) - 1:
                             time.sleep(1.5 + idx)
@@ -229,6 +281,8 @@ def main() -> None:
                         for cmd in [base_cmd() + ["-u", ver] + tail2, base_cmd() + tail2]:
                             rc = run(cmd)
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                                if os.environ.get("SPINE_PREVIEW", "1") == "1":
+                                    make_preview(out_spine, rel)
                                 return rel, True, (f"compile-block: ✓ {rel} → "
                                                    f"{os.path.basename(out_spine)} (Spine {ver}, alt-JSON)")
                         try:
@@ -248,6 +302,8 @@ def main() -> None:
                             say(f"compile-block: {rel}: {nfix} кривых переведены в формат 4.x")
                             rc = run(base_cmd() + ["-i", v4, "-o", out_spine, "-r"])
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                                if os.environ.get("SPINE_PREVIEW", "1") == "1":
+                                    make_preview(out_spine, rel)
                                 return rel, True, (f"compile-block: ✓ {rel} → "
                                                    f"{os.path.basename(out_spine)} (Spine {ver}, 4.x-кривые)")
                         for leftover in (v4,):
@@ -282,6 +338,15 @@ def main() -> None:
         if not os.path.exists(os.path.join(src, "compile-log.txt")):
             with open(os.path.join(src, "compile-log.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(loglines) + "\n")
+
+        if previews:
+            try:
+                os.makedirs(preview_root, exist_ok=True)
+                with open(os.path.join(preview_root, "index.json"), "w", encoding="utf-8") as f:
+                    json.dump({"items": previews}, f, ensure_ascii=False, indent=1)
+                print(f"compile-block: превью готово: {len(previews)}")
+            except Exception as e:
+                print(f"compile-block: индекс превью не записан: {e}")
 
         # человекочитаемый отчёт по прогону
         try:

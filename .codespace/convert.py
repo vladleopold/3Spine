@@ -62,8 +62,17 @@ def convert_with_restore(sk: str, outjson: str) -> tuple:
         if r.returncode == 0 and os.path.exists(outjson) and os.path.getsize(outjson) > 0:
             pretty_json(outjson)
             return True, "restore-tool"
-        detail = (r.stdout or r.stderr or "").strip().splitlines()
-        return False, (detail[-1] if detail else "rc=%d" % r.returncode)
+        lines = [ln.strip() for ln in ((r.stdout or "") + "\n" + (r.stderr or "")).splitlines() if ln.strip()]
+        # берём содержательную строку: с причиной, а не служебный "Output: …"
+        reason = ""
+        for ln in lines:
+            if ln.startswith("Output:") or ln.startswith("Done:") or ln.startswith("No "):
+                continue
+            reason = ln
+            break
+        if not reason:
+            reason = lines[-1] if lines else ("rc=%d" % r.returncode)
+        return False, reason[:200]
     except Exception as e:
         return False, str(e)
 
