@@ -156,6 +156,18 @@ def main() -> None:
                         pass
                 return ""
 
+            # 3.x-кривые ("curve": число) редактор 4.x не принимает — приводим к stepped
+            norm_script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "normalize_for_editor.py")
+            if os.path.exists(norm_script):
+                try:
+                    r = subprocess.run([sys.executable, norm_script, src],
+                                       capture_output=True, text=True, timeout=600)
+                    if r.stdout:
+                        say("compile-block: " + r.stdout.strip())
+                except Exception as e:
+                    print(f"compile-block: normalize не выполнен: {e}")
+
             jobs = []
             for root, _, files in os.walk(src):
                 for f in sorted(files):

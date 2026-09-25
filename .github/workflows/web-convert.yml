@@ -117,12 +117,10 @@ jobs:
             libxcursor1 libxi6 libasound2t64 fonts-liberation || true
           sudo ldconfig || true
 
-      - name: Cache Spine editor + downloaded versions
+      - name: Cache Spine editor bundle
         uses: actions/cache@v4
         with:
-          path: |
-            /tmp/spine
-            ~/.spine
+          path: /tmp/spine
           key: spine-linux-${{ runner.os }}-v1
           restore-keys: |
             spine-linux-${{ runner.os }}-
