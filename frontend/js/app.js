@@ -217,35 +217,55 @@
   els.dropzone.addEventListener("drop", async (e) => {
     e.preventDefault();
     els.dropzone.classList.remove("drag");
-    const items = e.dataTransfer.items;
+
+    const dt = e.dataTransfer;
+    const entries = [];
+    const plain = [];
+    for (const item of Array.from(dt.items || [])) {
+      const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+      if (entry) entries.push(entry);
+      else if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f) plain.push(f);
+      }
+    }
+    if (!entries.length) for (const f of Array.from(dt.files || [])) plain.push(f);
+
     const collected = [];
     const zips = [];
-    async function walk(item, path) {
-      if (!item) return;
-      if (item.isFile) {
-        const f = await new Promise((res) => item.file(res));
+
+    async function walk(entry, path) {
+      if (!entry) return;
+      if (entry.isFile) {
+        const f = await new Promise((res) => entry.file(res, () => res(null)));
+        if (!f) return;
         if (/\.zip$/i.test(f.name)) { zips.push(f); return; }
-        if (!path) path = f.name;
-        Object.defineProperty(f, "webkitRelativePath", { value: path, configurable: true });
+        const rel = path ? path + "/" + f.name : f.name;
+        Object.defineProperty(f, "webkitRelativePath", { value: rel, configurable: true });
         collected.push(f);
-      } else if (item.isDirectory) {
-        const reader = item.createReader();
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
         let batch;
         do {
-          batch = await new Promise((res) => reader.readEntries(res));
+          batch = await new Promise((res) => reader.readEntries(res, () => res([])));
           for (const en of batch) await walk(en, path ? path + "/" + en.name : en.name);
         } while (batch.length);
       }
     }
-    for (const item of items) await walk(item.webkitGetAsEntry ? item.webkitGetAsEntry() : null, "");
+
+    for (const entry of entries) await walk(entry, "");
+    for (const f of plain) {
+      if (/\.zip$/i.test(f.name)) zips.push(f);
+      else collected.push(f);
+    }
 
     if (zips.length) {
       const expanded = [];
       for (const z of zips) {
         try {
           expanded.push(...(await expandZip(z)));
-        } catch (e) {
-          log("Ошибка: " + e.message, "err");
+        } catch (err) {
+          log("Ошибка: " + err.message, "err");
         }
       }
       if (expanded.length) {
@@ -257,6 +277,7 @@
     } else {
       files = dedupe(collected);
     }
+    if (!files.length) log("> Не удалось прочитать перетащенные элементы", "err");
     renderFileList();
   });
 
