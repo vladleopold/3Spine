@@ -201,7 +201,7 @@ async function handleDownload(request, env) {
 
 async function handleVisit(request, env) {
   if (!env.VISITS) return json({ visits: null, tracked: false });
-  const total = await env.VISITS.get("visits", { type: "json", cacheTtl: 0 }).catch(() => null);
+  const total = await env.VISITS.get("visits", { type: "json" }).catch(() => null);
   const visits = (total && Number(total.value)) || 0;
   const next = visits + 1;
   await env.VISITS.put("visits", JSON.stringify({ value: next, updated: new Date().toISOString() }));
@@ -212,7 +212,7 @@ async function handleStats(request, env) {
   let visits = null;
   if (env.VISITS) {
     try {
-      const v = await env.VISITS.get("visits", { type: "json", cacheTtl: 0 });
+      const v = await env.VISITS.get("visits", { type: "json" });
       visits = v ? Number(v.value) || 0 : 0;
     } catch (_) { /* ignore */ }
   }
