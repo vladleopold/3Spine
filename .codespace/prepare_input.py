@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(HERE, "hash_to_name"))
 from hash_to_name import is_hash_name                     # SHA-256 детектор  # noqa: E402
 from restore_names_cli import process_folder as restore_names  # hash → asset_name  # noqa: E402
 from manifest_resolver import apply_manifest_names       # hash → имя по манифестам игры  # noqa: E402
+from manifest_resolver import build_manifest_index, check_sizes  # размеры из манифеста  # noqa: E402
 
 
 def unzip(zin_path: str, dst: str) -> None:
@@ -115,6 +116,18 @@ def main() -> None:
             loglines.append(f"hash-analyzer: {len(hashed)} файлов с хеш-именами")
 
             # 1) манифесты игры: единственный источник, который знает ВСЕ имена
+            _, sizes = build_manifest_index(src)
+            size_notes = check_sizes(src, sizes)
+            if size_notes:
+                loglines.append(f"corrupted: файлов, перезаписанных текстовым режимом: {len(size_notes)}")
+                for line in size_notes[:10]:
+                    print(line)
+                    loglines.append(line)
+                if len(size_notes) > 10:
+                    msg = f"corrupted: … и ещё {len(size_notes) - 10} файлов"
+                    print(msg)
+                    loglines.append(msg)
+
             by_manifest, m_details = apply_manifest_names(src, dry_run=False)
             if by_manifest:
                 loglines.append(f"hash-to-name(манифест): переименовано {by_manifest} файлов")

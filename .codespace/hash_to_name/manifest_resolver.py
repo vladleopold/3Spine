@@ -37,7 +37,16 @@ PAIR_REV_RE = re.compile(
     r'"path"\s*:\s*"([^"]+)"[\s\S]{0,400}?"files"\s*:\s*"([^"]+)"'
 )
 
+SIZE_RE = re.compile(
+    r'"files"\s*:\s*"([^"]+)"[\s\S]{0,300}?"size"\s*:\s*(\d+)'
+)
+
 TEXT_EXT = {".js", ".json", ".txt", ".xml", ".plist", ".html", ".cfg", ".ini"}
+
+
+def build_manifest_map(root) -> Dict[str, str]:
+    """Карта хеш-имя → реальное имя (без размеров)."""
+    return build_manifest_index(root)[0]
 
 
 def _real_basename(logical: str) -> str:
@@ -48,10 +57,16 @@ def _real_basename(logical: str) -> str:
     return base
 
 
-def build_manifest_map(root) -> Dict[str, str]:
-    """Собрать карту хеш-имя → реальное имя по всем манифестам в дереве."""
+def build_manifest_index(root) -> Tuple[Dict[str, str], Dict[str, int]]:
+    """Собрать карту хеш-имя → реальное имя И размер, указанный игрой.
+
+    Возвращает (names, sizes), где sizes[hash_basename] = размер в байтах,
+    зафиксированный сборщиком. Если размер файла в архиве не совпадает —
+    файл менялся после сборки (типичный признак текстового round-trip).
+    """
     root = Path(root)
     mapping: Dict[str, str] = {}
+    sizes: Dict[str, int] = {}
 
     for dirpath, dirs, files in os.walk(root):
         dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
@@ -70,7 +85,50 @@ def build_manifest_map(root) -> Dict[str, str]:
                 _put(mapping, hashed, logical)
             for logical, hashed in PAIR_REV_RE.findall(data):
                 _put(mapping, hashed, logical)
-    return mapping
+            for hashed, size in SIZE_RE.findall(data):
+                _put_size(sizes, hashed, size)
+    return mapping, sizes
+
+
+def _put_size(sizes: Dict[str, int], hashed_path: str, size: str) -> None:
+    hashed_base = os.path.basename(hashed_path.replace("\\", "/"))
+    stem = os.path.splitext(hashed_base)[0]
+    if not HASH_RE.match(stem):
+        return
+    try:
+        sizes.setdefault(hashed_base, int(size))
+    except ValueError:
+        pass
+
+
+def check_sizes(root, sizes: Dict[str, int]) -> List[str]:
+    """Найти файлы, перезаписанные текстовым режимом (признак — байты U+FFFD).
+
+    Сверка с размером из манифеста используется только как справочное значение:
+    поле size в манифестах игр нередко относится к соседнему объекту, поэтому
+    само по себе расхождение размеров не считается проблемой.
+    """
+    notes: List[str] = []
+    if not sizes:
+        return notes
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        for fn in sorted(files):
+            if fn not in sizes:
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                with open(full, "rb") as f:
+                    blob = f.read()
+            except OSError:
+                continue
+            bad = blob.count(b"\xef\xbf\xbd")
+            if not bad:
+                continue
+            notes.append(f"corrupted: {os.path.relpath(full, root)}: {bad} байт U+FFFD, "
+                         f"размер {len(blob)} Б — файл перезаписан текстовым режимом "
+                         f"(оригинал сборки утерян), конвертация невозможна")
+    return notes
 
 
 def _put(mapping: Dict[str, str], hashed_path: str, logical_path: str) -> None:
