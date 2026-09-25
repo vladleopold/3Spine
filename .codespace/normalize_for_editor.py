@@ -84,6 +84,44 @@ def walk(node: Any) -> int:
     return changed
 
 
+def to_4x_curves(src: str, dst: str) -> int:
+    """3.8-кривые (curve/c2/c3/c4) → 4.x-массив [c1,c2,c3,c4] в отдельный файл.
+
+    Нужна, когда 3.x-данные импортирует редактор 4.x: он не понимает
+    поля c2/c3/c4, но понимает массив. Преобразование без потерь.
+    """
+    with open(src, encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        return 0
+    changed = 0
+
+    def conv(node: Any) -> int:
+        n = 0
+        if isinstance(node, dict):
+            curve = node.get("curve")
+            if isinstance(curve, (int, float)) and not isinstance(curve, bool):
+                if all(k in node for k in ("c2", "c3", "c4")):
+                    node["curve"] = [curve, node.pop("c2"), node.pop("c3"), node.pop("c4")]
+                    n += 1
+                else:
+                    node.pop("curve", None)
+                    for k in ("c2", "c3", "c4"):
+                        node.pop(k, None)
+            for v in node.values():
+                n += conv(v)
+        elif isinstance(node, list):
+            for item in node:
+                n += conv(item)
+        return n
+
+    changed = conv(data.get("animations", {}))
+    if changed:
+        with open(dst, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+    return changed
+
+
 def normalize_file(path: str) -> int:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)

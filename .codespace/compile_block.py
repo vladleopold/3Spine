@@ -235,6 +235,29 @@ def main() -> None:
                             os.remove(alt)
                         except OSError:
                             pass
+
+                    # последний рубеж: 3.x-кривые → 4.x-массив (если импортирует 4.x)
+                    try:
+                        import importlib.util as _ilu
+                        _spec = _ilu.spec_from_file_location("nf", norm_script)
+                        _mod = _ilu.module_from_spec(_spec)
+                        _spec.loader.exec_module(_mod)
+                        v4 = p[:-5] + ".v4.json"
+                        nfix = _mod.to_4x_curves(p, v4)
+                        if nfix:
+                            say(f"compile-block: {rel}: {nfix} кривых переведены в формат 4.x")
+                            rc = run(base_cmd() + ["-i", v4, "-o", out_spine, "-r"])
+                            if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                                return rel, True, (f"compile-block: ✓ {rel} → "
+                                                   f"{os.path.basename(out_spine)} (Spine {ver}, 4.x-кривые)")
+                        for leftover in (v4,):
+                            if os.path.exists(leftover):
+                                try:
+                                    os.remove(leftover)
+                                except OSError:
+                                    pass
+                    except Exception as e:
+                        print(f"compile-block: 4.x-конверсия не удалась: {e}")
                     return rel, False, f"compile-block: FAIL {rel} (json→spine): rc={rc}"
 
                 results = [json_to_spine(jobs[0])]
