@@ -110,6 +110,15 @@ def main():
         with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
 
+        # переносим логи предыдущих блоков (prepare/unpack), чтобы причины
+        # пропусков были видны в выданном архиве
+        for f in os.listdir(src):
+            if f.endswith(".txt") and f != "convert-log.txt":
+                try:
+                    shutil.copy2(os.path.join(src, f), os.path.join(dst, f))
+                except OSError:
+                    pass
+
         with zipfile.ZipFile(zout, "w", zipfile.ZIP_DEFLATED) as z:
             for root, _, files in os.walk(dst):
                 for f in files:
