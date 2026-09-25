@@ -143,18 +143,19 @@ jobs:
           tar xf /tmp/linux -C /tmp/spine
           ls /tmp/spine
 
-      - name: Compile block → .spine (Spine Linux, параллельно)
+      - name: "Compile block → .spine (Spine Linux: 1 warm-up + пачки по 12)"
         env:
           SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
           SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
-          SPINE_WORKERS: "4"
-          SPINE_XMX: "1024"
+          SPINE_WORKERS: "12"
+          SPINE_BATCH: "12"
+          SPINE_XMX: "768"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
           printf '#!/bin/sh\nexec xvfb-run -a /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
           chmod +x /tmp/spine-run.sh
-          echo "workers: $(nproc) CPU → 4 параллельных процесса Spine"
+          echo "CPU: $(nproc) → 12 параллельных процессов Spine, пачками по 12"
           python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
 

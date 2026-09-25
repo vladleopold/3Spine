@@ -23,15 +23,25 @@ def editor_workers(count: int) -> int:
     raw = os.environ.get("SPINE_WORKERS", "0") or "0"
     n = int(raw) if raw.isdigit() else 0
     if n <= 0:
-        n = min(4, max(1, os.cpu_count() or 1))
+        n = max(1, min(12, (os.cpu_count() or 4) * 3))
     return max(1, min(n, max(1, count)))
+
+
+def batch_size() -> int:
+    raw = os.environ.get("SPINE_BATCH", "12") or "12"
+    n = int(raw) if raw.isdigit() else 12
+    return max(1, n)
 
 
 def main() -> None:
     zin, zout = sys.argv[1], sys.argv[2]
     spine = os.environ.get("SPINE_EDITOR") or "Spine"
     license_code = os.environ.get("SPINE_LICENSE", "")
-    xmx = os.environ.get("SPINE_XMX", "1024") if editor_workers(999) > 1 else ""
+    xmx = os.environ.get("SPINE_XMX", "") 
+    if not xmx:
+        xmx = "768" if editor_workers(999) > 4 else "1024"
+    if editor_workers(999) <= 1:
+        xmx = ""
     tmp = tempfile.mkdtemp()
     loglines: list[str] = []
     started = time.time()
@@ -78,9 +88,10 @@ def main() -> None:
 
             jobs.sort(key=lambda j: j[3])
             workers = editor_workers(len(jobs))
+            per_batch = batch_size()
             loglines.append(f"compile-block: Spine Editor: {spine}")
-            loglines.append(f"compile-block: скелетов {len(jobs)}, параллельно {workers}"
-                            + (f", -Xmx{xmx}m" if xmx else ""))
+            loglines.append(f"compile-block: скелетов {len(jobs)}, пачками по {per_batch}, "
+                            f"параллельно {workers}" + (f", -Xmx{xmx}m" if xmx else ""))
             if license_code:
                 loglines.append("compile-block: активация лицензии (SPINE_LICENSE задан)")
 
@@ -110,17 +121,20 @@ def main() -> None:
                         return rel, False, f"compile-block: FAIL {rel}: rc={rc} {last}".strip()
                     time.sleep(1.5 + idx)
 
-            if not jobs:
-                pass
-            else:
-                warm = run_one(jobs[0])
-                results.append(warm)
+            if jobs:
+                results.append(run_one(jobs[0]))
                 rest = jobs[1:]
-                if workers == 1 or not rest:
-                    results.extend(run_one(j) for j in rest)
-                else:
-                    with ThreadPoolExecutor(max_workers=workers - 1 if len(results) else workers) as pool:
-                        results.extend(pool.map(lambda j: run_one(j, fallback=True), rest))
+                batches = [rest[i:i + per_batch] for i in range(0, len(rest), per_batch)] or []
+                total = len(batches)
+                for bi, batch in enumerate(batches, 1):
+                    msg = f"compile-block: пачка {bi}/{total}: {len(batch)} скелетов"
+                    print(msg)
+                    loglines.append(msg)
+                    if workers == 1:
+                        results.extend(run_one(j, fallback=True) for j in batch)
+                    else:
+                        with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as pool:
+                            results.extend(pool.map(lambda j: run_one(j, fallback=True), batch))
 
             compiled = failed = 0
             for _rel, ok, msg in results:
