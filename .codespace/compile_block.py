@@ -60,15 +60,20 @@ def main() -> None:
             print(f"compile-block: cmd error: {e}")
             return -1
 
-    def run_preview(cmd: list[str], timeout: int = 75) -> int:
+    def run_preview(cmd: list[str], timeout: int = 75, logfile=None) -> int:
         """Экспорт кадра: короткий таймаут, иначе редактор может не завершиться."""
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    stdout=logfile, stderr=subprocess.STDOUT,
                                     text=True, start_new_session=True)
         except Exception as e:
             print(f"compile-block: preview cmd error: {e}")
             return -1
+        if logfile is not None:
+            try:
+                logfile = open(logfile, "w", encoding="utf-8", errors="replace")
+            except OSError:
+                logfile = subprocess.DEVNULL
         try:
             proc.communicate(input=stdin, timeout=timeout)
             return proc.returncode
@@ -86,6 +91,12 @@ def main() -> None:
                 pass
             print(f"compile-block: preview export timeout ({timeout}s), пропускаю")
             return -1
+        finally:
+            if hasattr(logfile, "close"):
+                try:
+                    logfile.close()
+                except OSError:
+                    pass
 
     def base_cmd() -> list[str]:
         return [spine] + (["-Xmx" + xmx + "m"] if xmx else [])
@@ -220,20 +231,65 @@ def main() -> None:
                         return os.path.join(base, fn)
             return ""
 
-        def _render(spine_path: str, want: str, ver: str, json_hint: str, tag: str) -> bool:
+        def _stage(spine_path: str, atlas_png: str, tag: str) -> str:
+            """Копия проекта рядом с атласом и текстурой — редактор иначе не видит картинки."""
+            stage = os.path.join(tmp, "pv-" + tag)
+            shutil.rmtree(stage, ignore_errors=True)
+            os.makedirs(stage, exist_ok=True)
+            name = os.path.basename(spine_path)
+            shutil.copyfile(spine_path, os.path.join(stage, name))
+            folder = os.path.dirname(spine_path)
+            try:
+                listing = sorted(os.listdir(folder))
+            except OSError:
+                listing = []
+            for fn in listing:
+                if fn.lower().endswith((".atlas", ".atlas.txt")):
+                    try:
+                        shutil.copyfile(os.path.join(folder, fn), os.path.join(stage, fn))
+                    except OSError:
+                        pass
+                    break
+            base = os.path.basename(atlas_png)
+            tgt = os.path.join(stage, base)
+            if not os.path.exists(tgt):
+                try:
+                    shutil.copyfile(atlas_png, tgt)
+                except OSError:
+                    pass
+            return os.path.join(stage, name)
+
+        def _render(spine_path: str, want: str, ver: str, json_hint: str, tag: str,
+                    atlas_png: str = "") -> bool:
             """Один запуск редактора: экспорт кадра в каталог, первый PNG забираем себе."""
             fam = _family(ver)
             outdir = os.path.join(preview_root, tag + "_out")
             os.makedirs(outdir, exist_ok=True)
             settings_path = os.path.join(tmp, f"preview-{os.getpid()}-{_tagn[0]}.export.json")
+            logpath = os.path.join(tmp, f"preview-{os.getpid()}-{_tagn[0]}.log")
             _tagn[0] += 1
             try:
                 with open(settings_path, "w", encoding="utf-8") as f:
                     json.dump(_settings_for(fam, ver, json_hint), f)
             except OSError:
                 return False
+            target = spine_path
+            if atlas_png:
+                try:
+                    target = _stage(spine_path, atlas_png, tag)
+                except OSError:
+                    target = spine_path
             vflag = ["-u", ver] if ver else []
-            if run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path]) != 0:
+            rc = run_preview(base_cmd() + vflag + ["-i", target, "-o", outdir, "-e", settings_path],
+                             logfile=logpath)
+            if rc != 0:
+                try:
+                    with open(logpath, encoding="utf-8", errors="replace") as f:
+                        tail = [ln for ln in f.read().split("\n") if ln.strip()][-4:]
+                    for ln in tail:
+                        print("compile-block: preview editor: " + ln[:200])
+                except OSError:
+                    pass
                 shutil.rmtree(outdir, ignore_errors=True)
                 return False
             try:
@@ -287,7 +343,7 @@ def main() -> None:
                 if state is None and may_render:
                     with plock:
                         preview_state["rendered"] += 1
-                    if _render(spine_path, want, ver, json_hint, tag):
+                    if _render(spine_path, want, ver, json_hint, tag, atlas_png):
                         preview_probe[fam_key] = "ok"
                         say("compile-block: превью: рендер редактора работает")
                     else:
@@ -296,7 +352,7 @@ def main() -> None:
                 elif may_render:
                     with plock:
                         preview_state["rendered"] += 1
-                    if _render(spine_path, want, ver, json_hint, tag):
+                    if _render(spine_path, want, ver, json_hint, tag, atlas_png):
                         pass
                     else:
                         kind = "atlas"
