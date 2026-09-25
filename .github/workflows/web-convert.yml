@@ -28,13 +28,17 @@ jobs:
           test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }
           python3 .codespace/prepare_input.py input.zip input.zip
 
-      - name: Unpack block → /images (atlases → subfolders)
+      - name: Unpack block → /images (atlases → subfolders, параллельно)
+        env:
+          UNPACK_WORKERS: "8"
         run: |
           set -euo pipefail
           python3 -m pip install --quiet Pillow
           python3 .codespace/unpack_block.py input.zip input.zip
 
-      - name: Convert input.zip (native Linux converter)
+      - name: Convert input.zip (native Linux converter, параллельно)
+        env:
+          CONVERT_WORKERS: "8"
         run: |
           set -euo pipefail
           test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }
@@ -113,11 +117,25 @@ jobs:
             libxcursor1 libxi6 libasound2t64 fonts-liberation || true
           sudo ldconfig || true
 
+      - name: Cache Spine editor + downloaded versions
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/spine
+            ~/.spine
+          key: spine-linux-${{ runner.os }}-v1
+          restore-keys: |
+            spine-linux-${{ runner.os }}-
+
       - name: Download licensed Spine Linux launcher
         env:
           SPINE_LINUX_URL: ${{ secrets.SPINE_LINUX_URL }}
         run: |
           set -euo pipefail
+          if [ -x /tmp/spine/Spine/Spine.sh ]; then
+            echo "Spine уже в кеше — пропускаю скачивание"
+            exit 0
+          fi
           curl -sL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
             "$SPINE_LINUX_URL" -o /tmp/linux.gz
           gzip -d /tmp/linux.gz
@@ -125,16 +143,18 @@ jobs:
           tar xf /tmp/linux -C /tmp/spine
           ls /tmp/spine
 
-      - name: Compile block → .spine (Spine Linux, версия по JSON)
+      - name: Compile block → .spine (Spine Linux, параллельно)
         env:
           SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
           SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
-          SPINE_CAPTURE: "0"
+          SPINE_WORKERS: "4"
+          SPINE_XMX: "1024"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
           printf '#!/bin/sh\nexec xvfb-run -a /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
           chmod +x /tmp/spine-run.sh
+          echo "workers: $(nproc) CPU → 4 параллельных процесса Spine"
           python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
 

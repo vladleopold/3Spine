@@ -35,9 +35,14 @@ def main():
             for f in files:
                 if f.lower().endswith((".skel", ".json")):
                     skels.append(os.path.join(root, f))
+        skels.sort()
 
-        ok = failed = kept = 0
-        for sk in sorted(skels):
+        workers = int(os.environ.get("CONVERT_WORKERS", "0") or 0)
+        if workers <= 0:
+            workers = min(8, max(2, os.cpu_count() or 2))
+        workers = max(1, min(workers, max(1, len(skels))))
+
+        def convert_one(sk: str) -> tuple:
             rel = os.path.relpath(sk, src)
             if sk.lower().endswith(".json"):
                 outjson = os.path.join(dst, rel)
@@ -57,10 +62,7 @@ def main():
 
             if sk.lower().endswith(".json") and not is_spine_json:
                 shutil.copy2(sk, outjson)
-                kept += 1
-                print(f"KEEP: {rel} (не Spine-скелет, копирую как есть)")
-                loglines.append(f"KEEP: {rel}")
-                continue
+                return rel, "KEEP", "KEEP: %s (не Spine-скелет, копирую как есть)" % rel, ""
 
             try:
                 subprocess.run([CONVERTER, sk, outjson], check=True, capture_output=True)
@@ -68,13 +70,27 @@ def main():
                     data = json.load(f)
                 with open(outjson, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-                ok += 1
-                print(f"OK:   {rel}")
-                loglines.append(f"OK:   {rel}")
+                return rel, "OK", "OK:   %s" % rel, ""
             except Exception as e:
+                return rel, "FAIL", "FAIL: %s: %s" % (rel, e), str(e)
+
+        if workers == 1 or len(skels) <= 1:
+            results = [convert_one(sk) for sk in skels]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                results = list(pool.map(convert_one, skels))
+
+        ok = failed = kept = 0
+        for rel, kind, logline, _err in results:
+            if kind == "OK":
+                ok += 1
+            elif kind == "KEEP":
+                kept += 1
+            else:
                 failed += 1
-                print(f"FAIL: {rel}: {e}")
-                loglines.append(f"FAIL: {rel}: {e}")
+            print(logline)
+            loglines.append(logline.split(": ", 1)[1] if kind != "KEEP" else logline.split(": ", 1)[1])
 
         for root, _, files in os.walk(src):
             for f in files:

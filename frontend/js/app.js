@@ -317,6 +317,22 @@
     });
   }
 
+  /* ---------------- per-file logging ---------------- */
+
+  function skeletonNames() {
+    const seen = new Set();
+    const out = [];
+    for (const f of files) {
+      const name = (f.webkitRelativePath || f.name).split("/").pop();
+      if (!SOURCE_RE.test(name)) continue;
+      const base = name.replace(/\.(skel|json|txt)$/i, "");
+      if (!base || seen.has(base)) continue;
+      seen.add(base);
+      out.push(base);
+    }
+    return out;
+  }
+
   /* ---------------- convert via broker -> Actions ---------------- */
 
   async function startConvert(blob) {
@@ -331,17 +347,34 @@
     return data.job;
   }
 
-  async function waitStatus(job, t0) {
-    const deadline = t0 + 5 * 60 * 1000;
+  async function waitStatus(job, t0, names) {
+    const deadline = t0 + 12 * 60 * 1000;
+    const list = names || [];
     let lastLog = 0;
+    const started = [];
+    for (const n of list) {
+      log("… конвертация " + n + "…", "dim");
+      started.push(n);
+    }
     while (Date.now() < deadline) {
       const r = await fetch(BROKER + "/status?job=" + encodeURIComponent(job), { method: "GET" });
       const d = await r.json().catch(() => ({}));
       if (d.ready) return;
-      if (Date.now() - lastLog > 7000) { log("… конвертация в GitHub Actions…", "dim"); lastLog = Date.now(); }
-      await sleep(4000);
+      if (Date.now() - lastLog > 15000) {
+        const sec = Math.round((Date.now() - t0) / 1000);
+        log("… ждём GitHub Actions (" + sec + " c), в очереди: " + started.length + " шт.…", "dim");
+        lastLog = Date.now();
+      }
+      await sleep(3000);
     }
-    throw new Error("Превышено время ожидания (5 минут)");
+    throw new Error("Превышено время ожидания (12 минут)");
+  }
+
+  function logFromText(text, prefixRe, clsFn) {
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      log(line, clsFn(line));
+    }
   }
 
   async function fetchResult(job) {
@@ -353,9 +386,9 @@
     return r.blob();
   }
 
-  async function extractLog() {
+  async function extractLog(name) {
     const z = await JSZip.loadAsync(lastZip);
-    const f = z.file("convert-log.txt");
+    const f = z.file(name);
     return f ? f.async("string") : "";
   }
 
@@ -466,19 +499,32 @@
     }
     try {
       const t0 = Date.now();
-      log("> Пакуем и отправляем…", "dim");
+      const names = skeletonNames();
+      log("> Отправляем " + files.length + " файлов, задач: " + names.length + "…", "dim");
       const job = await startConvert(blob);
       log("> Задача: " + job, "dim");
       setStatus("конвертация…", "run");
-      await waitStatus(job, t0);
+      await waitStatus(job, t0, names);
       log("> Результат готов, скачиваем…", "dim");
       lastZip = await fetchResult(job);
-      const logText = await extractLog();
-      if (logText) {
-        for (const line of logText.split("\n")) {
-          if (!line.trim()) continue;
-          const cls = /^FAIL/.test(line) ? "err" : /^OK/.test(line) ? "ok" : /^done/.test(line) ? "info" : "dim";
-          log(line, cls);
+
+      const unpackText = await extractLog("unpack-log.txt");
+      if (unpackText) {
+        const m = /распаковано (\d+) картинок/.exec(unpackText);
+        if (m) log("… распаковано картинок: " + m[1] + "…", "dim");
+      }
+      const convertText = await extractLog("convert-log.txt");
+      if (convertText) {
+        logFromText(convertText, /^OK|^KEEP|^FAIL|^done/, (line) =>
+          /^FAIL/.test(line) ? "err" : /^OK/.test(line) ? "ok" : /^done/.test(line) ? "info" : "dim");
+      }
+      const compileText = await extractLog("compile-log.txt");
+      if (compileText) {
+        for (const line of compileText.split("\n")) {
+          if (!line.trim() || /^\s{2}/.test(line)) continue;
+          if (/^compile-block: ✓/.test(line)) log("… .spine готов: " + (line.split("→")[1] || "").trim().split(" ")[0] + "…", "ok");
+          else if (/^compile-block: FAIL/.test(line)) log(line, "err");
+          else if (/^compile-block: итого/.test(line) || /^compile-block: скелетов/.test(line)) log(line, "info");
         }
       }
       setStatus("готово", "ok");

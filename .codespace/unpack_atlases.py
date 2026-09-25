@@ -302,6 +302,7 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
         dest_base = out_dir
     else:
         dest_base = os.path.join(out_dir, dest_name or atlas_name)
+    written = 0
     trim = trim or {}
     fallback_trim_horiz = bool(trim.get('horizontal_trim', False))
     fallback_trim_vert = bool(trim.get('vertical_trim', False))
@@ -491,6 +492,7 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
                         out_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
                         out_img.paste(cropped, (sx, sy))
                         out_img.save(out_path)
+                        written += 1
                         continue
                 except Exception:
                     pass
@@ -506,10 +508,14 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
                         out_img = Image.new('RGBA', (sw, sh), (0, 0, 0, 0))
                         out_img.paste(cropped, (sx, sy))
                         out_img.save(out_path)
+                        written += 1
                         continue
                 except Exception:
                     pass
             cropped.save(out_path)
+            written += 1
+
+    return written
 
 
 def _collect_image_dirs(src: str) -> List[str]:
@@ -602,10 +608,12 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
         print('No atlas files found in', src)
         return 0, {}
 
-    count = 0
-    strategies = {}
-    for f in files:
-        print('Processing', f)
+    workers = int(os.environ.get('UNPACK_WORKERS', '0') or 0)
+    if workers <= 0:
+        workers = min(8, max(2, (os.cpu_count() or 2)))
+    workers = max(1, min(workers, len(files)))
+
+    def _one(f: str) -> Tuple[int, Optional[str]]:
         atlas_dir = os.path.dirname(f)
         pages = []
         try:
@@ -614,7 +622,7 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
                     with open(f, 'r', encoding='utf-8') as jf:
                         json.load(jf)
                 except Exception:
-                    continue
+                    return 0, None
                 pages = parse_json_atlas(f)
             else:
                 try:
@@ -625,10 +633,10 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
                     pages = parse_spine_atlas(f)
         except Exception as e:
             print('Error parsing', f, e)
-            continue
+            return 0, None
         if not pages:
-            continue
-        strategies[f] = choose_strategy(f, pages)
+            return 0, None
+        strategy = choose_strategy(f, pages)
         dest_name = None
         atlas_basename = os.path.splitext(os.path.basename(f))[0]
         if _is_hashed(atlas_basename) and not f.lower().endswith('.json'):
@@ -648,14 +656,12 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
             except Exception:
                 pass
 
-        # Merge atlas_dir itself + all_extra_dirs for this atlas
         dirs_for_atlas = list(all_extra_dirs)
         if atlas_dir not in dirs_for_atlas:
             dirs_for_atlas.insert(0, atlas_dir)
 
         try:
-            before = sum(1 for _, _, fs in os.walk(out) for _f in fs)
-            extract_regions(
+            n = extract_regions(
                 f, pages, atlas_dir, out,
                 dest_name=dest_name,
                 page_images=[os.path.join(atlas_dir, p.get('image')) for p in pages if p.get('image')],
@@ -663,12 +669,27 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
                 image_renames=renames,
                 extra_image_dirs=dirs_for_atlas,
             )
-            after = sum(1 for _, _, fs in os.walk(out) for _f in fs)
-            count += after - before
+            return int(n or 0), strategy
         except Exception as e:
             print('Error extracting from', f, e)
+            return 0, strategy
 
-    print('Done. Extracted images are in', out)
+    files.sort()
+    count = 0
+    strategies = {}
+    if workers == 1:
+        results = [_one(f) for f in files]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(_one, files))
+
+    for f, (n, strategy) in zip(files, results):
+        count += n
+        if strategy:
+            strategies[f] = strategy
+
+    print(f'Done. Extracted {count} images with {workers} workers into {out}')
     return count, strategies
 
 

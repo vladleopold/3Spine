@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Блок-Компиляции: конвертированный Spine-JSON → файл редактора .spine
-# той версии, что указана в самом JSON (редактор сам подбирает нужный рантайм).
+# Блок-Компиляции: конвертированные Spine-JSON → файлы редактора .spine
+# той версии, что указана в самом JSON. Компиляция идёт ПАРАЛЛЕЛЬНО: по одному
+# процессу Spine на скелет, до SPINE_WORKERS одновременно.
 # Нужен лицензированный Spine Editor: env SPINE_EDITOR или "Spine" в PATH.
+# Лицензия активируется один раз перед стартом (env SPINE_LICENSE, stdin).
 # Файлы складываются в ТУ ЖЕ структуру папок, что дал юзер.
 # Если редактор недоступен — WARN в compile-log.txt, остаются JSON/.skel версии.
 # Использование: compile_block.py <input.zip> <output.zip>
@@ -13,13 +15,26 @@ import shutil
 import zipfile
 import subprocess
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+
+def editor_workers(count: int) -> int:
+    raw = os.environ.get("SPINE_WORKERS", "0") or "0"
+    n = int(raw) if raw.isdigit() else 0
+    if n <= 0:
+        n = min(4, max(1, os.cpu_count() or 1))
+    return max(1, min(n, max(1, count)))
 
 
 def main() -> None:
     zin, zout = sys.argv[1], sys.argv[2]
     spine = os.environ.get("SPINE_EDITOR") or "Spine"
+    license_code = os.environ.get("SPINE_LICENSE", "")
+    xmx = os.environ.get("SPINE_XMX", "1024") if editor_workers(999) > 1 else ""
     tmp = tempfile.mkdtemp()
     loglines: list[str] = []
+    started = time.time()
     try:
         src = os.path.join(tmp, "in")
         os.makedirs(src)
@@ -33,24 +48,19 @@ def main() -> None:
                     with z.open(name) as f, open(target, "wb") as o:
                         shutil.copyfileobj(f, o)
 
-        compiled = skipped = failed = 0
-        license_code = os.environ.get("SPINE_LICENSE", "")
         has_editor = bool(shutil.which(spine)) or (os.path.exists(spine) and os.access(spine, os.X_OK))
-        if license_code:
-            loglines.append("compile-block: активация лицензии через stdin (SPINE_LICENSE задан)")
         if not has_editor:
             msg = (f"compile-block: WARN Spine Editor не найден (SPINE_EDITOR={spine}) — "
                    f"файлов .spine не создано, остаются JSON/.skel указанной версии")
             print(msg)
             loglines.append(msg)
         else:
-            loglines.append(f"compile-block: Spine Editor: {spine}")
+            jobs = []
             for root, _, files in os.walk(src):
                 for f in sorted(files):
                     if not f.lower().endswith(".json"):
                         continue
                     p = os.path.join(root, f)
-                    d = None
                     try:
                         with open(p, encoding="utf-8") as fh:
                             d = json.load(fh)
@@ -62,45 +72,72 @@ def main() -> None:
                         if isinstance(sk, dict):
                             ver = sk.get("spine", "") or ""
                     if not ver:
-                        continue  # не скелет
+                        continue
                     out_spine = os.path.join(root, os.path.splitext(f)[0] + ".spine")
-                    os.makedirs(os.path.dirname(out_spine), exist_ok=True)
-                    try:
-                        tail = ["-i", p, "-o", out_spine, "-r"]
-                        stdin = (license_code + "\n") if license_code else None
-                        capture = os.environ.get("SPINE_CAPTURE", "0") == "1"
-                        attempts = []
-                        if ver:
-                            attempts.append([spine, "-u", ver] + tail)
-                        attempts += [[spine] + tail] * 3
-                        r = None
-                        for cmd in attempts:
-                            r = subprocess.run(
-                                cmd,
-                                input=stdin,
-                                capture_output=capture, text=True, timeout=1800,
-                            )
-                            if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
-                                break
-                        if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
-                            compiled += 1
-                            m = f"compile-block: ✓ {f} → {os.path.basename(out_spine)} (Spine {ver})"
-                            print(m)
-                            loglines.append(m)
-                        else:
-                            failed += 1
-                            out = (r.stdout or "") if capture else ""
-                            err = (r.stderr or "") if capture else ""
-                            m = f"compile-block: FAIL {f}: rc={r.returncode} out={out[-300:]!r} err={err[-300:]!r}"
-                            print(m)
-                            loglines.append(m)
-                    except Exception as e:
-                        failed += 1
-                        m = f"compile-block: FAIL {f}: {e}"
-                        print(m)
-                        loglines.append(m)
+                    jobs.append((p, out_spine, ver, os.path.relpath(p, src)))
 
-            loglines.append(f"compile-block: итого скомпилировано {compiled}, пропущено {skipped}, ошибок {failed}")
+            jobs.sort(key=lambda j: j[3])
+            workers = editor_workers(len(jobs))
+            loglines.append(f"compile-block: Spine Editor: {spine}")
+            loglines.append(f"compile-block: скелетов {len(jobs)}, параллельно {workers}"
+                            + (f", -Xmx{xmx}m" if xmx else ""))
+            if license_code:
+                loglines.append("compile-block: активация лицензии (SPINE_LICENSE задан)")
+
+            stdin = (license_code + "\n") if license_code else None
+            activate = subprocess.run(
+                [spine] + (["-Xmx" + xmx + "m"] if xmx else []) + ["-v"],
+                input=stdin, capture_output=True, text=True, timeout=900,
+            )
+            act_out = ((activate.stdout or "") + (activate.stderr or "")).strip()
+            if "Licensed to" in act_out or "activated" in act_out.lower():
+                for line in act_out.splitlines():
+                    if "Licensed to" in line or "activated" in line.lower():
+                        loglines.append("compile-block: " + line.strip())
+                        break
+            elif license_code and "Enter activation code" in act_out:
+                loglines.append("compile-block: ВНИМАНИЕ: редактор снова запросил код активации")
+
+            def run_one(job):
+                p, out_spine, ver, rel = job
+                base = [spine] + (["-Xmx" + xmx + "m"] if xmx else [])
+                tail = ["-i", p, "-o", out_spine, "-r"]
+                attempts = []
+                if ver:
+                    attempts.append(base + ["-u", ver] + tail)
+                attempts += [base + tail] * 3
+                last = ""
+                for idx, cmd in enumerate(attempts):
+                    try:
+                        r = subprocess.run(cmd, input=stdin, capture_output=False,
+                                           text=True, timeout=1800)
+                        rc = r.returncode
+                    except Exception as e:
+                        rc, last = -1, str(e)
+                    if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                        used = " ".join(cmd[len(base):len(base) + 2]) if ver else "latest"
+                        return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
+                    if idx == len(attempts) - 1:
+                        return rel, False, f"compile-block: FAIL {rel}: rc={rc} {last}".strip()
+                    time.sleep(1.5 + idx)
+
+            if workers == 1 or len(jobs) <= 1:
+                results = [run_one(j) for j in jobs]
+            else:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    results = list(pool.map(run_one, jobs))
+
+            compiled = failed = 0
+            for _rel, ok, msg in results:
+                if ok:
+                    compiled += 1
+                else:
+                    failed += 1
+                print(msg)
+                loglines.append(msg)
+
+            loglines.append(f"compile-block: итого скомпилировано {compiled}, ошибок {failed}, "
+                            f"время {time.time() - started:.1f}s")
 
         with open(os.path.join(src, "compile-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
