@@ -151,8 +151,19 @@ jobs:
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
-          printf '#!/bin/sh\nexec xvfb-run -a /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
+          # Свой Xvfb на фиксированном дисплее: DISPLAY должен быть виден не только
+          # главному процессу Spine, но и его legacy-подпроцессу (редактор 3.8.99),
+          # иначе он падает с HeadlessException и всё уходит в 4.x
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+          for i in $(seq 1 30); do
+            if xdpyinfo -display :99 >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+          export DISPLAY=:99
+          printf '#!/bin/sh\nexec /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
           chmod +x /tmp/spine-run.sh
+          xdpyinfo -display :99 | head -2 || true
           echo "CPU: $(nproc) → 12 параллельных процессов Spine, пачками по 12"
           python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
@@ -160,7 +171,7 @@ jobs:
       - name: Logout Spine license
         if: always()
         run: |
-          timeout 300 xvfb-run -a /tmp/spine/Spine/Spine.sh -l 2>&1 | tail -20 || true
+          timeout 300 /tmp/spine/Spine/Spine.sh -l 2>&1 | tail -20 || true
 
       - name: Publish final results (with .spine) to results branch + history
         env:
