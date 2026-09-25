@@ -65,6 +65,43 @@ async function resultsBranch(env) {
   return j(env, "GET", `/repos/${REPO}/branches/${RESULTS}`);
 }
 
+async function resultsTree(env) {
+  const b = await resultsBranch(env);
+  return { branch: b, tree: await j(env, "GET", `/repos/${REPO}/git/trees/${b.commit.sha}?recursive=1`) };
+}
+
+function safeName(job) {
+  return String(job || "").replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+async function handleHistory(request, env) {
+  let res;
+  try {
+    res = await resultsTree(env);
+  } catch (_) {
+    return json({ items: [] });
+  }
+  const index = (res.tree.tree || []).find((t) => t.type === "blob" && t.path === "history/index.json");
+  if (index) {
+    try {
+      const blob = await j(env, "GET", `/repos/${REPO}/git/blobs/${index.sha}`);
+      const data = JSON.parse(atob(blob.content.replace(/\n/g, "")));
+      if (data && Array.isArray(data.items)) return json({ items: data.items });
+    } catch (_) { /* fall back to tree scan */ }
+  }
+  const items = (res.tree.tree || [])
+    .filter((t) => t.type === "blob" && /^history\/.+\.zip$/.test(t.path))
+    .map((t) => ({
+      job: t.path.replace(/^history\//, "").replace(/\.zip$/, ""),
+      file: t.path,
+      bytes: t.size || 0,
+      date: (res.branch.commit.commit.committer && res.branch.commit.commit.committer.date) || "",
+      spine: false,
+    }))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  return json({ items });
+}
+
 async function handleConvert(request, env) {
   let buf;
   try {
@@ -121,19 +158,32 @@ async function handleStatus(request, env) {
 }
 
 async function handleDownload(request, env) {
-  const job = new URL(request.url).searchParams.get("job");
-  if (!job) return json({ error: "job required" }, 400);
-  let b;
+  const url = new URL(request.url);
+  const archive = url.searchParams.get("archive");
+  const job = url.searchParams.get("job");
+  let tree, headMessage;
   try {
-    b = await resultsBranch(env);
+    const res = await resultsTree(env);
+    tree = res.tree;
+    headMessage = res.branch.commit.commit.message || "";
   } catch (_) {
     return json({ ready: false }, 202);
   }
-  if (!(b.commit.commit.message || "").includes(job)) return json({ ready: false }, 202);
 
-  const tree = await j(env, "GET", `/repos/${REPO}/git/trees/${b.commit.sha}?recursive=1`);
-  const entry = (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
-  if (!entry) return json({ error: "output.zip not found in results" }, 500);
+  let entry, name;
+  if (archive) {
+    const safe = safeName(archive);
+    entry = (tree.tree || []).find((t) => t.type === "blob" && t.path === `history/${safe}.zip`);
+    name = `spine-${safe}.zip`;
+    if (!entry) return json({ error: "archive not found: " + archive }, 404);
+  } else {
+    if (!job) return json({ error: "job required" }, 400);
+    if (!headMessage.includes(job)) return json({ ready: false }, 202);
+    entry = (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
+    name = "spine-converted.zip";
+    if (!entry) return json({ error: "output.zip not found in results" }, 500);
+  }
+
   const blob = await j(env, "GET", `/repos/${REPO}/git/blobs/${entry.sha}`);
   const bytes = b64ToBytes(blob.content);
   return new Response(bytes, {
@@ -141,7 +191,7 @@ async function handleDownload(request, env) {
     headers: {
       "Content-Type": "application/zip",
       ...CORS,
-      "Content-Disposition": 'attachment; filename="spine-converted.zip"',
+      "Content-Disposition": 'attachment; filename="' + name + '"',
     },
   });
 }
@@ -163,6 +213,9 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/download") {
         return await handleDownload(request, env);
+      }
+      if (request.method === "GET" && url.pathname === "/history") {
+        return await handleHistory(request, env);
       }
       return json({ error: "not found" }, 404);
     } catch (e) {

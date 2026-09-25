@@ -51,10 +51,16 @@ jobs:
           rm -rf publish && mkdir publish && cp output.zip publish/
           cd publish
           git init -q
-          git checkout -q -b results
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add output.zip
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin results; then
+            git checkout -q -B results FETCH_HEAD
+          else
+            git checkout -q --orphan results
+            git rm -rq --cached . 2>/dev/null || true
+          fi
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A output.zip
           git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
+          git push -q origin results
 
       - name: Upload conversion artifact for compile block
         uses: actions/upload-artifact@v4
@@ -135,17 +141,49 @@ jobs:
         run: |
           timeout 300 xvfb-run -a /tmp/spine/Spine/Spine.sh -l 2>&1 | tail -20 || true
 
-      - name: Publish final results (with .spine) to results branch
+      - name: Publish final results (with .spine) to results branch + history
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           JOB="$(cat work/job-id.txt 2>/dev/null || true)"
           [ -n "${JOB}" ] || JOB="${{ github.event.head_commit.message }}"
+          SAFE="$(printf '%s' "$JOB" | tr -c 'A-Za-z0-9._-' '_')"
+          NOW="$(date -u +%FT%TZ)"
           rm -rf publish && mkdir publish && cp work/output.zip publish/
           cd publish
           git init -q
-          git checkout -q -b results
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add output.zip
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} +<spine> $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" results
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q --depth 1 origin results; then
+            git checkout -q -B results FETCH_HEAD
+          else
+            git checkout -q --orphan results
+            git rm -rq --cached . 2>/dev/null || true
+          fi
+          cp work/output.zip "history/${SAFE}.zip"
+          BYTES="$(stat -c %s work/output.zip)"
+          SPINE="$(unzip -l work/output.zip | grep -c '\.spine$' || true)"
+          JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
+          import json, os
+          path = "history/index.json"
+          items = []
+          if os.path.exists(path):
+              try:
+                  items = json.load(open(path, encoding="utf-8")).get("items", [])
+              except Exception:
+                  items = []
+          entry = {
+              "job": os.environ["JOB"],
+              "file": "history/%s.zip" % os.environ["SAFE"],
+              "bytes": int(os.environ["BYTES"]),
+              "date": os.environ["NOW"],
+              "spine": int(os.environ["SPINE"] or 0) > 0,
+          }
+          items = [i for i in items if i.get("job") != entry["job"]]
+          items.insert(0, entry)
+          os.makedirs("history", exist_ok=True)
+          json.dump({"items": items}, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+          PY
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A output.zip history
+          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} +<spine> ${NOW}"
+          git push -q origin results

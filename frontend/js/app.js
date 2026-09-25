@@ -16,6 +16,8 @@
     clear: $("clear"),
     log: $("log"),
     status: $("status"),
+    histRefresh: $("hist-refresh"),
+    histList: $("history-list"),
   };
 
   const BROKER = "https://spine-broker.leopolds2010.workers.dev";
@@ -196,6 +198,85 @@
     return f ? f.async("string") : "";
   }
 
+  /* ---------------- history ---------------- */
+
+  function fmtBytes(n) {
+    if (!n && n !== 0) return "";
+    if (n < 1024) return n + " Б";
+    if (n < 1048576) return (n / 1024).toFixed(1) + " КБ";
+    return (n / 1048576).toFixed(2) + " МБ";
+  }
+
+  function fmtDate(s) {
+    if (!s) return "";
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    const p = (x) => String(x).padStart(2, "0");
+    return d.toLocaleString("ru-RU", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit",
+    }) + (d.getHours() === undefined ? "" : ":" + p(d.getSeconds()));
+  }
+
+  function renderHistory(items) {
+    els.histList.innerHTML = "";
+    if (!items.length) {
+      const d = document.createElement("div");
+      d.className = "history-empty";
+      d.textContent = "история пока пуста — архивы появятся после первой конвертации";
+      els.histList.appendChild(d);
+      return;
+    }
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "history-item";
+
+      const job = document.createElement("div");
+      job.className = "h-job";
+      job.textContent = it.job;
+      job.title = it.file || it.job;
+
+      const meta = document.createElement("div");
+      meta.className = "h-meta";
+      const bits = [fmtDate(it.date), fmtBytes(it.bytes)].filter(Boolean);
+      meta.textContent = bits.join(" · ");
+
+      row.appendChild(job);
+      if (it.spine) {
+        const tag = document.createElement("span");
+        tag.className = "h-tag";
+        tag.textContent = ".SPINE";
+        row.appendChild(tag);
+      }
+      row.appendChild(meta);
+
+      const a = document.createElement("a");
+      a.className = "btn ghost small";
+      a.href = BROKER + "/download?archive=" + encodeURIComponent(it.job);
+      a.textContent = "Скачать";
+      a.setAttribute("download", "");
+      row.appendChild(a);
+
+      els.histList.appendChild(row);
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      const r = await fetch(BROKER + "/history", { method: "GET" });
+      const d = await r.json().catch(() => ({}));
+      renderHistory(Array.isArray(d.items) ? d.items : []);
+    } catch (_) {
+      els.histList.innerHTML = "";
+      const d = document.createElement("div");
+      d.className = "history-empty";
+      d.textContent = "не удалось загрузить историю";
+      els.histList.appendChild(d);
+    }
+  }
+
+  els.histRefresh.addEventListener("click", loadHistory);
+
   /* ---------------- start / download ---------------- */
 
   els.start.addEventListener("click", async () => {
@@ -238,6 +319,7 @@
       }
       setStatus("готово", "ok");
       els.download.classList.remove("hidden");
+      loadHistory();
     } catch (e) {
       log("Ошибка: " + e.message, "err");
       setStatus("ошибка", "err");
@@ -259,4 +341,5 @@
   /* init */
   checkServer();
   renderFileList();
+  loadHistory();
 })();
