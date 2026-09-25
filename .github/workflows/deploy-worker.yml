@@ -6,6 +6,10 @@ on:
     paths: ["worker/**", ".github/workflows/deploy-worker.yml"]
   workflow_dispatch:
 
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -19,9 +23,18 @@ jobs:
         with:
           node-version: 22
 
-      - name: Refresh Cloudflare OAuth access token
+      - name: Prepare Cloudflare credentials
+        id: cf
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -n "${CF_API_TOKEN}" ]; then
+            echo "mode=token" >> "$GITHUB_OUTPUT"
+            echo "CLOUDFLARE_API_TOKEN=${CF_API_TOKEN}" >> "$GITHUB_ENV"
+            echo "using long-lived API token"
+            exit 0
+          fi
           RESP="$(curl -s -X POST "https://dash.cloudflare.com/oauth2/token" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -H "User-Agent: wrangler/4.0.0" \
@@ -29,13 +42,15 @@ jobs:
             --data-urlencode "client_id=${CLIENT_ID}" \
             --data-urlencode "refresh_token=${{ secrets.CF_WRANGLER_OAUTH }}")"
           TOKEN="$(printf '%s' "$RESP" | jq -r '.access_token // empty')"
-          test -n "$TOKEN" || { echo "oauth refresh failed: $RESP"; exit 1; }
+          test -n "${TOKEN}" || { echo "oauth refresh failed: $RESP"; exit 1; }
+          echo "mode=oauth" >> "$GITHUB_OUTPUT"
           {
             echo "CLOUDFLARE_API_TOKEN=$TOKEN"
             echo "REFRESH_RESP=$RESP"
           } >> "$GITHUB_ENV"
 
       - name: Rotate CF_WRANGLER_OAUTH (dash rotates refresh tokens)
+        if: steps.cf.outputs.mode == 'oauth'
         env:
           GH_TOKEN: ${{ secrets.ACCESS_TOKEN }}
         run: |
@@ -45,7 +60,9 @@ jobs:
           printf '%s' "${NEW_RT}" | gh secret set CF_WRANGLER_OAUTH -R "${GITHUB_REPOSITORY}"
 
       - name: Ensure KV namespace for visit stats
+        if: steps.cf.outputs.mode == 'token'
         working-directory: worker
+        continue-on-error: true
         run: |
           set -euo pipefail
           TITLE="spine-broker-visits"

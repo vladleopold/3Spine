@@ -45,15 +45,18 @@
     els.status.className = "status" + (cls ? " " + cls : "");
   }
 
+  const INPUT_RE = /\.(skel|json|txt|atlas|xml|png|jpe?g|gif|webp|avif)$/i;
+  const SOURCE_RE = /\.(skel|json|txt)$/i;
+
   function renderFileList() {
     els.fileList.innerHTML = "";
-    const skels = files.filter((f) => /\.skel$/i.test(f.name));
-    const others = files.filter((f) => !/\.skel$/i.test(f.name));
+    const skels = files.filter((f) => SOURCE_RE.test(f.name));
+    const others = files.filter((f) => !SOURCE_RE.test(f.name));
     const shown = [...skels, ...others.slice(0, 60)];
     for (const f of shown) {
       const d = document.createElement("div");
       d.textContent = (f.webkitRelativePath || f.name);
-      if (/\.skel$/i.test(f.name)) d.className = "sk";
+      if (SOURCE_RE.test(f.name)) d.className = "sk";
       els.fileList.appendChild(d);
     }
     if (others.length > 60) {
@@ -61,9 +64,10 @@
       d.textContent = "... и ещё " + (others.length - 60) + " файлов";
       els.fileList.appendChild(d);
     }
+    const supported = files.filter((f) => INPUT_RE.test(f.name));
     els.fileSummary.classList.toggle("hidden", files.length === 0);
-    els.fileCount.textContent = files.length + " (скелетов: " + skels.length + ")";
-    els.start.disabled = files.length === 0 || skels.length === 0;
+    els.fileCount.textContent = files.length + " (источников: " + skels.length + ")";
+    els.start.disabled = supported.length === 0;
   }
 
   async function checkServer() {
