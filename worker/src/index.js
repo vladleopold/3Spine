@@ -185,8 +185,11 @@ async function handleDownload(request, env) {
   } else {
     if (!job) return json({ error: "job required" }, 400);
     if (!headMessage.includes(job)) return json({ ready: false }, 202);
-    entry = (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
-    name = "spine-converted.zip";
+    // сначала неизменяемый архив конкретной задачи, иначе общий output.zip
+    const safe = safeName(job);
+    const own = (tree.tree || []).find((t) => t.type === "blob" && t.path === `history/${safe}.zip`);
+    entry = own || (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
+    name = own ? `spine-${safe}.zip` : "spine-converted.zip";
     if (!entry) return json({ error: "output.zip not found in results" }, 500);
   }
 
