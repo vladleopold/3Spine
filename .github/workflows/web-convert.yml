@@ -121,6 +121,7 @@ jobs:
         env:
           SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
           SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
+          SPINE_CAPTURE: "0"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
