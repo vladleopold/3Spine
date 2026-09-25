@@ -62,18 +62,25 @@ def main() -> None:
 
     def run_preview(cmd: list[str], timeout: int = 75, logfile=None) -> int:
         """Экспорт кадра: короткий таймаут, иначе редактор может не завершиться."""
+        fh = None
+        if logfile:
+            try:
+                fh = open(logfile, "w", encoding="utf-8", errors="replace")
+            except OSError:
+                fh = None
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                    stdout=logfile, stderr=subprocess.STDOUT,
+                                    stdout=fh or subprocess.DEVNULL, stderr=subprocess.STDOUT,
                                     text=True, start_new_session=True)
         except Exception as e:
+            if fh:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
             print(f"compile-block: preview cmd error: {e}")
             return -1
-        if logfile is not None:
-            try:
-                logfile = open(logfile, "w", encoding="utf-8", errors="replace")
-            except OSError:
-                logfile = subprocess.DEVNULL
+        logfile = fh
         try:
             proc.communicate(input=stdin, timeout=timeout)
             return proc.returncode
