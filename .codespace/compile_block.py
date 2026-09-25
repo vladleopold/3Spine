@@ -116,27 +116,41 @@ def main() -> None:
             except OSError:
                 return False
 
+        IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif")
+
         def _atlas_png(spine_path: str) -> str:
-            """Запасной кадр: первая текстура атласа, если редактор не отдал PNG."""
+            """Текстура, на которую ссылается ближайший атлас (или первая картинка рядом)."""
             folder = os.path.dirname(spine_path)
+            stem = os.path.splitext(os.path.basename(spine_path))[0]
+            search = [folder, os.path.dirname(folder), os.path.join(folder, "images")]
             try:
                 names = sorted(os.listdir(folder))
             except OSError:
-                return ""
-            stem = os.path.splitext(os.path.basename(spine_path))[0]
+                names = []
             for fn in names:
                 if fn.lower().endswith((".atlas", ".atlas.txt")):
                     stem = os.path.splitext(fn)[0]
                     break
-            for fn in names:
-                low = fn.lower()
-                if not low.endswith((".png", ".jpg", ".jpeg", ".webp")):
-                    continue
-                if low.startswith(stem.lower()):
-                    return os.path.join(folder, fn)
-            for fn in names:
-                if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                    return os.path.join(folder, fn)
+            for base in search:
+                for candidate in (stem, stem + ".atlas"):
+                    ap = os.path.join(base, candidate)
+                    if os.path.isfile(ap):
+                        try:
+                            with open(ap, encoding="utf-8", errors="replace") as f:
+                                lines = [ln.strip() for ln in f.read().split("\n") if ln.strip()]
+                            for i, ln in enumerate(lines):
+                                if not ln.endswith(".png") and not ln.lower().endswith(IMG_EXT):
+                                    continue
+                                if i + 1 < len(lines) and lines[i + 1].startswith("size:"):
+                                    for root, _d, files in os.walk(base):
+                                        if ln in files:
+                                            return os.path.join(root, ln)
+                                    return ""
+                        except OSError:
+                            pass
+                for fn in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+                    if fn.lower().endswith(IMG_EXT):
+                        return os.path.join(base, fn)
             return ""
 
         def make_preview(spine_path: str, rel: str, ver: str = "") -> str:
@@ -147,6 +161,9 @@ def main() -> None:
             os.makedirs(preview_root, exist_ok=True)
             want = os.path.join(preview_root, flat + ".png")
             if os.path.exists(want):
+                return ""
+            atlas_png = _atlas_png(spine_path)
+            if not atlas_png:
                 return ""
             vflag = ["-u", ver] if ver else []
             variants = [preview_variant[0]] if preview_variant[0] is not None else [0, 1, 2, 3]
@@ -170,10 +187,8 @@ def main() -> None:
                     say(f"compile-block: превью: рабочий формат export-settings #{vi}")
             kind = "render"
             if not os.path.exists(want):
-                atlas = _atlas_png(spine_path)
-                if atlas:
-                    shutil.copyfile(atlas, want)
-                    kind = "atlas"
+                shutil.copyfile(atlas_png, want)
+                kind = "atlas"
             if not os.path.exists(want):
                 return ""
             entry = {
