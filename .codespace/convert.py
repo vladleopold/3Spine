@@ -72,7 +72,12 @@ def main():
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 return rel, "OK", "OK:   %s" % rel, ""
             except Exception as e:
-                return rel, "FAIL", "FAIL: %s: %s" % (rel, e), str(e)
+                # Нативный конвертер не справился — отдаём исходный .skel дальше,
+                # его доведёт до .json/.spine сам редактор Spine в compile-джобе.
+                raw_out = os.path.join(dst, rel)
+                os.makedirs(os.path.dirname(raw_out), exist_ok=True)
+                shutil.copy2(sk, raw_out)
+                return rel, "FAIL", "FAIL: %s: %s (исходник сохранён, доведёт редактор)" % (rel, e), str(e)
 
         if workers == 1 or len(skels) <= 1:
             results = [convert_one(sk) for sk in skels]
