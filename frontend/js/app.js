@@ -95,18 +95,32 @@
   }
 
   async function loadStats() {
+    let visits = null;
+    let conversions = null;
+    let totalBytes = 0;
     try {
       const r = await fetch(BROKER + "/stats", { method: "GET" });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
-      const visits = d.visits === null || d.visits === undefined ? "—" : d.visits;
-      const conversions = d.conversions || 0;
-      const size = fmtBytes(d.totalBytes || 0);
-      els.statsLine.innerHTML =
-        "посещений: <b>" + visits + "</b> · конвертаций: <b>" + conversions + "</b> · архивов: <b>" + size + "</b>";
+      visits = d.visits === undefined ? null : d.visits;
+      conversions = d.conversions || 0;
+      totalBytes = d.totalBytes || 0;
     } catch (_) {
-      els.statsLine.textContent = "статистика недоступна";
+      try {
+        const r = await fetch(BROKER + "/history", { method: "GET" });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error("no history");
+        const items = Array.isArray(d.items) ? d.items : [];
+        conversions = items.length;
+        totalBytes = items.reduce((a, b) => a + (Number(b.bytes) || 0), 0);
+      } catch (__) {
+        els.statsLine.textContent = "статистика недоступна";
+        return;
+      }
     }
+    const visitsText = visits === null || visits === undefined ? "—" : visits;
+    els.statsLine.innerHTML =
+      "посещений: <b>" + visitsText + "</b> · конвертаций: <b>" + conversions + "</b> · архивов: <b>" + fmtBytes(totalBytes) + "</b>";
   }
 
   /* ---------------- folder pick ---------------- */
