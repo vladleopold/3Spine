@@ -63,15 +63,24 @@ jobs:
         if: steps.cf.outputs.mode == 'token'
         working-directory: worker
         continue-on-error: true
+        env:
+          ACCOUNT_ID: 66130f1dbb60b0cf0ddcad52ebe645d1
         run: |
           set -euo pipefail
           TITLE="spine-broker-visits"
-          ID="$(npx wrangler@latest kv namespace list --json | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .id' | head -1)"
+          LIST="$(curl -s -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces")"
+          ID="$(printf '%s' "$LIST" | jq -r --arg t "$TITLE" '.result[]? | select(.title == $t) | .id' | head -1)"
           if [ -z "$ID" ] || [ "$ID" = "null" ]; then
-            ID="$(npx wrangler@latest kv namespace create "$TITLE" --json | jq -r '.id')"
-            echo "created KV namespace $TITLE ($ID)"
+            CREATE="$(curl -s -X POST -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"title\":\"${TITLE}\"}" \
+              "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/storage/kv/namespaces")"
+            ID="$(printf '%s' "$CREATE" | jq -r '.result.id // empty')"
+            test -n "$ID" || { echo "kv create failed: $CREATE"; exit 1; }
+            echo "created KV namespace ${TITLE} (${ID})"
           else
-            echo "using existing KV namespace $TITLE ($ID)"
+            echo "using existing KV namespace ${TITLE} (${ID})"
           fi
           if ! grep -q 'binding = "VISITS"' wrangler.toml; then
             printf '\n[[kv_namespaces]]\nbinding = "VISITS"\nid = "%s"\n' "$ID" >> wrangler.toml
