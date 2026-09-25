@@ -66,15 +66,23 @@ def main() -> None:
                     out_spine = os.path.join(root, os.path.splitext(f)[0] + ".spine")
                     os.makedirs(os.path.dirname(out_spine), exist_ok=True)
                     try:
-                        cmd = [spine]
+                        base = [spine]
                         if ver:
-                            cmd += ["-u", ver]
-                        cmd += ["-i", p, "-o", out_spine, "-r"]
+                            base += ["-u", ver]
+                        tail = ["-i", p, "-o", out_spine, "-r"]
+                        stdin = (license_code + "\n") if license_code else None
+                        capture = os.environ.get("SPINE_CAPTURE", "1") == "1"
                         r = subprocess.run(
-                            cmd,
-                            input=(license_code + "\n") if license_code else None,
-                            capture_output=True, text=True, timeout=1800,
+                            base + tail,
+                            input=stdin,
+                            capture_output=capture, text=True, timeout=1800,
                         )
+                        if not (os.path.exists(out_spine) and os.path.getsize(out_spine) > 0) and ver:
+                            r = subprocess.run(
+                                [spine] + tail,
+                                input=stdin,
+                                capture_output=capture, text=True, timeout=1800,
+                            )
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             compiled += 1
                             m = f"compile-block: ✓ {f} → {os.path.basename(out_spine)} (Spine {ver})"
@@ -82,7 +90,9 @@ def main() -> None:
                             loglines.append(m)
                         else:
                             failed += 1
-                            m = f"compile-block: FAIL {f}: rc={r.returncode} {r.stderr[-300:]}"
+                            out = (r.stdout or "") if capture else ""
+                            err = (r.stderr or "") if capture else ""
+                            m = f"compile-block: FAIL {f}: rc={r.returncode} out={out[-300:]!r} err={err[-300:]!r}"
                             print(m)
                             loglines.append(m)
                     except Exception as e:
