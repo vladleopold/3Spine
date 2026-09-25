@@ -112,14 +112,21 @@ def classify(path: str) -> Dict:
     return result
 
 
-def engine_order(kind: str) -> List[str]:
+def engine_order(kind: str, version: str = "") -> List[str]:
     """Порядок движков для данного класса файла.
 
-    Повреждённые бинарники уходят в Spine Restore Tool — нативный C++ путь
+    binary-corrupt (U+FFFD / PSON) → Spine Restore Tool первым: нативный C++
     на таком материале заведомо не даёт результата.
+    binary 4.x                      → ни одного конвертера: формат читает сам
+                                      редактор Spine (ЭТАП 1 compile-блока),
+                                      оба наших движка рассчитаны на 3.x.
+    иначе                           → нативный C++, затем Restore Tool.
+    Пустой список означает «передать редактору».
     """
     if kind == "binary-corrupt":
         return ["restore-tool", "native"]
+    if kind == "binary-clean" and version.startswith("4."):
+        return []
     return ["native", "restore-tool"]
 
 

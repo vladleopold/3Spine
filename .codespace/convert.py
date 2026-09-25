@@ -124,7 +124,7 @@ def main():
             #                  заведомо не даёт результата)
             # text-json     → только переформатирование
             info = classify(sk)
-            order = engine_order(info["kind"])
+            order = engine_order(info["kind"], info["version"])
             if info["kind"] == "text-json":
                 try:
                     pretty_json(sk)
@@ -136,6 +136,13 @@ def main():
             if info["kind"] == "unknown" and sk.lower().endswith(".json"):
                 shutil.copy2(sk, outjson)
                 return rel, "KEEP", "KEEP: %s (не Spine-скелет, копирую как есть)" % rel, ""
+
+            if not order:
+                # формат 4.x: читает сам редактор Spine — отдаём исходник в compile-этап
+                raw_out = os.path.join(dst, rel)
+                os.makedirs(os.path.dirname(raw_out), exist_ok=True)
+                shutil.copy2(sk, raw_out)
+                return rel, "EDITOR", "EDITOR: %s [4.x → редактор Spine] исходник сохранён" % rel, ""
 
             tmp_native = outjson[:-5] + ".native.tmp.json"
             tmp_restore = outjson[:-5] + ".restore.tmp.json"
@@ -194,13 +201,15 @@ def main():
             with ThreadPoolExecutor(max_workers=workers) as pool:
                 results = list(pool.map(convert_one, skels))
 
-        ok = failed = kept = 0
+        ok = failed = kept = editor = 0
         corrupt = []
         for rel, kind, logline, _err in results:
             if kind == "OK":
                 ok += 1
             elif kind == "KEEP":
                 kept += 1
+            elif kind == "EDITOR":
+                editor += 1
             else:
                 failed += 1
             if kind == "FAIL" and "binary-corrupt" in logline:
@@ -217,7 +226,7 @@ def main():
                     os.makedirs(os.path.dirname(outpath), exist_ok=True)
                     shutil.copy2(full, outpath)
 
-        loglines.append(f"done: {ok} ok, {failed} failed, {kept} kept")
+        loglines.append(f"done: {ok} ok, {editor} в редактор, {failed} failed, {kept} kept")
         with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
         if corrupt:
@@ -243,7 +252,7 @@ def main():
                     rel = os.path.relpath(full, dst)
                     z.write(full, rel)
 
-        print(f"done: {ok} ok, {failed} failed, {kept} kept")
+        print(f"done: {ok} ok, {editor} в редактор, {failed} failed, {kept} kept")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
