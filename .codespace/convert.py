@@ -4,9 +4,12 @@
 # Для каждого .skel внутри входного ZIP запускает настоящий C++-конвертер,
 # прикладывает сопутствующие изображения и кладёт результат в output.zip.
 import os, re, sys, json, zipfile, shutil, subprocess, tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+
+from skeleton_router import classify, engine_order  # анализатор-детектор  # noqa: E402
 CONVERTER = os.path.join(HERE, "..", "backend", "converter", "SpineSkeletonDataConverter")
 RESTORE = os.path.join(HERE, "spine_restore", "spine_restore.py")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -115,57 +118,56 @@ def main():
                     # не текстовый JSON — возможно это бинарный skeleton
                     binary_spine = looks_like_binary_spine(sk)
 
-            if sk.lower().endswith(".json") and not is_spine_json and not binary_spine:
+            # ── Детектор решает, какой движок вести этот файл ────────────────
+            # binary-clean  → нативный C++ конвертер
+            # binary-corrupt → Spine Restore Tool (нативный на таком материале
+            #                  заведомо не даёт результата)
+            # text-json     → только переформатирование
+            info = classify(sk)
+            order = engine_order(info["kind"])
+            if info["kind"] == "text-json":
+                try:
+                    pretty_json(sk)
+                    shutil.copy2(sk, outjson)
+                    return rel, "OK", "OK:   %s [уже JSON %s]" % (rel, info["version"]), ""
+                except Exception as e:
+                    return rel, "FAIL", "FAIL: %s: %s" % (rel, e), str(e)
+
+            if info["kind"] == "unknown" and sk.lower().endswith(".json"):
                 shutil.copy2(sk, outjson)
                 return rel, "KEEP", "KEEP: %s (не Spine-скелет, копирую как есть)" % rel, ""
 
-            # ── Два движка стартуют ОДНОВРЕМЕННО на каждый файл ───────────────
-            # Каждый пишет в свой временный файл, чтобы не портить чужой вывод.
-            # Побеждает тот, кто первым даст валидный JSON.
             tmp_native = outjson + ".native.tmp"
             tmp_restore = outjson + ".restore.tmp"
             engines = {
                 "native": lambda: convert_with_native(sk, tmp_native),
                 "restore-tool": lambda: convert_with_restore(sk, tmp_restore),
             }
-            pool = ThreadPoolExecutor(max_workers=len(engines))
-            futures = {name: pool.submit(fn) for name, fn in engines.items()}
-            by_future = {fut: name for name, fut in futures.items()}
-            winner = None
-            try:
-                for fut in as_completed(list(futures.values())):
-                    name = by_future[fut]
-                    try:
-                        good, detail = fut.result()
-                    except Exception as e:
-                        good, detail = False, str(e)
-                    if good:
-                        winner = name
-                        break
-            finally:
-                pool.shutdown(wait=False, cancel_futures=True)
-
             errors = []
-            for name, fut in futures.items():
-                if not fut.done():
-                    continue
+            winner = None
+            used = None
+            for name in order:
+                tmp = tmp_native if name == "native" else tmp_restore
                 try:
-                    _good, detail = fut.result()
+                    good, detail = engines[name]()
                 except Exception as e:
-                    detail = str(e)
-                if not _good:
-                    errors.append(f"{name}: {detail}")
+                    good, detail = False, str(e)
+                if good and os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+                    winner = tmp
+                    used = name
+                    break
+                errors.append(f"{name}: {detail}")
 
             if winner:
-                produced = tmp_native if winner == "native" else tmp_restore
-                shutil.move(produced, outjson)
+                shutil.move(winner, outjson)
                 for tmp in (tmp_native, tmp_restore):
                     if os.path.exists(tmp):
                         try:
                             os.remove(tmp)
                         except OSError:
                             pass
-                return rel, "OK", "OK:   %s [%s]" % (rel, winner), ""
+                route = info["kind"] + "/" + used
+                return rel, "OK", "OK:   %s [%s]" % (rel, route), ""
 
             for tmp in (tmp_native, tmp_restore):
                 if os.path.exists(tmp):
@@ -173,13 +175,12 @@ def main():
                         os.remove(tmp)
                     except OSError:
                         pass
-
-            # оба движка не справились — исходник уходит редактору в compile-джобе
             raw_out = os.path.join(dst, rel)
             os.makedirs(os.path.dirname(raw_out), exist_ok=True)
             shutil.copy2(sk, raw_out)
             reason = " | ".join(errors)[:300]
-            return rel, "FAIL", "FAIL: %s (оба движка: %s) — исходник сохранён" % (rel, reason), reason
+            return rel, "FAIL", "FAIL: %s [%s] %s — исходник сохранён" % (
+                rel, info["kind"], reason), reason
 
         if workers == 1 or len(skels) <= 1:
             results = [convert_one(sk) for sk in skels]
