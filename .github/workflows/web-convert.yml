@@ -127,14 +127,6 @@ jobs:
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
           printf '#!/bin/sh\nexec xvfb-run -a /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
           chmod +x /tmp/spine-run.sh
-          echo "--- editor dir ---"; ls -la /tmp/spine/Spine/ | head -20
-          echo "--- direct -v ---"
-          printf '%s\n' "$SPINE_LICENSE" | xvfb-run -a /tmp/spine/Spine/Spine.sh -v 2>&1 | tail -10 || echo "rc=$?"
-          echo "--- direct import ---"
-          rm -rf /tmp/probe && mkdir -p /tmp/probe && unzip -q work/output.zip -d /tmp/probe
-          printf '%s\n' "$SPINE_LICENSE" | xvfb-run -a /tmp/spine/Spine/Spine.sh \
-            -i /tmp/probe/plum.json -o /tmp/probe/plum.spine -r 2>&1 | tail -20 || echo "rc=$?"
-          ls -la /tmp/probe/*.spine 2>/dev/null || echo "no spine in probe"
           python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
 

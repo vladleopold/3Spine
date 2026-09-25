@@ -66,23 +66,22 @@ def main() -> None:
                     out_spine = os.path.join(root, os.path.splitext(f)[0] + ".spine")
                     os.makedirs(os.path.dirname(out_spine), exist_ok=True)
                     try:
-                        base = [spine]
-                        if ver:
-                            base += ["-u", ver]
                         tail = ["-i", p, "-o", out_spine, "-r"]
                         stdin = (license_code + "\n") if license_code else None
-                        capture = os.environ.get("SPINE_CAPTURE", "1") == "1"
-                        r = subprocess.run(
-                            base + tail,
-                            input=stdin,
-                            capture_output=capture, text=True, timeout=1800,
-                        )
-                        if not (os.path.exists(out_spine) and os.path.getsize(out_spine) > 0) and ver:
+                        capture = os.environ.get("SPINE_CAPTURE", "0") == "1"
+                        attempts = []
+                        if ver:
+                            attempts.append([spine, "-u", ver] + tail)
+                        attempts += [[spine] + tail] * 3
+                        r = None
+                        for cmd in attempts:
                             r = subprocess.run(
-                                [spine] + tail,
+                                cmd,
                                 input=stdin,
                                 capture_output=capture, text=True, timeout=1800,
                             )
+                            if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                                break
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             compiled += 1
                             m = f"compile-block: ✓ {f} → {os.path.basename(out_spine)} (Spine {ver})"
