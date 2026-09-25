@@ -10,6 +10,8 @@ import sys
 import shutil
 import tempfile
 import zipfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from safezip import safe_unzip
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -18,15 +20,8 @@ from unpack_atlases import unpack  # noqa: E402
 
 
 def unzip(zin_path: str, dst: str) -> None:
-    with zipfile.ZipFile(zin_path) as z:
-        for name in z.namelist():
-            target = os.path.join(dst, name)
-            if name.endswith("/"):
-                os.makedirs(target, exist_ok=True)
-            else:
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                with z.open(name) as f, open(target, "wb") as o:
-                    shutil.copyfileobj(f, o)
+    """Безопасная распаковка: safezip отсекает "..", абсолютные пути и бомбы."""
+    return safe_unzip(zin_path, dst)
 
 
 def rezip(src: str, zout_path: str) -> None:

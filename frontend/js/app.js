@@ -297,6 +297,7 @@
     lastZip = null;
     resultZip = null;
     $("previews-grid").innerHTML = "";
+    revokePreviewUrls();
     showPreviewsPanel(false);
     els.folderInput.value = "";
     els.zipInput.value = "";
@@ -382,6 +383,7 @@
 
   async function fetchResult(job) {
     const r = await fetch(BROKER + "/download?job=" + encodeURIComponent(job), { method: "GET" });
+    if (r.status === 202) throw new Error("результат ещё не опубликован — посмотрите историю");
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
       throw new Error(d.error || ("HTTP " + r.status));
@@ -488,6 +490,7 @@
       if (corruptFile) corrupt = (await corruptFile.async("string")).split("\n").filter(Boolean);
       z.forEach((path, file) => {
         if (file.dir || /\.tmp\.json$|\.v4\.json$|\.alt\.json$/.test(path)) return;
+        if (path === "previews/index.json" || path === "previews/asset-manifest.json") return;
         if (/\.spine$/.test(path)) spine++;
         else if (/\.json$/.test(path)) json++;
         else if (/\.skel$/.test(path)) skel++;
@@ -507,12 +510,27 @@
 
   /* ---------------- скриншоты компиляции ---------------- */
 
-  const IMG_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
+  const IMG_RE = /\.(png|jpe?g|webp|gif|avif|bmp|tiff?)$/i;
+  const BUNDLE_MAX_BYTES = 256 * 1048576;
+  const BUNDLE_MAX_FILES = 2000;
   let resultZip = null;
+  let panelTimer = 0;
+  const previewUrls = [];
 
   function dirOf(path) {
     const i = path.lastIndexOf("/");
     return i < 0 ? "" : path.slice(0, i);
+  }
+
+  function baseOf(path) {
+    const i = path.lastIndexOf("/");
+    return i < 0 ? path : path.slice(i + 1);
+  }
+
+  function stemOf(path) {
+    const b = baseOf(path);
+    const i = b.lastIndexOf(".");
+    return i <= 0 ? b : b.slice(0, i);
   }
 
   function fmtSize(b) {
@@ -522,24 +540,48 @@
     return (b / 1048576).toFixed(1) + " МБ";
   }
 
+  function revokePreviewUrls() {
+    while (previewUrls.length) {
+      try { URL.revokeObjectURL(previewUrls.pop()); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function announce(text) {
+    let live = $("live");
+    if (!live) {
+      live = document.createElement("div");
+      live.id = "live";
+      live.setAttribute("role", "status");
+      live.setAttribute("aria-live", "polite");
+      live.className = "sr-only";
+      document.body.appendChild(live);
+    }
+    live.textContent = text;
+  }
+
   function showPreviewsPanel(on) {
     const panel = $("previews-panel");
     const pick = document.querySelector("section.pick");
+    if (panelTimer) { clearTimeout(panelTimer); panelTimer = 0; }
     if (on) {
-      panel.classList.remove("hidden");
-      requestAnimationFrame(() => panel.classList.add("in"));
+      panel.classList.remove("hidden", "out");
+      requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.add("in")));
       if (pick) {
         pick.style.transition = "opacity .35s ease, transform .35s ease";
         pick.style.opacity = "0";
         pick.style.transform = "translateY(-8px)";
-        setTimeout(() => pick.classList.add("hidden"), 360);
+        panelTimer = setTimeout(() => pick.classList.add("hidden"), 360);
       }
+      if (!panel.hasAttribute("tabindex")) panel.setAttribute("tabindex", "-1");
+      panel.focus({ preventScroll: true });
     } else {
       panel.classList.remove("in");
       panel.classList.add("out");
-      setTimeout(() => {
+      panelTimer = setTimeout(() => {
         panel.classList.add("hidden");
         panel.classList.remove("out");
+        const dz = $("dropzone");
+        if (dz) dz.focus({ preventScroll: true });
       }, 380);
       if (pick) {
         pick.classList.remove("hidden");
@@ -551,85 +593,170 @@
     }
   }
 
-  function buildPreviewBundle(item) {
-    const z = resultZip;
-    const base = dirOf(item.spine);
-    const stem = item.spine.split("/").pop().replace(/\.spine$/i, "");
-    const out = new JSZip();
-    let total = 0;
-    Object.keys(z.files).forEach((name) => {
-      const f = z.files[name];
+  /* --- состав комплекта одного скелета --- */
+
+  function buildIndexes() {
+    const byPath = new Map();
+    const byBase = new Map();
+    Object.keys(resultZip.files).forEach((name) => {
+      const f = resultZip.files[name];
       if (f.dir) return;
-      const inBase = dirOf(name) === base;
-      const inImages = base && name.indexOf(base + "/images/") === 0;
-      const isSpine = name === item.spine;
-      const isMeta = inBase && new RegExp("^" + stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\.(json|atlas|atlas\\.txt)$", "i").test(name.split("/").pop());
-      if (!isSpine && !isMeta && !inImages && !(inBase && IMG_RE.test(name))) return;
-      out.file(name, f, { binary: true });
-      total += (f._data && f._data.uncompressedSize) || 0;
+      byPath.set(name, f);
+      const key = baseOf(name).toLowerCase();
+      if (IMG_RE.test(key)) {
+        if (!byBase.has(key)) byBase.set(key, []);
+        byBase.get(key).push(name);
+      }
     });
-    if (total > 600 * 1048576) {
-      throw new Error("набор больше 600 МБ — скачайте общий архив");
-    }
-    return out.generateAsync({ type: "blob", compression: "DEFLATE" });
+    return { byPath, byBase };
+  }
+
+  function atlasPagePaths(atlasPath, idx) {
+    const out = [];
+    let text = "";
+    const f = idx.byPath.get(atlasPath);
+    if (!f) return out;
+    return f.async("string").then((t) => {
+      text = t;
+      const lines = text.split(/\r\n|\n|\r/).map((l) => l.trim()).filter(Boolean);
+      for (let i = 0; i < lines.length; i++) {
+        if (!IMG_RE.test(lines[i].toLowerCase())) continue;
+        if (!(i + 1 < lines.length && lines[i + 1].indexOf("size:") === 0)) continue;
+        const ref = lines[i];
+        const dir = dirOf(atlasPath);
+        const rel = dir ? dir + "/" + ref : ref;
+        if (idx.byPath.has(rel)) { out.push(rel); continue; }
+        const sib = dir ? dir + "/" + baseOf(ref) : baseOf(ref);
+        if (idx.byPath.has(sib)) { out.push(sib); continue; }
+        const hits = idx.byBase.get(baseOf(ref).toLowerCase()) || [];
+        if (hits.length === 1) out.push(hits[0]);
+      }
+      return out;
+    });
+  }
+
+  function collectBundle(item) {
+    const idx = buildIndexes();
+    const spine = idx.byPath.has(item.spine) ? item.spine : item.spine.replace(/\.json$/i, ".spine");
+    if (!idx.byPath.has(spine)) return Promise.reject(new Error("в архиве нет " + baseOf(spine)));
+    const dir = dirOf(spine);
+    const stem = stemOf(spine);
+    const set = new Set([spine]);
+    [".json", ".skel"].forEach((e) => {
+      const p = dir ? dir + "/" + stem + e : stem + e;
+      if (idx.byPath.has(p)) set.add(p);
+    });
+    const atlases = Object.keys(idx.byPath).filter((n) => {
+      if (dirOf(n) !== dir) return false;
+      return n.toLowerCase().endsWith(".atlas") || n.toLowerCase().endsWith(".atlas.txt");
+    });
+    const preferred = atlases.filter((n) => stemOf(n) === stem);
+    const use = preferred.length ? preferred : atlases;
+    use.forEach((n) => set.add(n));
+    return Promise.all(use.map((n) => atlasPagePaths(n, idx))).then((pages) => {
+      pages.forEach((list) => list.forEach((p) => set.add(p)));
+      if (!pages.some((l) => l.length)) {
+        Object.keys(idx.byPath).forEach((n) => {
+          if (dirOf(n) === dir && IMG_RE.test(n)) set.add(n);
+        });
+      }
+      if (set.size > BUNDLE_MAX_FILES) {
+        return Promise.reject(new Error("в комплекте " + set.size + " файлов — скачайте общий архив"));
+      }
+      let total = 0;
+      set.forEach((n) => { total += (idx.byPath.get(n)._data && idx.byPath.get(n)._data.uncompressedSize) || 0; });
+      if (total > BUNDLE_MAX_BYTES) {
+        return Promise.reject(new Error("комплект " + fmtSize(total) + " — скачайте общий архив"));
+      }
+      const out = new JSZip();
+      const jobs = [];
+      set.forEach((n) => {
+        jobs.push(idx.byPath.get(n).async("uint8array").then((buf) => {
+          out.file(n, buf, { createFolders: false, binary: true });
+        }));
+      });
+      return Promise.all(jobs).then(() => out.generateAsync({ type: "blob", compression: "DEFLATE" }));
+    });
+  }
+
+  function saveBlob(blob, filename) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
   async function renderPreviews(blob) {
     const grid = $("previews-grid");
+    revokePreviewUrls();
     grid.innerHTML = "";
+    resultZip = null;
     let z;
     try {
-      resultZip = await JSZip.loadAsync(blob);
+      z = await JSZip.loadAsync(blob);
     } catch (e) {
       return false;
     }
     const idxFile = z.file("previews/index.json");
-    if (!idxFile) {
-      showPreviewsPanel(false);
-      return false;
-    }
+    if (!idxFile) { showPreviewsPanel(false); return false; }
     let items = [];
     try {
-      items = (JSON.parse(await idxFile.async("string")).items || []);
+      const raw = JSON.parse(await idxFile.async("string"));
+      items = Array.isArray(raw.items) ? raw.items : [];
     } catch (e) {
       items = [];
     }
-    if (!items.length) {
-      showPreviewsPanel(false);
-      return false;
-    }
+    items = items.filter((it) => it && typeof it.png === "string" && typeof it.spine === "string" && z.file(it.png));
+    if (!items.length) { showPreviewsPanel(false); return false; }
+    resultZip = z;
 
     const frag = document.createDocumentFragment();
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
+      const label = it.name || stemOf(it.spine);
       const card = document.createElement("div");
       card.className = "pv-card";
+      card.setAttribute("role", "listitem");
       card.style.animationDelay = Math.min(i * 45, 600) + "ms";
 
       const shot = document.createElement("div");
       shot.className = "pv-shot";
+
       const tip = document.createElement("div");
       tip.className = "pv-tip";
-      tip.innerHTML = "<b>" + it.name + ".spine</b><br>путь: " + it.spine +
-        "<br>кадр: " + (it.kind === "atlas" ? "текстура атласа" : "рендер Spine") +
-        "<br>размер: " + fmtSize(it.bytes);
+      [label + ".spine", "путь: " + it.spine,
+       "кадр: " + (it.kind === "atlas" ? "текстура атласа" : "рендер Spine"),
+       "размер: " + fmtSize(it.bytes)].forEach((line, n) => {
+        if (n) tip.appendChild(document.createElement("br"));
+        tip.appendChild(document.createTextNode(line));
+      });
       shot.appendChild(tip);
 
-      const png = z.file(it.png);
-      if (png) {
-        const url = URL.createObjectURL(await png.async("blob"));
-        const img = document.createElement("img");
-        img.src = url;
-        img.alt = it.name;
-        img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
-        shot.appendChild(img);
+      const pngFile = z.file(it.png);
+      if (pngFile) {
+        pngFile.async("blob").then((b) => {
+          const url = URL.createObjectURL(b);
+          previewUrls.push(url);
+          const img = document.createElement("img");
+          img.alt = "Превью: " + label + ".spine";
+          const drop = () => {
+            const k = previewUrls.indexOf(url);
+            if (k >= 0) previewUrls.splice(k, 1);
+            URL.revokeObjectURL(url);
+          };
+          img.addEventListener("load", drop, { once: true });
+          img.addEventListener("error", drop, { once: true });
+          shot.appendChild(img);
+        }).catch(() => { /* карточка останется без картинки */ });
       }
 
       const meta = document.createElement("div");
       meta.className = "pv-meta";
       const name = document.createElement("span");
       name.className = "pv-name";
-      name.textContent = it.name + ".spine";
+      name.textContent = label + ".spine";
       name.title = it.spine;
       const kind = document.createElement("span");
       kind.className = "pv-kind" + (it.kind === "atlas" ? " atlas" : "");
@@ -639,63 +766,61 @@
 
       const actions = document.createElement("div");
       actions.className = "pv-actions";
+
       const withImg = document.createElement("button");
       withImg.className = "btn ghost small";
       withImg.textContent = "Скачать с картинками";
+      withImg.setAttribute("aria-label", "Скачать " + label + ".spine вместе с текстурами");
       withImg.addEventListener("click", async () => {
-        withImg.disabled = true;
+        withImg.setAttribute("aria-disabled", "true");
+        withImg.setAttribute("aria-busy", "true");
         const old = withImg.textContent;
         withImg.textContent = "Собираем…";
         try {
-          const out = await buildPreviewBundle(it);
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(out);
-          a.download = it.name + "-spine.zip";
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          const out = await collectBundle(it);
+          saveBlob(out, label + "-spine.zip");
+          log("… превью: комплект " + label + " собран", "dim");
         } catch (e) {
           log("Превью: " + e.message, "err");
         } finally {
-          withImg.disabled = false;
+          withImg.removeAttribute("aria-disabled");
+          withImg.removeAttribute("aria-busy");
           withImg.textContent = old;
         }
       });
+
       const full = document.createElement("button");
       full.className = "btn ghost small";
-      full.textContent = ".spine";
-      full.title = "Скачать только .spine";
+      full.textContent = "Только .spine";
+      full.setAttribute("aria-label", "Скачать только " + label + ".spine");
       full.addEventListener("click", async () => {
         try {
-          const src = resultZip.file(it.spine);
-          if (!src) return;
+          const src = resultZip && resultZip.file(it.spine.replace(/\.json$/i, ".spine"));
+          if (!src) { log("Превью: .spine не найден в архиве", "err"); return; }
           const out = new JSZip();
-          out.file(it.spine.split("/").pop(), await src.async("blob"));
-          const blobOut = await out.generateAsync({ type: "blob" });
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blobOut);
-          a.download = it.name + ".spine";
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+          out.file(baseOf(it.spine).replace(/\.json$/i, ".spine"), await src.async("uint8array"));
+          saveBlob(await out.generateAsync({ type: "blob" }), label + ".spine");
         } catch (e) {
           log("Превью: " + e.message, "err");
         }
       });
+
       actions.appendChild(withImg);
       actions.appendChild(full);
-
       card.appendChild(shot);
       card.appendChild(meta);
       card.appendChild(actions);
       frag.appendChild(card);
     }
     grid.appendChild(frag);
+
     showPreviewsPanel(true);
+    announce("Показано скриншотов компиляции: " + items.length);
     return true;
   }
 
   $("previews-back").addEventListener("click", () => showPreviewsPanel(false));
+
 
   /* ---------------- start / download ---------------- */
 
@@ -703,6 +828,10 @@
     els.start.disabled = true;
     els.download.classList.add("hidden");
     lastZip = null;
+    resultZip = null;
+    $("previews-grid").innerHTML = "";
+    revokePreviewUrls();
+    showPreviewsPanel(false);
     els.log.textContent = "";
     setStatus("пакуем…", "run");
     let blob;
@@ -753,7 +882,12 @@
       await logSummary();
       setStatus("готово", "ok");
       els.download.classList.remove("hidden");
-      const hasPreviews = await renderPreviews(lastZip);
+      let hasPreviews = false;
+      try {
+        hasPreviews = await renderPreviews(lastZip);
+      } catch (e) {
+        log("Превью: " + e.message, "err");
+      }
       if (hasPreviews) log("… скриншотов компиляции: " + $("previews-grid").children.length, "dim");
       loadHistory();
       loadStats();

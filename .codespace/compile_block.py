@@ -8,13 +8,18 @@
 # Лицензия активируется автоматически (env SPINE_LICENSE, stdin).
 # Использование: compile_block.py <input.zip> <output.zip>
 import os
+import re
 import sys
 import json
 import shutil
 import zipfile
 import subprocess
+import hashlib
 import tempfile
+import threading
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from safezip import safe_unzip
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -88,68 +93,91 @@ def main() -> None:
     try:
         src = os.path.join(tmp, "in")
         os.makedirs(src)
-        with zipfile.ZipFile(zin) as z:
-            for name in z.namelist():
-                target = os.path.join(src, name)
-                if name.endswith("/"):
-                    os.makedirs(target, exist_ok=True)
-                else:
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with z.open(name) as f, open(target, "wb") as o:
-                        shutil.copyfileobj(f, o)
+        safe_unzip(zin, src)
 
         previews: list = []
         preview_root = os.path.join(src, "previews")
-        preview_variant: list = [None]
-        settings_path = os.path.join(tmp, "preview.export.json")
+        preview_probe: dict = {}          # версия редактора -> "ok"/"fail"
+        preview_state = {"count": 0, "bytes": 0, "rendered": 0}
+        plock = threading.Lock()
+        pv_max = int(os.environ.get("SPINE_PREVIEW_MAX", "24"))
+        pv_render_max = int(os.environ.get("SPINE_PREVIEW_RENDER_MAX", "8"))
+        pv_per_version = int(os.environ.get("SPINE_PREVIEW_PER_VERSION", "4"))
+        pv_bytes = int(os.environ.get("SPINE_PREVIEW_BYTES", str(512 * 1024)))
+        pv_total = int(os.environ.get("SPINE_PREVIEW_TOTAL_BYTES", str(8 * 1024 * 1024)))
+        pv_on = os.environ.get("SPINE_PREVIEW", "1") == "1"
+        _tagn = [0]
 
-        def _base_settings() -> dict:
-            return {
-                "class": "export-image",
-                "format": "png",
-                "singleFrame": True,
-                "scale": 1,
-                "width": 0,
-                "height": 0,
-                "padding": 0,
-                "transparent": True,
+        def _settings_for(family: str, ver: str, json_hint: str) -> dict:
+            """Проверенные форматы export-settings: 3.8 — FQCN ExportPng, 4.x — export-png."""
+            stem, anim = _project_names(json_hint)
+            if family == "3":
+                return {
+                    "class": "com.esotericsoftware.spine.editor.export.ExportSettings$ExportPng",
+                    "exportType": "png",
+                    "skeletonType": {"value": "all"},
+                    "animationType": {"value": "all"},
+                    "skinType": {"value": "all"},
+                    "scale": 100,
+                    "background": None,
+                    "renderImages": True,
+                    "linearFiltering": True,
+                    "fps": 30,
+                    "lastFrame": True,
+                    "rangeStart": 0,
+                    "rangeEnd": 0,
+                    "pad": False,
+                    "msaa": 0,
+                    "compression": 6,
+                }
+            d = {
+                "class": "export-png",
+                "skeletonType": "all",
+                "animationType": "single",
+                "skinType": "current",
+                "scale": 100,
                 "background": None,
-                "pma": False,
-                "sequence": {"start": 1, "digits": 4, "prefix": "", "suffix": ""},
+                "renderImages": True,
+                "linearFiltering": True,
+                "fps": 30,
+                "lastFrame": True,
+                "rangeStart": 0,
+                "rangeEnd": 0,
+                "pad": False,
+                "msaa": 0,
+                "compression": 6,
             }
-
-        def _variant(i: int) -> dict:
-            d = _base_settings()
-            if i == 1:
-                d.pop("background", None)
-                d.pop("pma", None)
-                d["transparent"] = True
-            elif i == 2:
-                d.pop("background", None)
-                d.pop("pma", None)
-                d.pop("padding", None)
-                d["sequence"] = None
-            elif i == 3:
-                d["class"] = "export-png"
-            elif i == 4:
-                d["class"] = "com.esotericsoftware.spine.editor.export.ExportImage"
-            elif i == 5:
-                d["class"] = "com.esotericsoftware.spine.editor.export.ExportImage"
-                d.pop("background", None)
-                d.pop("pma", None)
-                d["sequence"] = None
-                d["singleFrame"] = True
+            if stem:
+                d["skeleton"] = stem
+            if anim:
+                d["animation"] = anim
             return d
 
-        def _write_settings(i: int) -> bool:
+        def _project_names(json_hint: str):
+            """Имя скелета и первая анимация из исходного JSON (нужны для 4.x export)."""
+            stem = anim = ""
+            base = json_hint[:-5] if json_hint.lower().endswith(".json") else json_hint
+            stem = os.path.basename(base)
             try:
-                with open(settings_path, "w", encoding="utf-8") as f:
-                    json.dump(_variant(i), f)
-                return True
-            except OSError:
-                return False
+                with open(json_hint, encoding="utf-8", errors="replace") as f:
+                    d = json.load(f)
+                sk = d.get("skeleton") or {}
+                if isinstance(sk, dict) and sk.get("hash"):
+                    pass
+                stem = stem or ""
+                anims = d.get("animations") or {}
+                if anims:
+                    anim = sorted(anims)[0]
+                if sk.get("spine"):
+                    pass
+            except Exception:
+                pass
+            return stem, anim
 
-        IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif")
+        def _family(ver: str) -> str:
+            return "3" if (ver or "").startswith("3") else "4"
+
+        IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tiff", ".tif")
 
         def _atlas_png(spine_path: str) -> str:
             """Текстура, на которую ссылается ближайший атлас (или первая картинка рядом)."""
@@ -165,6 +193,8 @@ def main() -> None:
                     stem = os.path.splitext(fn)[0]
                     break
             for base in search:
+                if not os.path.isdir(base):
+                    continue
                 for candidate in (stem, stem + ".atlas"):
                     ap = os.path.join(base, candidate)
                     if os.path.isfile(ap):
@@ -172,7 +202,7 @@ def main() -> None:
                             with open(ap, encoding="utf-8", errors="replace") as f:
                                 lines = [ln.strip() for ln in f.read().split("\n") if ln.strip()]
                             for i, ln in enumerate(lines):
-                                if not ln.endswith(".png") and not ln.lower().endswith(IMG_EXT):
+                                if not ln.lower().endswith(IMG_EXT):
                                     continue
                                 if i + 1 < len(lines) and lines[i + 1].startswith("size:"):
                                     for root, _d, files in os.walk(base):
@@ -181,67 +211,127 @@ def main() -> None:
                                     return ""
                         except OSError:
                             pass
-                for fn in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+                try:
+                    rest = sorted(os.listdir(base))
+                except OSError:
+                    rest = []
+                for fn in rest:
                     if fn.lower().endswith(IMG_EXT):
                         return os.path.join(base, fn)
             return ""
 
-        def make_preview(spine_path: str, rel: str, ver: str = "") -> str:
-            """Рендерит первый кадр .spine в PNG для галереи на сайте."""
-            flat = rel.replace(os.sep, "__").replace("/", "__")
-            for _e in (".spine", ".json"):
-                if flat.lower().endswith(_e):
-                    flat = flat[:-len(_e)]
-                    break
-            os.makedirs(preview_root, exist_ok=True)
-            want = os.path.join(preview_root, flat + ".png")
-            if os.path.exists(want):
+        def _render(spine_path: str, want: str, ver: str, json_hint: str, tag: str) -> bool:
+            """Один запуск редактора: экспорт кадра в каталог, первый PNG забираем себе."""
+            fam = _family(ver)
+            outdir = os.path.join(preview_root, tag + "_out")
+            os.makedirs(outdir, exist_ok=True)
+            settings_path = os.path.join(tmp, f"preview-{os.getpid()}-{_tagn[0]}.export.json")
+            _tagn[0] += 1
+            try:
+                with open(settings_path, "w", encoding="utf-8") as f:
+                    json.dump(_settings_for(fam, ver, json_hint), f)
+            except OSError:
+                return False
+            vflag = ["-u", ver] if ver else []
+            if run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path]) != 0:
+                shutil.rmtree(outdir, ignore_errors=True)
+                return False
+            try:
+                for fn in sorted(os.listdir(outdir)):
+                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                        shutil.move(os.path.join(outdir, fn), want)
+                        shutil.rmtree(outdir, ignore_errors=True)
+                        return True
+            except OSError:
+                pass
+            shutil.rmtree(outdir, ignore_errors=True)
+            return False
+
+        def make_preview(spine_path: str, rel: str, ver: str = "", json_hint: str = "") -> str:
+            """Кадр для галереи сайта: рендер Spine, иначе — текстура атласа."""
+            if not pv_on:
                 return ""
+            try:
+                return _make_preview(spine_path, rel, ver, json_hint)
+            except Exception as e:                      # превью не должно ронять компиляцию
+                print(f"compile-block: превью пропущено ({type(e).__name__}: {e})")
+                return ""
+
+        def _make_preview(spine_path: str, rel: str, ver: str, json_hint: str) -> str:
+            stem = rel
+            for _e in (".spine", ".json"):
+                if stem.lower().endswith(_e):
+                    stem = stem[:-len(_e)]
+                    break
+            flat = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)[:60] or "preview"
+            with plock:
+                n = preview_state["count"]
+                if n >= pv_max or preview_state["bytes"] >= pv_total:
+                    return ""
             atlas_png = _atlas_png(spine_path)
             if not atlas_png:
                 return ""
-            vflag = ["-u", ver] if ver else []
-            variants = [preview_variant[0]] if preview_variant[0] is not None else [4, 5, 3, 0, 1, 2]
-            for vi in variants:
-                if os.path.exists(want):
-                    break
-                if not _write_settings(vi):
-                    return ""
-                run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", settings_path])
-                if not os.path.exists(want):
-                    outdir = os.path.join(preview_root, flat + "_dir")
-                    os.makedirs(outdir, exist_ok=True)
-                    run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path])
-                    for fn in sorted(os.listdir(outdir)):
-                        if fn.lower().endswith(".png"):
-                            shutil.move(os.path.join(outdir, fn), want)
-                            break
-                    shutil.rmtree(outdir, ignore_errors=True)
-                if os.path.exists(want) and preview_variant[0] is None:
-                    preview_variant[0] = vi
-                    say(f"compile-block: превью: рабочий формат export-settings #{vi}")
+            tag = f"{flat}_{hashlib.md5(stem.encode('utf-8')).hexdigest()[:6]}"
+            ext = os.path.splitext(atlas_png)[1].lower()
+            if ext not in (".png", ".jpg", ".jpeg", ".webp"):
+                ext = ".png"
+            want = os.path.join(preview_root, tag + ext)
             kind = "render"
-            if not os.path.exists(want):
-                shutil.copyfile(atlas_png, want)
-                kind = "atlas"
+            with plock:
+                dup = os.path.exists(want)
+            if not dup:
+                fam_key = ver or "4.3.26"
+                state = preview_probe.get(fam_key)
+                may_render = (state != "fail" and preview_state["rendered"] < pv_render_max
+                              and n < pv_per_version)
+                if state is None and may_render:
+                    with plock:
+                        preview_state["rendered"] += 1
+                    if _render(spine_path, want, ver, json_hint, tag):
+                        preview_probe[fam_key] = "ok"
+                        say("compile-block: превью: рендер редактора работает")
+                    else:
+                        preview_probe[fam_key] = "fail"
+                        say("compile-block: превью: редактор не отдал кадр, беру текстуру атласа")
+                elif may_render:
+                    with plock:
+                        preview_state["rendered"] += 1
+                    if _render(spine_path, want, ver, json_hint, tag):
+                        pass
+                    else:
+                        kind = "atlas"
+                if not os.path.exists(want):
+                    kind = "atlas"
+                    shutil.copyfile(atlas_png, want)
             if not os.path.exists(want):
                 return ""
-            entry = {
-                "png": "previews/" + os.path.basename(want),
-                "spine": rel,
-                "name": flat,
-                "bytes": os.path.getsize(want),
-                "kind": kind,
-            }
-            previews.append(entry)
-            return entry["png"]
+            size = os.path.getsize(want)
+            if size > pv_bytes:
+                try:
+                    os.remove(want)
+                except OSError:
+                    pass
+                return ""
+            with plock:
+                preview_state["count"] = n + 1
+                preview_state["bytes"] += size
+                previews.append({
+                    "png": "previews/" + os.path.basename(want),
+                    "spine": rel if rel.lower().endswith(".spine") else rel[:-5] + ".spine",
+                    "name": os.path.basename(stem),
+                    "bytes": size,
+                    "kind": kind,
+                })
+                return previews[-1]["png"]
 
+
+        known_corrupt: set = set()
         has_editor = bool(shutil.which(spine)) or (os.path.exists(spine) and os.access(spine, os.X_OK))
         if not has_editor:
             say(f"compile-block: WARN Spine Editor не найден (SPINE_EDITOR={spine}) — "
                 f"файлов .spine не создано, остаются JSON/.skel указанной версии")
         else:
-            say(f"compile-block: Spine Editor: {spine}")
+            say("compile-block: Spine Editor: готов (путь скрыт)")
 
             # ── ЭТАП 1: .skel без пары .json → экспорт в .json редактором ──────────
             # файлы, помеченные детектором как битые, пропускаем: редактор их всё равно
@@ -374,6 +464,7 @@ def main() -> None:
 
                 def json_to_spine(job, fallback=False):
                     p, out_spine, ver, rel = job
+                    rel_spine = rel[:-5] + ".spine" if rel.lower().endswith(".json") else rel
                     tail = ["-i", p, "-o", out_spine, "-r"]
                     attempts = (([base_cmd() + ["-u", ver] + tail] * 2) if (ver and not fallback) else []) \
                         + [base_cmd() + tail] * 3
@@ -383,7 +474,7 @@ def main() -> None:
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             if os.environ.get("SPINE_PREVIEW", "1") == "1":
-                                png = make_preview(out_spine, rel, ver)
+                                png = make_preview(out_spine, rel_spine, ver, p)
                                 if png:
                                     print(f"compile-block: preview {png}")
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
@@ -399,7 +490,7 @@ def main() -> None:
                             rc = run(cmd)
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                                 if os.environ.get("SPINE_PREVIEW", "1") == "1":
-                                    make_preview(out_spine, rel, ver)
+                                    make_preview(out_spine, rel_spine, ver, alt)
                                 try:
                                     os.remove(alt)
                                 except OSError:
@@ -424,7 +515,7 @@ def main() -> None:
                             rc = run(base_cmd() + ["-i", v4, "-o", out_spine, "-r"])
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                                 if os.environ.get("SPINE_PREVIEW", "1") == "1":
-                                    make_preview(out_spine, rel)
+                                    make_preview(out_spine, rel_spine, ver, p)
                                 return rel, True, (f"compile-block: ✓ {rel} → "
                                                    f"{os.path.basename(out_spine)} (Spine {ver}, 4.x-кривые)")
                         for leftover in (v4,):

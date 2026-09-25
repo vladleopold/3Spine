@@ -4,6 +4,8 @@
 # Для каждого .skel внутри входного ZIP запускает настоящий C++-конвертер,
 # прикладывает сопутствующие изображения и кладёт результат в output.zip.
 import os, re, sys, json, zipfile, shutil, subprocess, tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from safezip import safe_unzip
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,15 +89,7 @@ def main():
         os.makedirs(src)
         os.makedirs(dst)
 
-        with zipfile.ZipFile(zin) as z:
-            for name in z.namelist():
-                target = os.path.join(src, name)
-                if name.endswith("/"):
-                    os.makedirs(target, exist_ok=True)
-                else:
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    with z.open(name) as f, open(target, "wb") as o:
-                        shutil.copyfileobj(f, o)
+        safe_unzip(zin, src)
 
         skels = []
         for root, _, files in os.walk(src):

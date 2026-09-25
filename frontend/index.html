@@ -36,7 +36,7 @@
 <main>
   <section class="pick">
     <div id="dropzone" class="dropzone" tabindex="0">
-      <div class="dz-icon">📁</div>
+      <div class="dz-icon" aria-hidden="true">📁</div>
       <p class="dz-title">Перетащите папку или zip-архив</p>
       <p class="dz-sub">binary json, skel, txt, atlas, xml, png, jpeg, gif, webp, avif convert to Spine</p>
       <button id="pick-folder" class="btn primary">Выбрать папку…</button>
@@ -50,13 +50,13 @@
     </div>
   </section>
 
-  <section class="previews hidden" id="previews-panel">
+  <section class="previews hidden" id="previews-panel" role="region" aria-labelledby="previews-title" tabindex="-1">
     <div class="logs-head">
-      <span>Скриншоты компиляции</span>
-      <button id="previews-back" class="btn ghost small">← К загрузке</button>
+      <span id="previews-title">Скриншоты компиляции</span>
+      <button id="previews-back" class="btn ghost small"><span aria-hidden="true">←</span> К загрузке</button>
     </div>
     <div id="previews-grid" class="previews-grid"></div>
-    <div class="previews-note">Наведите на карточку — детали. «Скачать вместе с картинками» собирает архив: .spine + текстуры этого скелета.</div>
+    <div class="previews-note">Наведите, коснитесь или сфокусируйтесь на карточке — детали. «Скачать вместе с картинками» собирает архив: .spine + текстуры этого скелета.</div>
   </section>
 
   <section class="actions">
@@ -68,7 +68,7 @@
   <section class="logs">
     <div class="logs-head">
       <span>Лог</span>
-      <span id="status" class="status">готов</span>
+      <span id="status" class="status" aria-live="polite">готов</span>
     </div>
     <pre id="log" class="log"></pre>
   </section>
