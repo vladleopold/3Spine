@@ -301,3 +301,136 @@ footer {
   .actions { flex-wrap: wrap; }
   .btn.big { flex: 1; }
 }
+/* ---------- панель превью ---------- */
+
+.previews {
+  margin: 14px 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line, #2a3346);
+  border-radius: 14px;
+  background: rgba(20, 25, 38, 0.72);
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity .45s ease, transform .45s ease;
+}
+
+.previews.in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.previews.out {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.previews-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.pv-card {
+  position: relative;
+  border: 1px solid #2a3346;
+  border-radius: 12px;
+  background: #141926;
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(.96);
+  animation: pvIn .4s ease forwards;
+}
+
+@keyframes pvIn {
+  to { opacity: 1; transform: scale(1); }
+}
+
+.pv-shot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 150px;
+  padding: 8px;
+  background:
+    linear-gradient(45deg, #1b2130 25%, transparent 25%, transparent 75%, #1b2130 75%),
+    linear-gradient(45deg, #1b2130 25%, #171c28 25%, #171c28 75%, #1b2130 75%);
+  background-size: 18px 18px;
+  background-position: 0 0, 9px 9px;
+  cursor: help;
+}
+
+.pv-shot img {
+  max-width: 100%;
+  max-height: 134px;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, .45));
+}
+
+.pv-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 4px;
+}
+
+.pv-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #dfe6f3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #22304a;
+  color: #9fc0ff;
+}
+
+.pv-kind.atlas { background: #3a3320; color: #ffd28a; }
+
+.pv-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.pv-actions .btn {
+  flex: 1;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
+.pv-tip {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: rgba(8, 11, 18, .93);
+  border: 1px solid #33405c;
+  color: #d6deee;
+  font-size: 11px;
+  line-height: 1.45;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 2;
+}
+
+.pv-card:hover .pv-tip,
+.pv-shot:hover .pv-tip { opacity: 1; transform: translateY(0); }
+
+.previews-note {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #8b96ad;
+}

@@ -295,6 +295,9 @@
   els.clear.addEventListener("click", () => {
     files = [];
     lastZip = null;
+    resultZip = null;
+    $("previews-grid").innerHTML = "";
+    showPreviewsPanel(false);
     els.folderInput.value = "";
     els.zipInput.value = "";
     els.log.textContent = "";
@@ -502,6 +505,198 @@
     }
   }
 
+  /* ---------------- скриншоты компиляции ---------------- */
+
+  const IMG_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
+  let resultZip = null;
+
+  function dirOf(path) {
+    const i = path.lastIndexOf("/");
+    return i < 0 ? "" : path.slice(0, i);
+  }
+
+  function fmtSize(b) {
+    if (!b && b !== 0) return "";
+    if (b < 1024) return b + " Б";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " КБ";
+    return (b / 1048576).toFixed(1) + " МБ";
+  }
+
+  function showPreviewsPanel(on) {
+    const panel = $("previews-panel");
+    const pick = document.querySelector("section.pick");
+    if (on) {
+      panel.classList.remove("hidden");
+      requestAnimationFrame(() => panel.classList.add("in"));
+      if (pick) {
+        pick.style.transition = "opacity .35s ease, transform .35s ease";
+        pick.style.opacity = "0";
+        pick.style.transform = "translateY(-8px)";
+        setTimeout(() => pick.classList.add("hidden"), 360);
+      }
+    } else {
+      panel.classList.remove("in");
+      panel.classList.add("out");
+      setTimeout(() => {
+        panel.classList.add("hidden");
+        panel.classList.remove("out");
+      }, 380);
+      if (pick) {
+        pick.classList.remove("hidden");
+        requestAnimationFrame(() => {
+          pick.style.opacity = "1";
+          pick.style.transform = "translateY(0)";
+        });
+      }
+    }
+  }
+
+  function buildPreviewBundle(item) {
+    const z = resultZip;
+    const base = dirOf(item.spine);
+    const stem = item.spine.split("/").pop().replace(/\.spine$/i, "");
+    const out = new JSZip();
+    let total = 0;
+    Object.keys(z.files).forEach((name) => {
+      const f = z.files[name];
+      if (f.dir) return;
+      const inBase = dirOf(name) === base;
+      const inImages = base && name.indexOf(base + "/images/") === 0;
+      const isSpine = name === item.spine;
+      const isMeta = inBase && new RegExp("^" + stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\.(json|atlas|atlas\\.txt)$", "i").test(name.split("/").pop());
+      if (!isSpine && !isMeta && !inImages && !(inBase && IMG_RE.test(name))) return;
+      out.file(name, f, { binary: true });
+      total += (f._data && f._data.uncompressedSize) || 0;
+    });
+    if (total > 600 * 1048576) {
+      throw new Error("набор больше 600 МБ — скачайте общий архив");
+    }
+    return out.generateAsync({ type: "blob", compression: "DEFLATE" });
+  }
+
+  async function renderPreviews(blob) {
+    const grid = $("previews-grid");
+    grid.innerHTML = "";
+    let z;
+    try {
+      resultZip = await JSZip.loadAsync(blob);
+    } catch (e) {
+      return false;
+    }
+    const idxFile = z.file("previews/index.json");
+    if (!idxFile) {
+      showPreviewsPanel(false);
+      return false;
+    }
+    let items = [];
+    try {
+      items = (JSON.parse(await idxFile.async("string")).items || []);
+    } catch (e) {
+      items = [];
+    }
+    if (!items.length) {
+      showPreviewsPanel(false);
+      return false;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const card = document.createElement("div");
+      card.className = "pv-card";
+      card.style.animationDelay = Math.min(i * 45, 600) + "ms";
+
+      const shot = document.createElement("div");
+      shot.className = "pv-shot";
+      const tip = document.createElement("div");
+      tip.className = "pv-tip";
+      tip.innerHTML = "<b>" + it.name + ".spine</b><br>путь: " + it.spine +
+        "<br>кадр: " + (it.kind === "atlas" ? "текстура атласа" : "рендер Spine") +
+        "<br>размер: " + fmtSize(it.bytes);
+      shot.appendChild(tip);
+
+      const png = z.file(it.png);
+      if (png) {
+        const url = URL.createObjectURL(await png.async("blob"));
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = it.name;
+        img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+        shot.appendChild(img);
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "pv-meta";
+      const name = document.createElement("span");
+      name.className = "pv-name";
+      name.textContent = it.name + ".spine";
+      name.title = it.spine;
+      const kind = document.createElement("span");
+      kind.className = "pv-kind" + (it.kind === "atlas" ? " atlas" : "");
+      kind.textContent = it.kind === "atlas" ? "атлас" : "рендер";
+      meta.appendChild(name);
+      meta.appendChild(kind);
+
+      const actions = document.createElement("div");
+      actions.className = "pv-actions";
+      const withImg = document.createElement("button");
+      withImg.className = "btn ghost small";
+      withImg.textContent = "Скачать с картинками";
+      withImg.addEventListener("click", async () => {
+        withImg.disabled = true;
+        const old = withImg.textContent;
+        withImg.textContent = "Собираем…";
+        try {
+          const out = await buildPreviewBundle(it);
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(out);
+          a.download = it.name + "-spine.zip";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        } catch (e) {
+          log("Превью: " + e.message, "err");
+        } finally {
+          withImg.disabled = false;
+          withImg.textContent = old;
+        }
+      });
+      const full = document.createElement("button");
+      full.className = "btn ghost small";
+      full.textContent = ".spine";
+      full.title = "Скачать только .spine";
+      full.addEventListener("click", async () => {
+        try {
+          const src = resultZip.file(it.spine);
+          if (!src) return;
+          const out = new JSZip();
+          out.file(it.spine.split("/").pop(), await src.async("blob"));
+          const blobOut = await out.generateAsync({ type: "blob" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blobOut);
+          a.download = it.name + ".spine";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+        } catch (e) {
+          log("Превью: " + e.message, "err");
+        }
+      });
+      actions.appendChild(withImg);
+      actions.appendChild(full);
+
+      card.appendChild(shot);
+      card.appendChild(meta);
+      card.appendChild(actions);
+      frag.appendChild(card);
+    }
+    grid.appendChild(frag);
+    showPreviewsPanel(true);
+    return true;
+  }
+
+  $("previews-back").addEventListener("click", () => showPreviewsPanel(false));
+
   /* ---------------- start / download ---------------- */
 
   els.start.addEventListener("click", async () => {
@@ -558,6 +753,8 @@
       await logSummary();
       setStatus("готово", "ok");
       els.download.classList.remove("hidden");
+      const hasPreviews = await renderPreviews(lastZip);
+      if (hasPreviews) log("… скриншотов компиляции: " + $("previews-grid").children.length, "dim");
       loadHistory();
       loadStats();
     } catch (e) {

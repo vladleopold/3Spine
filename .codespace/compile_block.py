@@ -55,6 +55,33 @@ def main() -> None:
             print(f"compile-block: cmd error: {e}")
             return -1
 
+    def run_preview(cmd: list[str], timeout: int = 75) -> int:
+        """Экспорт кадра: короткий таймаут, иначе редактор может не завершиться."""
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    text=True, start_new_session=True)
+        except Exception as e:
+            print(f"compile-block: preview cmd error: {e}")
+            return -1
+        try:
+            proc.communicate(input=stdin, timeout=timeout)
+            return proc.returncode
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), 9)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.communicate(timeout=10)
+            except Exception:
+                pass
+            print(f"compile-block: preview export timeout ({timeout}s), пропускаю")
+            return -1
+
     def base_cmd() -> list[str]:
         return [spine] + (["-Xmx" + xmx + "m"] if xmx else [])
 
@@ -180,11 +207,11 @@ def main() -> None:
                     break
                 if not _write_settings(vi):
                     return ""
-                run(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", settings_path])
+                run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", settings_path])
                 if not os.path.exists(want):
                     outdir = os.path.join(preview_root, flat + "_dir")
                     os.makedirs(outdir, exist_ok=True)
-                    run(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path])
+                    run_preview(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path])
                     for fn in sorted(os.listdir(outdir)):
                         if fn.lower().endswith(".png"):
                             shutil.move(os.path.join(outdir, fn), want)
