@@ -195,6 +195,7 @@ def main():
                 results = list(pool.map(convert_one, skels))
 
         ok = failed = kept = 0
+        corrupt = []
         for rel, kind, logline, _err in results:
             if kind == "OK":
                 ok += 1
@@ -202,6 +203,8 @@ def main():
                 kept += 1
             else:
                 failed += 1
+            if kind == "FAIL" and "binary-corrupt" in logline:
+                corrupt.append(rel)
             print(logline)
             loglines.append(logline)
 
@@ -217,6 +220,12 @@ def main():
         loglines.append(f"done: {ok} ok, {failed} failed, {kept} kept")
         with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
+        if corrupt:
+            with open(os.path.join(dst, "corrupt-list.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(sorted(set(corrupt))) + "\n")
+            loglines.append(f"corrupt-list: {len(set(corrupt))} файлов помечены детектором как битые")
+            with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
+                f.write("\n".join(loglines) + "\n")
 
         # переносим логи предыдущих блоков (prepare/unpack), чтобы причины
         # пропусков были видны в выданном архиве

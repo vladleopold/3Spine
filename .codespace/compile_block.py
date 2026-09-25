@@ -79,6 +79,14 @@ def main() -> None:
             say(f"compile-block: Spine Editor: {spine}")
 
             # ── ЭТАП 1: .skel без пары .json → экспорт в .json редактором ──────────
+            # файлы, помеченные детектором как битые, пропускаем: редактор их всё равно
+            # не прочитает, а попытки стоят минут
+            known_corrupt = set()
+            clist = os.path.join(src, "corrupt-list.txt")
+            if os.path.exists(clist):
+                with open(clist, encoding="utf-8") as f:
+                    known_corrupt = {ln.strip().replace("\\", "/") for ln in f if ln.strip()}
+
             skels = []
             for root, _, files in os.walk(src):
                 for f in sorted(files):
@@ -86,8 +94,12 @@ def main() -> None:
                         continue
                     p = os.path.join(root, f)
                     base = os.path.splitext(p)[0]
+                    rel = os.path.relpath(p, src).replace("\\", "/")
                     if not os.path.exists(base + ".json"):
-                        skels.append((p, base + ".json", os.path.relpath(p, src)))
+                        if rel in known_corrupt:
+                            say(f"compile-block: пропускаю битый файл (детектор): {rel}")
+                            continue
+                        skels.append((p, base + ".json", rel))
             skels.sort(key=lambda j: j[2])
 
             if skels:
