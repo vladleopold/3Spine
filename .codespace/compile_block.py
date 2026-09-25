@@ -60,7 +60,7 @@ def main() -> None:
             print(f"compile-block: cmd error: {e}")
             return -1
 
-    def run_preview(cmd: list[str], timeout: int = 75, logfile=None) -> int:
+    def run_preview(cmd: list[str], timeout: int = 40, logfile=None) -> int:
         """Экспорт кадра: короткий таймаут, иначе редактор может не завершиться."""
         fh = None
         if logfile:
@@ -170,6 +170,15 @@ def main() -> None:
             if anim:
                 d["animation"] = anim
             return d
+
+        def _has_anim(json_hint: str) -> bool:
+            """Есть ли анимации: без них редактор нечего экспортировать (и он зависает)."""
+            try:
+                with open(json_hint, encoding="utf-8", errors="replace") as f:
+                    d = json.load(f)
+                return bool(d.get("animations"))
+            except Exception:
+                return False
 
         def _project_names(json_hint: str):
             """Имя скелета и первая анимация из исходного JSON (нужны для 4.x export)."""
@@ -306,13 +315,15 @@ def main() -> None:
                         print("compile-block: preview editor: " + ln[:200])
                 except OSError:
                     print(f"compile-block: preview editor rc={rc}, лог недоступен")
-            shutil.rmtree(outdir, ignore_errors=True)
             if got:
                 try:
-                    shutil.move(got, want)
+                    shutil.move(got, want)      # сначала забрать кадр, потом чистить каталог
+                    shutil.rmtree(outdir, ignore_errors=True)
                     return True
-                except OSError:
+                except OSError as e:
+                    print(f"compile-block: превью: не удалось забрать кадр: {e}")
                     return False
+            shutil.rmtree(outdir, ignore_errors=True)
             return False
 
         def make_preview(spine_path: str, rel: str, ver: str = "", json_hint: str = "") -> str:
@@ -339,6 +350,9 @@ def main() -> None:
             atlas_png = _atlas_png(spine_path)
             if not atlas_png:
                 return ""
+            can_render = bool(json_hint) and _has_anim(json_hint)
+            if not can_render:
+                say("compile-block: превью: у скелета нет анимаций, беру текстуру атласа")
             tag = f"{flat}_{hashlib.md5(stem.encode('utf-8')).hexdigest()[:6]}"
             ext = os.path.splitext(atlas_png)[1].lower()
             if ext not in (".png", ".jpg", ".jpeg", ".webp"):
@@ -350,7 +364,8 @@ def main() -> None:
             if not dup:
                 fam_key = ver or "4.3.26"
                 state = preview_probe.get(fam_key)
-                may_render = (state != "fail" and preview_state["rendered"] < pv_render_max
+                may_render = (can_render and state != "fail"
+                              and preview_state["rendered"] < pv_render_max
                               and n < pv_per_version)
                 if state is None and may_render:
                     with plock:
