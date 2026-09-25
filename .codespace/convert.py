@@ -13,6 +13,8 @@ from skeleton_router import classify, engine_order  # анализатор-де�
 CONVERTER = os.path.join(HERE, "..", "backend", "converter", "SpineSkeletonDataConverter")
 RESTORE = os.path.join(HERE, "spine_restore", "spine_restore.py")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+# готовые проекты Spine и сопутствующие данные — пробрасываем как есть
+PASSTHROUGH_EXTS = {".spine", ".bytes", ".atlas", ".xml", ".txt", ".css", ".mp3", ".wav", ".ogg", ".ttf", ".woff"}
 
 
 def pretty_json(path: str) -> None:
@@ -219,7 +221,7 @@ def main():
 
         for root, _, files in os.walk(src):
             for f in files:
-                if os.path.splitext(f)[1].lower() in IMG_EXTS:
+                if os.path.splitext(f)[1].lower() in (IMG_EXTS | PASSTHROUGH_EXTS):
                     full = os.path.join(root, f)
                     rel = os.path.relpath(full, src)
                     outpath = os.path.join(dst, rel)

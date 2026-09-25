@@ -50,7 +50,7 @@
   }
 
   const INPUT_RE = /\.(skel|json|txt|atlas|xml|png|jpe?g|gif|webp|avif)$/i;
-  const SOURCE_RE = /\.(skel|json|txt)$/i;
+  const SOURCE_RE = /\.(skel|json|txt|spine)$/i;
 
   function renderFileList() {
     els.fileList.innerHTML = "";
@@ -325,7 +325,7 @@
     for (const f of files) {
       const name = (f.webkitRelativePath || f.name).split("/").pop();
       if (!SOURCE_RE.test(name)) continue;
-      const base = name.replace(/\.(skel|json|txt)$/i, "");
+      const base = name.replace(/\.(skel|json|txt|spine)$/i, "");
       if (!base || seen.has(base)) continue;
       seen.add(base);
       out.push(base);
