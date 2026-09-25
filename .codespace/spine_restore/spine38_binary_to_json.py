@@ -872,19 +872,22 @@ class Spine38BinaryReader:
         return anim
 
     def _read_curve(self, frame: dict) -> None:
+        """Spine 3.8 JSON curve format (NOT 4.x array form).
+        linear  → omit
+        stepped → "curve": "stepped"
+        bezier  → "curve": cx1, "c2": cy1, "c3": cx2, "c4": cy2
+        """
         curve_type = self.read_byte()
         if curve_type == 0:  # linear
             return
         if curve_type == 1:  # stepped
             frame["curve"] = "stepped"
             return
-        if curve_type == 2:  # bezier
-            frame["curve"] = [
-                self.read_float(),
-                self.read_float(),
-                self.read_float(),
-                self.read_float(),
-            ]
+        if curve_type == 2:  # bezier — 3.8 uses separate fields, not an array
+            frame["curve"] = self.read_float()
+            frame["c2"] = self.read_float()
+            frame["c3"] = self.read_float()
+            frame["c4"] = self.read_float()
             return
         # unknown — leave as linear
 

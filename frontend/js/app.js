@@ -524,9 +524,10 @@
           if (!line.trim() || /^\s{2}/.test(line)) continue;
           if (/^compile-block: ✓/.test(line)) log("… .spine готов: " + (line.split("→")[1] || "").trim().split(" ")[0] + "…", "ok");
           else if (/^compile-block: FAIL/.test(line)) log(line, "err");
-          else if (/^compile-block: итого/.test(line) || /^compile-block: скелетов/.test(line)) log(line, "info");
+          else if (/^compile-block: итого|^compile-block: скелетов|^compile-block: normalize/.test(line)) log(line, "info");
         }
       }
+      await logSummary();
       setStatus("готово", "ok");
       els.download.classList.remove("hidden");
       loadHistory();
