@@ -43,7 +43,7 @@ async function j(env, method, path, body) {
 function bufToBase64(buf) {
   const bytes = new Uint8Array(buf);
   const chunks = [];
-  const STEP = 0x8000;
+  const STEP = 3 * 16384;
   for (let i = 0; i < bytes.length; i += STEP) {
     let bin = "";
     const end = Math.min(i + STEP, bytes.length);
@@ -121,6 +121,9 @@ async function handleConvert(request, env) {
   const blobRes = await j(env, "POST", `/repos/${REPO}/git/blobs`, {
     content: bufToBase64(buf), encoding: "base64",
   });
+  if (typeof blobRes.size === "number" && blobRes.size !== buf.byteLength) {
+    return json({ error: "upload truncated: sent " + buf.byteLength + ", stored " + blobRes.size }, 500);
+  }
   const wf = await j(env, "GET", `/repos/${REPO}/contents/.github/workflows/web-convert.yml`);
 
   let parent = null;
