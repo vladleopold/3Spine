@@ -85,29 +85,19 @@ def main() -> None:
                 loglines.append("compile-block: активация лицензии (SPINE_LICENSE задан)")
 
             stdin = (license_code + "\n") if license_code else None
-            activate = subprocess.run(
-                [spine] + (["-Xmx" + xmx + "m"] if xmx else []) + ["-v"],
-                input=stdin, capture_output=True, text=True, timeout=900,
-            )
-            act_out = ((activate.stdout or "") + (activate.stderr or "")).strip()
-            if "Licensed to" in act_out or "activated" in act_out.lower():
-                for line in act_out.splitlines():
-                    if "Licensed to" in line or "activated" in line.lower():
-                        loglines.append("compile-block: " + line.strip())
-                        break
-            elif license_code and "Enter activation code" in act_out:
-                loglines.append("compile-block: ВНИМАНИЕ: редактор снова запросил код активации")
+            results = []
 
-            def run_one(job):
+            def run_one(job, fallback=False):
                 p, out_spine, ver, rel = job
                 base = [spine] + (["-Xmx" + xmx + "m"] if xmx else [])
                 tail = ["-i", p, "-o", out_spine, "-r"]
-                attempts = []
-                if ver:
-                    attempts.append(base + ["-u", ver] + tail)
-                attempts += [base + tail] * 3
+                if fallback or not ver:
+                    attempts = [base + tail] * 4
+                else:
+                    attempts = [base + ["-u", ver] + tail] + [base + tail] * 3
                 last = ""
                 for idx, cmd in enumerate(attempts):
+                    used = "версия " + ver if (ver and idx == 0 and not fallback) else "последняя"
                     try:
                         r = subprocess.run(cmd, input=stdin, capture_output=False,
                                            text=True, timeout=1800)
@@ -115,17 +105,22 @@ def main() -> None:
                     except Exception as e:
                         rc, last = -1, str(e)
                     if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
-                        used = " ".join(cmd[len(base):len(base) + 2]) if ver else "latest"
                         return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
                     if idx == len(attempts) - 1:
                         return rel, False, f"compile-block: FAIL {rel}: rc={rc} {last}".strip()
                     time.sleep(1.5 + idx)
 
-            if workers == 1 or len(jobs) <= 1:
-                results = [run_one(j) for j in jobs]
+            if not jobs:
+                pass
             else:
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    results = list(pool.map(run_one, jobs))
+                warm = run_one(jobs[0])
+                results.append(warm)
+                rest = jobs[1:]
+                if workers == 1 or not rest:
+                    results.extend(run_one(j) for j in rest)
+                else:
+                    with ThreadPoolExecutor(max_workers=workers - 1 if len(results) else workers) as pool:
+                        results.extend(pool.map(lambda j: run_one(j, fallback=True), rest))
 
             compiled = failed = 0
             for _rel, ok, msg in results:
