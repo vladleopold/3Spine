@@ -73,9 +73,11 @@ def main() -> None:
 
         previews: list = []
         preview_root = os.path.join(src, "previews")
-        export_settings = os.path.join(tmp, "preview.export.json")
-        with open(export_settings, "w", encoding="utf-8") as f:
-            json.dump({
+        preview_variant: list = [None]
+        settings_path = os.path.join(tmp, "preview.export.json")
+
+        def _base_settings() -> dict:
+            return {
                 "class": "export-image",
                 "format": "png",
                 "singleFrame": True,
@@ -87,7 +89,55 @@ def main() -> None:
                 "background": None,
                 "pma": False,
                 "sequence": {"start": 1, "digits": 4, "prefix": "", "suffix": ""},
-            }, f)
+            }
+
+        def _variant(i: int) -> dict:
+            d = _base_settings()
+            if i == 1:
+                d.pop("background", None)
+                d.pop("pma", None)
+                d["transparent"] = True
+            elif i == 2:
+                d.pop("background", None)
+                d.pop("pma", None)
+                d.pop("padding", None)
+                d["sequence"] = None
+            elif i == 3:
+                d["class"] = "export-image"
+                d["extension"] = ".png"
+                d["folder"] = ""
+            return d
+
+        def _write_settings(i: int) -> bool:
+            try:
+                with open(settings_path, "w", encoding="utf-8") as f:
+                    json.dump(_variant(i), f)
+                return True
+            except OSError:
+                return False
+
+        def _atlas_png(spine_path: str) -> str:
+            """Запасной кадр: первая текстура атласа, если редактор не отдал PNG."""
+            folder = os.path.dirname(spine_path)
+            try:
+                names = sorted(os.listdir(folder))
+            except OSError:
+                return ""
+            stem = os.path.splitext(os.path.basename(spine_path))[0]
+            for fn in names:
+                if fn.lower().endswith((".atlas", ".atlas.txt")):
+                    stem = os.path.splitext(fn)[0]
+                    break
+            for fn in names:
+                low = fn.lower()
+                if not low.endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    continue
+                if low.startswith(stem.lower()):
+                    return os.path.join(folder, fn)
+            for fn in names:
+                if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    return os.path.join(folder, fn)
+            return ""
 
         def make_preview(spine_path: str, rel: str, ver: str = "") -> str:
             """Рендерит первый кадр .spine в PNG для галереи на сайте."""
@@ -99,16 +149,31 @@ def main() -> None:
             if os.path.exists(want):
                 return ""
             vflag = ["-u", ver] if ver else []
-            run(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", export_settings])
+            variants = [preview_variant[0]] if preview_variant[0] is not None else [0, 1, 2, 3]
+            for vi in variants:
+                if os.path.exists(want):
+                    break
+                if not _write_settings(vi):
+                    return ""
+                run(base_cmd() + vflag + ["-i", spine_path, "-o", want, "-e", settings_path])
+                if not os.path.exists(want):
+                    outdir = os.path.join(preview_root, flat + "_dir")
+                    os.makedirs(outdir, exist_ok=True)
+                    run(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", settings_path])
+                    for fn in sorted(os.listdir(outdir)):
+                        if fn.lower().endswith(".png"):
+                            shutil.move(os.path.join(outdir, fn), want)
+                            break
+                    shutil.rmtree(outdir, ignore_errors=True)
+                if os.path.exists(want) and preview_variant[0] is None:
+                    preview_variant[0] = vi
+                    say(f"compile-block: превью: рабочий формат export-settings #{vi}")
+            kind = "render"
             if not os.path.exists(want):
-                outdir = os.path.join(preview_root, flat + "_dir")
-                os.makedirs(outdir, exist_ok=True)
-                run(base_cmd() + vflag + ["-i", spine_path, "-o", outdir, "-e", export_settings])
-                for fn in sorted(os.listdir(outdir)):
-                    if fn.lower().endswith(".png"):
-                        shutil.move(os.path.join(outdir, fn), want)
-                        break
-                shutil.rmtree(outdir, ignore_errors=True)
+                atlas = _atlas_png(spine_path)
+                if atlas:
+                    shutil.copyfile(atlas, want)
+                    kind = "atlas"
             if not os.path.exists(want):
                 return ""
             entry = {
@@ -116,6 +181,7 @@ def main() -> None:
                 "spine": rel,
                 "name": os.path.basename(rel)[:-6] if rel.lower().endswith(".spine") else os.path.basename(rel),
                 "bytes": os.path.getsize(want),
+                "kind": kind,
             }
             previews.append(entry)
             return entry["png"]
