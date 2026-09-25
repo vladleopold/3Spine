@@ -259,14 +259,14 @@ def main() -> None:
                 def json_to_spine(job, fallback=False):
                     p, out_spine, ver, rel = job
                     tail = ["-i", p, "-o", out_spine, "-r"]
-                    attempts = ([base_cmd() + ["-u", ver] + tail] if (ver and not fallback) else []) \
+                    attempts = (([base_cmd() + ["-u", ver] + tail] * 2) if (ver and not fallback) else []) \
                         + [base_cmd() + tail] * 3
                     rc = -1
                     for idx, cmd in enumerate(attempts):
-                        used = ("версия " + ver) if (ver and idx == 0 and not fallback) else "последняя"
+                        used = ("версия " + ver) if "-u" in cmd else "последняя"
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
-                            if not fallback and os.environ.get("SPINE_PREVIEW", "1") == "1":
+                            if os.environ.get("SPINE_PREVIEW", "1") == "1":
                                 png = make_preview(out_spine, rel, ver)
                                 if png:
                                     print(f"compile-block: preview {png}")
