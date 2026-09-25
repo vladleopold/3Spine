@@ -62,6 +62,7 @@ def main() -> None:
 
     def run_preview(cmd: list[str], timeout: int = 40, logfile=None) -> int:
         """Экспорт кадра: короткий таймаут, иначе редактор может не завершиться."""
+        use_stdin = os.environ.get("SPINE_PREVIEW_STDIN", "0") == "1"
         fh = None
         if logfile:
             try:
@@ -69,7 +70,8 @@ def main() -> None:
             except OSError:
                 fh = None
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+            proc = subprocess.Popen(cmd,
+                                    stdin=subprocess.PIPE if use_stdin else subprocess.DEVNULL,
                                     stdout=fh or subprocess.DEVNULL, stderr=subprocess.STDOUT,
                                     text=True, start_new_session=True)
         except Exception as e:
@@ -82,7 +84,7 @@ def main() -> None:
             return -1
         logfile = fh
         try:
-            proc.communicate(input=stdin, timeout=timeout)
+            proc.communicate(input=(stdin if use_stdin else None), timeout=timeout)
             return proc.returncode
         except subprocess.TimeoutExpired:
             try:
@@ -206,6 +208,17 @@ def main() -> None:
 
         IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tiff", ".tif")
 
+        _name_index: dict = {}
+
+        def _find_by_name(name: str) -> str:
+            """Найти файл по имени в любом месте дерева (страница атласа часто в корне)."""
+            root = os.path.dirname(src)
+            if not _name_index:
+                for r, _d, files in os.walk(root):
+                    for fn in files:
+                        _name_index.setdefault(fn, os.path.join(r, fn))
+            return _name_index.get(name, "")
+
         def _atlas_png(spine_path: str) -> str:
             """Текстура, на которую ссылается ближайший атлас (или первая картинка рядом)."""
             folder = os.path.dirname(spine_path)
@@ -235,7 +248,8 @@ def main() -> None:
                                     for root, _d, files in os.walk(base):
                                         if ln in files:
                                             return os.path.join(root, ln)
-                                    return ""
+                                    found = _find_by_name(ln)
+                                    return found
                         except OSError:
                             pass
                 try:
@@ -296,16 +310,22 @@ def main() -> None:
                 except OSError:
                     target = spine_path
             vflag = ["-u", ver] if ver else []
-            rc = run_preview(base_cmd() + vflag + ["-i", target, "-o", outdir, "-e", settings_path],
-                             logfile=logpath)
             got = ""
-            for root, _d, files in os.walk(outdir):
-                for fn in sorted(files):
-                    if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
-                        got = os.path.join(root, fn)
+            for attempt in (1, 2):
+                rc = run_preview(base_cmd() + vflag + ["-i", target, "-o", outdir, "-e", settings_path],
+                                 logfile=logpath if attempt == 2 else logpath + ".1")
+                for root, _d, files in os.walk(outdir):
+                    for fn in sorted(files):
+                        if fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                            got = os.path.join(root, fn)
+                            break
+                    if got:
                         break
-                if got:
+                if got or attempt == 2:
                     break
+                if _has_anim(json_hint):
+                    continue          # редактор мог упасть нативно — одна попытка не помешает
+                break
             if not got:
                 try:
                     with open(logpath, encoding="utf-8", errors="replace") as f:
