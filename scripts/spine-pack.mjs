@@ -47,6 +47,17 @@ function walk(dir, acc = []) {
   return acc;
 }
 
+// Spine-скелет в JSON: есть skeleton/bones/animations — обычные json не берём
+function isSpineSkeleton(p) {
+  try {
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return !!(j && typeof j === 'object' && !Array.isArray(j)
+      && (j.skeleton || j.bones || j.animations || j.slots));
+  } catch {
+    return false;
+  }
+}
+
 // Текстуры из .atlas: строки вида "  name.png" / "page.png" (без отступа = page)
 function parseAtlasPages(atlasPath) {
   let text = '';
@@ -106,6 +117,8 @@ export function packSpine(srcDir, outDir, opts = {}) {
   for (const p of all) {
     if (/\.atlas$/i.test(p)) atlases.push(p);
     else if (/\.(skel|bin)$/i.test(p)) skels.push(p);
+    // скелеты бывают и в формате Spine JSON (.json) — отличаем их по содержимому
+    else if (/\.json$/i.test(p) && isSpineSkeleton(p)) skels.push(p);
   }
 
   // сопоставление по basename БЕЗ суффикса -<10 символов>
