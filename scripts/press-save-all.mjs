@@ -556,6 +556,16 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
         } catch (e) { return 'DevToolsAPI: ' + e.message; }
       })()`, sid, best.id, 6000).catch((e) => 'DevToolsAPI: ошибка ' + e.message);
       log(`   ${api}`);
+      const ui = await browser.eval(`(() => {
+        if (!globalThis.UI) return 'UI нет';
+        const keys = Object.keys(UI);
+        const want = keys.filter((k) => /inspector|panel|view|tabbed/i.test(k));
+        return 'UI ключи (' + keys.length + '): ' + want.join(',')
+          + ' | InspectorView=' + typeof UI.InspectorView
+          + ' | inspectorView=' + typeof UI.inspectorView
+          + ' | DevToolsAPI.showPanel=' + typeof (globalThis.DevToolsAPI || {}).showPanel;
+      })()`, sid, best.id, 4000).catch((e) => 'UI: ошибка ' + e.message);
+      log(`   ${ui}`);
       await sleep(1500);
     }
 
