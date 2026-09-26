@@ -374,6 +374,21 @@ def game_id_from_url(url: str) -> str:
     return ""
 
 
+def route_guesses(url: str, gid: str, limit: int = 3) -> list:
+    """Чистые маршруты игры по идентификатору из ссылки.
+
+    У white-label SPA игра часто доступна и без модалки: /game/<id>, /games/<id>,
+    /play/<id>. Проверка дешёвая и完全不 site-specific.
+    """
+    if not gid:
+        return []
+    parts = urlsplit(url)
+    origin = "%s://%s" % (parts.scheme, parts.netloc)
+    out = ["%s/game/%s" % (origin, gid), "%s/games/%s" % (origin, gid),
+           "%s/play/%s" % (origin, gid)]
+    return out[:limit]
+
+
 def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
              args_passes: int = 3, args_cdp: int = 1) -> dict:
     """Универсальное обнаружение: браузер (все фреймы) + рекурсивный обход HTML."""
@@ -399,6 +414,19 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     shells = shell_candidates(url, urls)
     if shells:
         log("шелл игры найден статически: %s" % shells[0][:100])
+
+    gid0 = game_id_from_url(url)
+    for guess in route_guesses(url, gid0):
+        try:
+            body = fetch(guess, timeout=15)
+        except Exception:                                 # noqa: BLE001
+            continue
+        text = body[:400000].decode("utf-8", "replace")
+        if re.search(r"(gs2c|openGame|canvas|gameSymbol|unity|phaser|cocos|\.atlas|\.skel)", text, re.I):
+            log("маршрут игры найден: %s" % guess)
+            shells.append(guess)
+        else:
+            log("маршрут без игры: %s" % guess)
 
     # второй проход: игра почти всегда живёт во внутренней странице/iframe,
     # и её ассеты грузятся уже без обёртки сайта
