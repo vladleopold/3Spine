@@ -36,6 +36,17 @@ jobs:
           python3 -m pip install --quiet Pillow
           python3 .codespace/unpack_block.py input.zip input.zip
 
+      - name: Fetch game assets by URL (если пришла ссылка)
+        run: |
+          set -euo pipefail
+          if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
+          URL=$(tr -d '\r\n' < fetch-url.txt)
+          echo "ссылка на игру: $URL"
+          echo "$URL" > work/fetch-url.txt 2>/dev/null || true
+          python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 | tee fetch-log.txt
+          rm -f fetch-url.txt
+          unzip -l input.zip | head -30
+
       - name: Convert input.zip (native Linux converter, параллельно)
         env:
           CONVERT_WORKERS: "8"

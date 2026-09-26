@@ -13,6 +13,8 @@
     fileSummary: $("file-summary"),
     fileCount: $("file-count"),
     fileList: $("file-list"),
+    srcUrl: $("src-url"),
+    urlClear: $("url-clear"),
     start: $("start"),
     download: $("download"),
     clear: $("clear"),
@@ -338,6 +340,17 @@
   }
 
   /* ---------------- convert via broker -> Actions ---------------- */
+
+  async function startConvertUrl(url) {
+    const r = await fetch(BROKER + "/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    return d.job;
+  }
 
   async function startConvert(blob) {
     log("> Отправляем на сервер (" + (blob.size / 1048576).toFixed(1) + " МБ)…", "dim");
@@ -828,37 +841,49 @@
     els.start.disabled = true;
     els.download.classList.add("hidden");
     lastZip = null;
+    const url = (els.srcUrl && els.srcUrl.value || "").trim();
     resultZip = null;
     $("previews-grid").innerHTML = "";
     revokePreviewUrls();
     showPreviewsPanel(false);
     els.log.textContent = "";
-    setStatus("пакуем…", "run");
-    let blob;
+    let job = null;
+    const t0 = Date.now();
     try {
-      blob = await buildZip();
-    } catch (e) {
-      log("Ошибка упаковки: " + e, "err");
-      setStatus("ошибка", "err");
-      els.start.disabled = false;
-      return;
-    }
-    if (blob.size > MAX_ZIP) {
-      log("Архив слишком большой: " + (blob.size / 1048576).toFixed(1) + " МБ (лимит " + (MAX_ZIP / 1048576) + " МБ).", "err");
-      setStatus("ошибка", "err");
-      els.start.disabled = false;
-      return;
-    }
-    try {
-      const t0 = Date.now();
-      const names = skeletonNames();
-      log("> Отправляем " + files.length + " файлов, задач: " + names.length + "…", "dim");
-      const job = await startConvert(blob);
-      log("> Задача: " + job, "dim");
-      setStatus("конвертация…", "run");
-      await waitStatus(job, t0, names);
+      if (url) {
+        setStatus("скачиваем ассеты…", "run");
+        log("> Ссылка: " + url, "dim");
+        log("> Загружаю манифест игры и тяну скелеты, атласы и текстуры…", "dim");
+        job = await startConvertUrl(url);
+        log("> Задача: " + job + " (режим: ссылка)", "dim");
+        setStatus("скачиваем и конвертируем…", "run");
+      } else {
+        setStatus("пакуем…", "run");
+        let blob;
+        try {
+          blob = await buildZip();
+        } catch (e) {
+          log("Ошибка упаковки: " + e, "err");
+          setStatus("ошибка", "err");
+          els.start.disabled = false;
+          return;
+        }
+        if (blob.size > MAX_ZIP) {
+          log("Архив слишком большой: " + (blob.size / 1048576).toFixed(1) + " МБ (лимит " + (MAX_ZIP / 1048576) + " МБ).", "err");
+          setStatus("ошибка", "err");
+          els.start.disabled = false;
+          return;
+        }
+        const names = skeletonNames();
+        log("> Отправляем " + files.length + " файлов, задач: " + names.length + "…", "dim");
+        job = await startConvert(blob);
+        log("> Задача: " + job, "dim");
+        setStatus("конвертация…", "run");
+      }
+      await waitStatus(job, t0, url ? 1 : skeletonNames().length);
       log("> Результат готов, скачиваем…", "dim");
       lastZip = await fetchResult(job);
+      if (url) log("… ассеты игры скачаны и сконвертированы", "ok");
 
       const unpackText = await extractLog("unpack-log.txt");
       if (unpackText) {
@@ -900,6 +925,23 @@
       els.start.disabled = false;
     }
   });
+
+  if (els.urlClear) {
+    els.urlClear.addEventListener("click", () => {
+      if (els.srcUrl) {
+        els.srcUrl.value = "";
+        els.srcUrl.focus();
+      }
+    });
+  }
+  if (els.srcUrl) {
+    els.srcUrl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && els.srcUrl.value.trim() && !els.start.disabled) {
+        e.preventDefault();
+        els.start.click();
+      }
+    });
+  }
 
   els.download.addEventListener("click", () => {
     if (!lastZip) return;

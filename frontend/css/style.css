@@ -491,3 +491,35 @@ footer {
     grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr));
   }
 }
+
+/* ---------- поле ссылки на игру ---------- */
+
+.url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.url-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.url-row input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.url-note {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: var(--muted);
+}

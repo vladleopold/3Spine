@@ -53,6 +53,10 @@ function bufToBase64(buf) {
   return chunks.join("");
 }
 
+function b64Encode(str) {
+  return btoa(String(str));
+}
+
 function b64ToBytes(b64) {
   const bin = atob(b64);
   const len = bin.length;
@@ -105,25 +109,38 @@ async function handleHistory(request, env) {
   return json({ items: await historyItems(env) });
 }
 
-async function handleConvert(request, env) {
-  let buf;
-  try {
-    buf = await request.arrayBuffer();
-  } catch (_) {
-    return json({ error: "cannot read body" }, 400);
-  }
-  if (buf.byteLength === 0) return json({ error: "empty body" }, 400);
-  if (buf.byteLength > MAX_BYTES) {
-    return json({ error: "too large: " + buf.byteLength + " bytes (max " + MAX_BYTES + ")" }, 413);
-  }
-  const job = "convert-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+const FETCH_RE = /^https?:\/\/[\w.-]+\.[a-z]{2,}(\S*)$/i;
 
-  const blobRes = await j(env, "POST", `/repos/${REPO}/git/blobs`, {
-    content: bufToBase64(buf), encoding: "base64",
-  });
-  if (typeof blobRes.size === "number" && blobRes.size !== buf.byteLength) {
-    return json({ error: "upload truncated: sent " + buf.byteLength + ", stored " + blobRes.size }, 500);
+async function handleConvert(request, env) {
+  const ctype = request.headers.get("content-type") || "";
+  let buf = new ArrayBuffer(0);
+  let sourceUrl = "";
+
+  if (ctype.includes("application/json")) {
+    // режим «ссылка на игру»: CI сам выкачает ассеты по этой ссылке
+    let payload;
+    try {
+      payload = await request.json();
+    } catch (_) {
+      return json({ error: "bad json" }, 400);
+    }
+    sourceUrl = String(payload && payload.url ? payload.url : "").trim();
+    if (!FETCH_RE.test(sourceUrl)) {
+      return json({ error: "нужен http(s)-адрес игры в поле url" }, 400);
+    }
+  } else {
+    try {
+      buf = await request.arrayBuffer();
+    } catch (_) {
+      return json({ error: "cannot read body" }, 400);
+    }
+    if (buf.byteLength === 0) return json({ error: "empty body" }, 400);
+    if (buf.byteLength > MAX_BYTES) {
+      return json({ error: "too large: " + buf.byteLength + " bytes (max " + MAX_BYTES + ")" }, 413);
+    }
   }
+
+  const job = "convert-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   const wf = await j(env, "GET", `/repos/${REPO}/contents/.github/workflows/web-convert.yml`);
 
   let parent = null;
@@ -131,12 +148,25 @@ async function handleConvert(request, env) {
     parent = (await j(env, "GET", `/repos/${REPO}/git/ref/heads/${INBOX}`)).object.sha;
   } catch (_) { /* ветки нет - создаём */ }
 
-  const tree = await j(env, "POST", `/repos/${REPO}/git/trees`, {
-    tree: [
-      { path: ".github/workflows/web-convert.yml", mode: "100644", type: "blob", sha: wf.sha },
-      { path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha },
-    ],
-  });
+  const entries = [
+    { path: ".github/workflows/web-convert.yml", mode: "100644", type: "blob", sha: wf.sha },
+  ];
+  if (sourceUrl) {
+    const urlBlob = await j(env, "POST", `/repos/${REPO}/git/blobs`, {
+      content: b64Encode(sourceUrl), encoding: "base64",
+    });
+    entries.push({ path: "fetch-url.txt", mode: "100644", type: "blob", sha: urlBlob.sha });
+  } else {
+    const blobRes = await j(env, "POST", `/repos/${REPO}/git/blobs`, {
+      content: bufToBase64(buf), encoding: "base64",
+    });
+    if (typeof blobRes.size === "number" && blobRes.size !== buf.byteLength) {
+      return json({ error: "upload truncated: sent " + buf.byteLength + ", stored " + blobRes.size }, 500);
+    }
+    entries.push({ path: "input.zip", mode: "100644", type: "blob", sha: blobRes.sha });
+  }
+
+  const tree = await j(env, "POST", `/repos/${REPO}/git/trees`, { tree: entries });
   const commit = await j(env, "POST", `/repos/${REPO}/git/commits`, {
     message: job,
     tree: tree.sha,
@@ -148,7 +178,7 @@ async function handleConvert(request, env) {
     await j(env, "POST", `/repos/${REPO}/git/refs`, { ref: `refs/heads/${INBOX}`, sha: commit.sha });
   }
 
-  return json({ job });
+  return json({ job, mode: sourceUrl ? "url" : "upload" });
 }
 
 async function handleStatus(request, env) {
