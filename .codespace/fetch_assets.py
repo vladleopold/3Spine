@@ -368,6 +368,15 @@ def resolve_refs(refs, bases) -> list:
 HEAD_CACHE = {}
 
 
+def url_ok_many(us: list, workers: int = 16) -> list:
+    from concurrent.futures import ThreadPoolExecutor
+    us = [u for u in us if not looks_junk(u)]
+    if not us:
+        return []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return [u for u, ok in zip(us, ex.map(url_ok, us)) if ok]
+
+
 def url_ok(u: str) -> bool:
     """Мягкая проверка существования: HEAD, при отказе — GET нулевого диапазона."""
     if u in HEAD_CACHE:
@@ -430,6 +439,13 @@ def main() -> int:
     ap.add_argument("--cdp", type=int, default=0, help="1 — лёгкий CDP-хук поверх netlog")
     ap.add_argument("--escalate", type=int, default=1, help="1 — углублять обход при неполноте")
     ap.add_argument("--min-json", type=int, default=12, help="меньше этого — считаем неполным")
+    ap.add_argument("--inline", type=int, default=1, help="1 — извлекать ассеты, вшитые в манифесты")
+    ap.add_argument("--manifests", type=int, default=60, help="сколько манифестов качать")
+    ap.add_argument("--grid", type=int, default=1, help="1 — зондировать сетку манифестов")
+    ap.add_argument("--grid-dirs", type=int, default=20, help="сколько каталогов проверять")
+    ap.add_argument("--grid-count", type=int, default=40, help="сколько файлов в сетке на каталог")
+    ap.add_argument("--grid-probe", type=int, default=900, help="потолок сетевых проб")
+    ap.add_argument("--probe-workers", type=int, default=20, help="потоков для проб")
     args = ap.parse_args()
 
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
@@ -459,8 +475,41 @@ def main() -> int:
             len(picked["json"]), len(picked["atlas"]), len(picked["skel"])))
 
     root = os.path.join(tmp, "assets")
+    # манифесты движков: могут не грузиться при старте, но в них бывают ассеты
+    manifests = [u for u in urls
+                 if u.lower().split("?")[0].endswith((".json", ".manifest", ".txt"))
+                 and re.search(r"(resource|manifest|config|settings|version|build|index|"
+                               r"data|bundle|main|game)", u, re.I)][:args.manifests]
+    log("манифестов среди найденных: %d" % len(manifests))
+
+    # зондируем сетку манифестов: <dir>/main_resources000.json, *_resourcesNNN.json
+    grid = []
+    if args.grid:
+        all_dirs = bases_of(urls)
+        game_dirs = [d for d in all_dirs
+                     if re.search(r"(game|asset|res|data|bundle|content|media|cdn)", d, re.I)]
+        dirs = []
+        for d in sorted(game_dirs, key=lambda x: -x.count("/")) + sorted(all_dirs, key=lambda x: -x.count("/")):
+            if d not in dirs:
+                dirs.append(d)
+        dirs = dirs[:args.grid_dirs]
+        log("каталоги для зонда: %s" % ", ".join("/".join(d.rsplit("/", 2)[-2:]) for d in dirs[:4]))
+        tpl = ("main_resources%03d.json", "resources%03d.json", "game_resources%03d.json",
+               "data%03d.json", "bundle%03d.json", "chunk%03d.json")
+        # сначала самые вероятные шаблоны по всем каталогам, потом остальные
+        for t in list(tpl[:2]) + list(tpl[2:]):
+            for d in dirs:
+                for i in range(args.grid_count):
+                    grid.append(d + "/" + (t % i))
+        log("зонд сетки манифестов: %d кандидатов" % len(grid))
+        alive = url_ok_many(grid[:args.grid_probe], args.probe_workers)
+        if alive:
+            log("сетка дала манифестов: %d" % len(alive))
+            urls |= set(alive)
+        manifests = sorted(set(manifests) | set(alive))
+
     # проход 1: скелеты, манифесты и атласы
-    first = picked["atlas"] + picked["skel"] + picked["json"]
+    first = picked["atlas"] + picked["skel"] + picked["json"] + manifests
     log("проход 1: скачиваю %d файлов…" % len(first))
     download_set(first, root, args.workers, args.timeout, "проход 1")
 
@@ -496,6 +545,40 @@ def main() -> int:
             download_set(alive, root, args.workers, args.timeout, "скан")
             urls |= set(alive)
             picked = pick_assets(urls, kinds)
+
+    # проход 1.55: ассеты, вшитые в манифесты движка (base64 внутри JSON)
+    if args.inline:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from inline_assets import extract as extract_inline
+        except Exception:                                 # noqa: BLE001
+            extract_inline = None
+        if extract_inline:
+            added = 0
+            for dirpath, _dirs, fns in os.walk(root):
+                for fn in fns:
+                    if not fn.lower().endswith((".json", ".js", ".txt", ".manifest")):
+                        continue
+                    fp = os.path.join(dirpath, fn)
+                    if os.path.getsize(fp) > 60 * 1048576:
+                        continue
+                    try:
+                        with open(fp, encoding="utf-8", errors="replace") as f:
+                            payload = f.read()
+                    except OSError:
+                        continue
+                    got = extract_inline(payload)
+                    for name, data in got.items():
+                        rel = os.path.relpath(fp, root)
+                        out_dir = os.path.join(os.path.dirname(rel), "inline")
+                        dst = os.path.join(root, out_dir, name)
+                        if not os.path.exists(dst):
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            with open(dst, "wb") as out:
+                                out.write(data)
+                            added += 1
+            if added:
+                log("инлайн-ассеты из манифестов: +%d файлов" % added)
 
     # проход 1.6: Spine всегда лежит комплектом — проверяем соседей каждой находки
     seeds = [u for u in urls if re.search(r"\.(json|skel|atlas|scn)$", u, re.I)]

@@ -260,6 +260,47 @@ async def collect(url: str) -> set:
         except Exception:                                 # noqa: BLE001
             pass
 
+        POKE_JS = """
+        (function(){
+          var el = document.querySelector('canvas') || document.querySelector('body');
+          if (!el) return 0;
+          var r = el.getBoundingClientRect();
+          var x = r.left + r.width/2, y = r.top + r.height*0.7;
+          var opts = {bubbles:true, cancelable:true, clientX:x, clientY:y, button:0, pointerId:1};
+          ['pointerdown','mousedown','touchstart','pointerup','mouseup','click'].forEach(function(t){
+            try { el.dispatchEvent(t.indexOf('pointer')===0
+                ? new PointerEvent(t, opts) : new MouseEvent(t, opts)); } catch(e){}
+          });
+          try { el.focus && el.focus(); } catch(e){}
+          return 1;
+        })()
+        """
+
+        async def poke(pg):
+            """Один клик в игру: canvas/фрейм настоящей мышью + синтетические события."""
+            for fr in pg.frames:
+                for sel in ("canvas", "#game", "#app", "body"):
+                    try:
+                        loc = fr.locator(sel).first
+                        if not await loc.count():
+                            continue
+                        if not await loc.is_visible():
+                            continue
+                        box = await loc.bounding_box()
+                        if not box:
+                            continue
+                        for fx, fy in ((0.5, 0.62), (0.5, 0.35), (0.3, 0.5), (0.7, 0.5)):
+                            await pg.mouse.click(box["x"] + box["width"] * fx,
+                                                 box["y"] + box["height"] * fy)
+                            await asyncio.sleep(0.25)
+                        break
+                    except Exception:                     # noqa: BLE001
+                        continue
+            try:
+                await pg.evaluate(POKE_JS)
+            except Exception:                             # noqa: BLE001
+                pass
+
         async def try_click():
             for text in CLICK_TEXTS:
                 for pg in context.pages:
@@ -272,9 +313,20 @@ async def collect(url: str) -> set:
                         continue
                 await asyncio.sleep(0.3)
 
+        async def pokes():
+            await asyncio.sleep(2.5)                       # даём игре смонтироваться
+            for i in range(3):
+                for pg in list(context.pages):
+                    await poke(pg)
+                await asyncio.sleep(3.0)
+                if found and len(found) >= early:
+                    return
+
         asyncio.ensure_future(try_click())
+        asyncio.ensure_future(pokes())
 
         end = time.time() + budget
+        poked = 0
         while time.time() < end:
             for pg in context.pages:
                 try:
@@ -283,8 +335,9 @@ async def collect(url: str) -> set:
                             found.add(u)
                 except Exception:                         # noqa: BLE001
                     pass
-            if len(found) >= early:
+            if len(found) >= early and poked >= 2:
                 break
+            poked = poked + 1 if poked else 0
             await asyncio.sleep(0.7)
 
         await browser.close()

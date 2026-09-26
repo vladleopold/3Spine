@@ -70,10 +70,16 @@
       d.textContent = "... и ещё " + (others.length - 60) + " файлов";
       els.fileList.appendChild(d);
     }
-    const supported = files.filter((f) => INPUT_RE.test(f.name));
     els.fileSummary.classList.toggle("hidden", files.length === 0);
     els.fileCount.textContent = files.length + " (источников: " + skels.length + ")";
-    els.start.disabled = supported.length === 0;
+    syncStart();
+  }
+
+  // кнопка «Старт» активна, если выбраны файлы ИЛИ введена ссылка на игру
+  function syncStart() {
+    const hasUrl = !!(els.srcUrl && els.srcUrl.value.trim());
+    const supported = files.filter((f) => INPUT_RE.test(f.name));
+    els.start.disabled = !(hasUrl || supported.length > 0);
   }
 
   async function checkServer() {
@@ -926,15 +932,19 @@
     }
   });
 
+  syncStart();
+
   if (els.urlClear) {
     els.urlClear.addEventListener("click", () => {
       if (els.srcUrl) {
         els.srcUrl.value = "";
         els.srcUrl.focus();
+        syncStart();
       }
     });
   }
   if (els.srcUrl) {
+    els.srcUrl.addEventListener("input", syncStart);
     els.srcUrl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && els.srcUrl.value.trim() && !els.start.disabled) {
         e.preventDefault();
