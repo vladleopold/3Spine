@@ -40,12 +40,21 @@ class CDP {
     return c;
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 6000) {
     const id = ++this.n;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
     this.ws.send(JSON.stringify(msg));
-    return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
+    return new Promise((res, rej) => {
+      const timer = setTimeout(() => {
+        this.waiting.delete(id);
+        rej(new Error(`${method}: нет ответа за ${timeoutMs} мс`));
+      }, timeoutMs);
+      this.waiting.set(id, {
+        res: (v) => { clearTimeout(timer); res(v); },
+        rej: (e) => { clearTimeout(timer); rej(e); },
+      });
+    });
   }
 
   async eval(expression, sessionId, contextId) {
@@ -58,6 +67,12 @@ class CDP {
 }
 
 async function main() {
+  // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
+  const watchdog = setTimeout(() => {
+    console.error(`ошибка: превышен лимит шага ${TOTAL_LIMIT} мс (${since()})`);
+    process.exit(1);
+  }, TOTAL_LIMIT + 5000);
+  watchdog.unref();
   fs.mkdirSync(OUT, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
   log(`расширение: ${m.name} v${m.version} | лимит шага ${TOTAL_LIMIT} мс`);
