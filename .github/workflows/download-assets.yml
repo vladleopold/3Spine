@@ -88,13 +88,13 @@ jobs:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
         run: node scripts/activate-extension.mjs
 
-      - name: Chrome -> ссылка -> расширение -> перезапуск -> запуск Resources-Saver
+      - name: Chrome + расширение -> Save All Resources
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           OUTPUT_DIR: ./artifacts
           EXT_DIR: .chrome-ext
           WAIT_MS: ${{ inputs.wait_ms || '20000' }}
-        run: node scripts/launch-then-resources-saver.mjs
+        run: xvfb-run -a --server-args='-screen 0 1400x900x24' node scripts/save-all-resources.mjs
 
       - name: Скачать все ресурсы игры
         env:
