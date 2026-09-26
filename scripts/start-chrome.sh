@@ -16,7 +16,7 @@ mkdir -p "$PROFILE" artifacts
 
 # 1) виртуальный экран
 if ! xdpyinfo -display ":$DISPLAY_NUM" >/dev/null 2>&1; then
-  Xvfb ":$DISPLAY_NUM" -screen 0 1600x1000x24 -nolisten tcp >/dev/null 2>&1 &
+  Xvfb ":$DISPLAY_NUM" -screen 0 3200x1400x24 -nolisten tcp >/dev/null 2>&1 &
   echo $! > /tmp/xvfb.pid
   sleep 2
 fi
@@ -40,7 +40,7 @@ DISPLAY=":$DISPLAY_NUM" "$CHROME_BIN" \
   --user-data-dir="$PROFILE" \
   --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check \
   --disable-blink-features=AutomationControlled \
-  --window-size=1500,950 --window-position=0,0 \
+  --window-size=3000,1300 --window-position=0,0 \
   --enable-unsafe-extension-debugging \
   --disable-features=DisableLoadExtensionCommandLineSwitch,Translate,OptimizationHints \
   --disable-extensions-except="$EXT_DIR" \
