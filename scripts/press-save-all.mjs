@@ -27,6 +27,26 @@ function unpackedExtensionId(dir) {
   return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
 }
 
+// Реальный id: Chrome сам сообщает его в целях (service worker расширения).
+// Вычисленный по пути id может не совпасть — тогда страница панели отдаёт
+// ERR_BLOCKED_BY_CLIENT.
+async function realExtensionId(ctx, port, extDir) {
+  for (let i = 0; i * 500 < 10000; i++) {
+    try {
+      const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const t = ts.find((x) => (x.url || '').startsWith('chrome-extension://'));
+      if (t) return new URL(t.url).host;
+    } catch { /* список целей недоступен */ }
+    // поднимаем service worker расширения, чтобы он появился в целях
+    if (i === 2) {
+      const p = await ctx.newPage().catch(() => null);
+      if (p) { await p.goto('chrome://extensions/').catch(() => {}); await p.close().catch(() => {}); }
+    }
+    await sleep(500);
+  }
+  return unpackedExtensionId(extDir);
+}
+
 const SHIM = (payload) => `(() => {
   const DATA = ${payload};
   const noop = { addListener() {}, removeListener() {} };
@@ -49,8 +69,7 @@ const SHIM = (payload) => `(() => {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  const extId = unpackedExtensionId(EXT);
-  log(`расширение: ${m.name} v${m.version}, id ${extId}`);
+  log(`расширение: ${m.name} v${m.version}`);
 
   // Chrome уже запущен предыдущим шагом (с расширением и ссылкой) — подключаемся к нему
   let browser;
@@ -64,6 +83,8 @@ async function main() {
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
   log('подключился к уже запущенному Chrome');
   const ctx = browser.contexts()[0];
+  const extId = await realExtensionId(ctx, PORT, EXT);
+  log(`id расширения: ${extId}`);
 
   // 1) собираем все ресурсы страницы через CDP
   const page = ctx.pages()[0] || await ctx.newPage();
