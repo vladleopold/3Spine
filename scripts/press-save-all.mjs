@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// Нажатие «Save All Resources» в панели Resources Saver настоящего DevTools.
-// Полный цикл укладывается в 30 секунд: панель уже открыта предыдущим шагом,
-// данные берёт сам DevTools, поэтому ничего собирать не нужно.
+// Шаг «Нажать Save All Resources»: панель Resources Saver в DevTools, клик кнопки,
+// ожидание архива. Лимит шага — 30 секунд (TOTAL_LIMIT_MS).
 import fs from 'fs';
 import path from 'path';
 
@@ -9,9 +8,10 @@ const URL_ = process.env.URL || '';
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
-const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '10000', 10);
-const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '15000', 10);
-const TOTAL_LIMIT = parseInt(process.env.TOTAL_LIMIT_MS || '30000', 10);
+const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
+const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '20000', 10);
+const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '30000', 10);
+const TOTAL_LIMIT = parseInt(process.env.TOTAL_LIMIT_MS || '30000', 10);   // лимит шага
 
 const t0 = Date.now();
 const left = () => TOTAL_LIMIT - (Date.now() - t0);
@@ -20,7 +20,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
 
 class CDP {
-  constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); }
+  constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); this.onEvent = null; }
 
   static async connect(wsUrl) {
     const ws = new WebSocket(wsUrl);
@@ -31,7 +31,7 @@ class CDP {
     const c = new CDP(ws);
     ws.addEventListener('message', (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.method) return;
+      if (m.method) { if (c.onEvent) c.onEvent(m); return; }
       const w = c.waiting.get(m.id);
       if (!w) return;
       c.waiting.delete(m.id);
@@ -40,15 +40,17 @@ class CDP {
     return c;
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     const id = ++this.n;
-    this.ws.send(JSON.stringify({ id, method, params }));
+    const msg = { id, method, params };
+    if (sessionId) msg.sessionId = sessionId;
+    this.ws.send(JSON.stringify(msg));
     return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
   }
 
-  async eval(expression) {
+  async eval(expression, sessionId) {
     const r = await this.send('Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true });
+      { expression, returnByValue: true, awaitPromise: true }, sessionId);
     if (r && r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
     return r && r.result ? r.result.value : undefined;
   }
@@ -57,11 +59,54 @@ class CDP {
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
-  log(`расширение: ${m.name} v${m.version} | лимит цикла ${TOTAL_LIMIT} мс`);
+  log(`расширение: ${m.name} v${m.version} | лимит шага ${TOTAL_LIMIT} мс`);
 
-  // 1) панель Resources Saver уже открыта в DevTools — ищем её цель
+  const v = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
+  const browser = await CDP.connect(v.webSocketDebuggerUrl);
+  log('Chrome подключён по CDP');
+
+  // 1) вкладка с игрой
+  await browser.send('Target.setDiscoverTargets', { discover: true });
+  const ts = await browser.send('Target.getTargets');
+  const infos = ts.targetInfos.filter((t) => t.type === 'page');
+  const want = URL_ ? URL_.split('?')[0] : '';
+  const game = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
+  if (!game) throw new Error('не нашёл вкладку с игрой');
+  log(`вкладка: ${game.url.slice(0, 90)}`);
+
+  const { sessionId } = await browser.send('Target.attachToTarget',
+    { targetId: game.targetId, flatten: true });
+  await browser.send('Network.enable', {}, sessionId);
+  await browser.send('Page.enable', {}, sessionId);
+  await browser.send('Browser.setDownloadBehavior',
+    { behavior: 'allow', downloadPath: OUT, eventsEnabled: true });
+
+  // 2) сбор всех ответов с телами — остаётся, как было
+  const bodies = new Map();
+  const pending = [];
+  browser.onEvent = (m) => {
+    if (m.sessionId !== sessionId) return;
+    if (m.method !== 'Network.responseReceived') return;
+    const { requestId, response } = m.params;
+    if (!/^https?:/i.test(response.url)) return;
+    if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
+    pending.push(browser.send('Network.getResponseBody', { requestId }, sessionId)
+      .then((r) => {
+        const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+        bodies.set(response.url, {
+          body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
+        });
+      })
+      .catch(() => {}));
+  };
+  await browser.send('Page.reload', { ignoreCache: false }, sessionId).catch(() => {});
+  await sleep(Math.min(COLLECT_MS, Math.max(2000, left() - 12000)));
+  await Promise.race([Promise.all(pending), sleep(2000)]);
+  log(`ресурсов собрано: ${bodies.size} (${since()})`);
+
+  // 3) панель Resources Saver в DevTools
   let panel = null;
-  const until = Date.now() + Math.min(PANEL_TIMEOUT, left());
+  const until = Date.now() + Math.min(PANEL_TIMEOUT, Math.max(1000, left() - 10000));
   while (Date.now() < until && !panel) {
     const list = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json()).catch(() => []);
     panel = list.find((t) => (t.url || '').includes('/content.html'));
@@ -70,7 +115,7 @@ async function main() {
   if (!panel) throw new Error(`панель Resources Saver не найдена (${since()})`);
   log(`панель: ${panel.url} (${since()})`);
 
-  // 2) нажимаем «Save All Resources» — данные панель берёт у DevTools сама
+  // 4) нажимаем «Save All Resources»
   const pc = await CDP.connect(panel.webSocketDebuggerUrl);
   const clicked = await pc.eval(`(() => {
     const b = document.getElementById('up-save');
@@ -81,7 +126,7 @@ async function main() {
   })()`).catch((e) => 'ошибка: ' + e.message);
   log(`кнопка: ${clicked} (${since()})`);
 
-  // 3) ждём ZIP, но не дольше остатка лимита
+  // 5) ждём ZIP в остатке лимита
   const dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
   let zip = null;
   while (Date.now() < dl) {
