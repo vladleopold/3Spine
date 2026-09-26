@@ -64,6 +64,7 @@ EXT_ABS="$(cd "$(dirname "$EXT_DIR")" && pwd)/$(basename "$EXT_DIR")"
 EXT_ABS="$EXT_ABS" PORT="$PORT" node -e '
 const port = process.env.PORT || 9222;
 const p = process.env.EXT_ABS;
+const bail = setTimeout(() => { console.error("Extensions.loadUnpacked: таймаут 20с"); process.exit(0); }, 20000);
 (async () => {
   const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
   const ws = new WebSocket(v.webSocketDebuggerUrl);
@@ -85,6 +86,8 @@ const p = process.env.EXT_ABS;
     const r = await send("Extensions.loadUnpacked", { path: p });
     console.error("Расширение загружено через CDP: " + ((r && r.id) || "ок"));
   } catch (e) { console.error("Extensions.loadUnpacked: " + e.message); }
+  clearTimeout(bail);
+  process.exit(0);
 })();
 ' || true
 
