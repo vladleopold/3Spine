@@ -43,6 +43,17 @@ PROXY = os.environ.get(
     "SPINE_PROXY",
     "https://spine-broker.leopolds2010.workers.dev/proxy?url=").strip()
 PROXY_HOSTS = set()
+# резидентный прокси для браузера: solves гео-блокировки и капчи
+BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
+
+
+def proxy_flags() -> list:
+    """Флаги Chrome для прокси и безопасная строка для лога."""
+    if not BROWSER_PROXY:
+        return []
+    masked = re.sub(r"//[^@/]+@", "//***@", BROWSER_PROXY)
+    log("браузер идёт через прокси: %s" % masked)
+    return ["--proxy-server=" + BROWSER_PROXY]
 REJECTED = []
 MANIFESTS = []
 REMOTE = {}
@@ -250,7 +261,7 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
            "--user-agent=" + NORMAL_UA, "--lang=en-US", "--window-size=1280,900",
            "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader",
            "--disable-features=IsolateOrigins,site-per-process",
-           "--user-data-dir=" + prof] + ext_flags + ["--log-net-log=" + netlog, url]
+           "--user-data-dir=" + prof] + ext_flags + proxy_flags() + ["--log-net-log=" + netlog, url]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:                                     # noqa: BLE001

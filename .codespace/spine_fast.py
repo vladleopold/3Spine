@@ -28,6 +28,19 @@ try:                                                     # brotli ускоряе
 except ImportError:
     ACCEPT_ENCODING = "gzip, deflate"
 
+BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
+
+
+def proxy_for_browser() -> dict:
+    """Прокси для Chromium: {server: ...} или пустой словарь."""
+    if not BROWSER_PROXY:
+        return {}
+    import re as _re
+    masked = _re.sub(r"//[^@/]+@", "//***@", BROWSER_PROXY)
+    print("браузер идёт через прокси: %s" % masked, flush=True)
+    return {"server": BROWSER_PROXY}
+
+
 OUT_DIR = Path("spine_out")
 BUDGET_SEC = 16            # жёсткий лимит на одну игру
 DOWNLOAD_WORKERS = 14

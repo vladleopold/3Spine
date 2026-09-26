@@ -24,6 +24,18 @@ try:
 except ImportError:
     pass
 
+BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
+
+
+def proxy_for_browser() -> dict:
+    if not BROWSER_PROXY:
+        return {}
+    import re as _re
+    print("браузер идёт через прокси: %s"
+          % _re.sub(r"//[^@/]+@", "//***@", BROWSER_PROXY), flush=True)
+    return {"server": BROWSER_PROXY}
+
+
 OUT = Path("spine_out")
 WORKERS = 28
 BROWSER = (os.environ.get("SPINE_CHROME") or shutil.which("chromium")
@@ -215,6 +227,7 @@ async def collect(url: str, bodies: bool = True) -> set:
 
     async with async_playwright() as p:
         launch_kw = {"headless": True}
+        launch_kw.update(proxy_for_browser())
         ext = os.environ.get("SPINE_EXT_DIR", "").strip()
         if ext and os.path.isdir(ext):
             # Resources Saver и подобные расширения видят ресурсы всех фреймов

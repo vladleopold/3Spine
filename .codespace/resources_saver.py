@@ -121,6 +121,7 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
 
     async with async_playwright() as p:
         kw = {"headless": True}
+        kw.update(proxy_for_browser())
         if CHROME and os.path.exists(CHROME):
             kw["executable_path"] = CHROME
         browser = await p.chromium.launch(**kw, args=["--no-sandbox", "--disable-gpu",
