@@ -525,6 +525,47 @@ def game_id_from_url(url: str) -> str:
     return ""
 
 
+CATALOG_PATHS = ("/api/config", "/api/games", "/api/game/list", "/api/v1/games",
+                 "/config.json", "/games.json", "/data/games.json", "/games",
+                 "/api/catalog", "/api/v2/games")
+GAME_URL_RE = re.compile(
+    r"https?://[^\"'\\\s<>]{10,240}(?:openGame|html5Game|gameService|loadGame)\\.do"
+    r"[^\"'\\\s<>]{0,200}|https?://[^\"'\\\s<>]{10,240}/gs2c/[^\"'\\\s<>]{0,200}", re.I)
+
+
+def catalog_shells(origin: str, limit: int = 4) -> list:
+    """Ищем адрес игры в типовых API-конфигах площадки.
+
+    SPA прячет игровой URL в рантайме, но он почти всегда лежит в одном из
+    этих конфигов. Запросы идут через edge-прокси, если хост заблокирован.
+    """
+    from urllib.parse import urlsplit as _us
+    host = _us(origin).netloc
+    out, seen = [], set()
+    for path in CATALOG_PATHS:
+        u = origin.rstrip("/") + path
+        try:
+            body = fetch(u, timeout=15)
+        except Exception:                                 # noqa: BLE001
+            continue
+        if not body or len(body) > 6 * 1024 * 1024:
+            continue
+        text = body[:3 * 1024 * 1024].decode("utf-8", "replace")
+        if not re.search(r"(gameSymbol|openGame|gs2c|gameId|demoUrl|launchUrl)", text, re.I):
+            continue
+        for m in GAME_URL_RE.finditer(text):
+            v = m.group(0).rstrip('",\\')
+            if v not in seen:
+                seen.add(v)
+                out.append(v)
+            if len(out) >= limit:
+                return out
+        log("каталог %s: найдено игровых URL %d" % (path, len(out)))
+        if out:
+            break
+    return out
+
+
 def route_guesses(url: str, gid: str, limit: int = 3) -> list:
     """Чистые маршруты игры по идентификатору из ссылки.
 
@@ -561,8 +602,15 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
             log("хук CDP не сработал: %s" % e)
     pages_from_browser = {u for u in got if u not in urls0}
 
-    # шеллы игры, найденные статически (работает без запуска игры)
+    # шеллы игры: сначала статикой, потом API-каталоги площадки
     shells = shell_candidates(url, urls)
+    if not shells:
+        try:
+            shells = catalog_shells("%s://%s" % (urlsplit(url).scheme, urlsplit(url).netloc))
+            if shells:
+                log("игровой URL найден в каталоге площадки: %s" % shells[0][:110])
+        except Exception:                                 # noqa: BLE001
+            pass
     if shells:
         log("шелл игры найден статически: %s" % shells[0][:100])
 
