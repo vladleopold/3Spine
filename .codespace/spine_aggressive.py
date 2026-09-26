@@ -115,20 +115,25 @@ async def download_all(urls, folder: Path) -> list:
             cookie_jar=aiohttp.DummyCookieJar(), trust_env=False) as session:
 
         async def grab(u, dest, guard, to):
+            """Повторяем только временные сбои: 404/403 — не тратим время."""
+            transient = True
             for _ in range(guard):
                 try:
                     async with session.get(u, timeout=aiohttp.ClientTimeout(total=to, connect=8,
                                                                             sock_read=to)) as r:
-                        if r.status != 200:
+                        if r.status == 200:
+                            data = await r.read()
+                            if len(data) >= 64:
+                                await asyncio.to_thread(dest.write_bytes, data)
+                                return True
+                            transient = False
                             continue
-                        data = await r.read()
-                        if len(data) < 64:
-                            continue
-                        await asyncio.to_thread(dest.write_bytes, data)
-                        return True
+                        if r.status in (404, 403, 401, 410):
+                            return False
+                        await asyncio.sleep(0.2)
                 except (aiohttp.ClientError, asyncio.TimeoutError, OSError):
                     await asyncio.sleep(0.2)
-            return False
+            return False if not transient else False
 
         async def one(u):
             dest = folder / safe_name(u)
@@ -143,7 +148,7 @@ async def download_all(urls, folder: Path) -> list:
         missing = [u for u in order if not (folder / safe_name(u)).exists()]
         if missing:
             print("  добор: %d" % len(missing), flush=True)
-            sem2 = asyncio.Semaphore(6)
+            sem2 = asyncio.Semaphore(12)
             for p in await asyncio.gather(*[sem2_wrapped(sem2, grab, u, folder) for u in missing],
                                          return_exceptions=True):
                 if isinstance(p, Path) and p not in done:
@@ -154,7 +159,7 @@ async def download_all(urls, folder: Path) -> list:
 async def sem2_wrapped(sem, grab, u, folder):
     dest = folder / safe_name(u)
     async with sem:
-        return dest if await grab(u, dest, 3, 30) else None
+        return dest if await grab(u, dest, 1, 12) else None
 
 
 async def harvest_json_manifest(text: str, base: str, found: set) -> None:
