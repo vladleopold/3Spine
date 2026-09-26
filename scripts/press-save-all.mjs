@@ -2,6 +2,7 @@
 // Шаг «Нажать Save All Resources»: панель Resources Saver в DevTools, клик кнопки,
 // ожидание архива. Лимит шага — 30 секунд (TOTAL_LIMIT_MS).
 import fs from 'fs';
+import { execSync } from 'child_process';
 import path from 'path';
 
 const URL_ = process.env.URL || '';
@@ -213,6 +214,12 @@ async function pressViaIframe(browser, extId, shimSrc) {
     .catch(() => 'нет статуса');
   log(`   статус iframe: ${st}`);
   log(`   контексты: ${contexts.map((c) => c.origin).join(' | ')}`);
+  {
+    await browser.send('Target.setDiscoverTargets', { discover: true });
+    const now = (await browser.send('Target.getTargets')).targetInfos || [];
+    log(`   целей после iframe: ${now.length}`);
+    for (const t of now) log(`      [${t.type}] ${t.url}`);
+  }
 
   // панель — отдельная цель (OOPIF) с URL content.html: ищем её среди всех целей
   let panelTargetInfo = null;
@@ -394,6 +401,35 @@ const SHOW_PANEL = `(async () => {
     return 'панель не найдена';
   } catch (e) { return 'ошибка: ' + e.message; }
 })()`;
+
+// Клик мышью в область DevTools: окно браузера 1600x1000, DevTools пристыкован.
+function clickDevtoolsArea() {
+  const run = (cmd) => {
+    try {
+      return execSync(`xdotool ${cmd}`, {
+        env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
+      }).toString().trim();
+    } catch { return ''; }
+  };
+  const win = run('search --onlyvisible --class "google-chrome" | tail -1')
+    || run('search --onlyvisible --name "Chrome" | tail -1');
+  if (!win) return 'окно Chrome не найдено';
+  const geo = run(`getwindowgeometry --shell ${win}`);
+  const gw = parseInt((geo.match(/WIDTH=(\d+)/) || [])[1] || '1600', 10);
+  const ghh = parseInt((geo.match(/HEIGHT=(\d+)/) || [])[1] || '1000', 10);
+  run(`windowactivate --sync ${win}`);
+  // панель DevTools: низ окна (док снизу) — кнопка в шапке, слева
+  const spots = [
+    [150, Math.round(ghh * 0.63)],
+    [150, Math.round(ghh * 0.70)],
+    [150, Math.round(ghh * 0.55)],
+    [Math.round(gw * 0.05), Math.round(ghh * 0.63)],
+  ];
+  for (const [dx, dy] of spots) {
+    run(`mousemove --window ${win} ${dx} ${dy} click 1`);
+  }
+  return `окно ${gw}x${ghh}, клики: ${spots.map((s2) => s2.join(',')).join(' / ')}`;
+}
 
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
@@ -730,6 +766,9 @@ async function main() {
 
   // нажатия не было — это и есть результат шага
   if (!pressed) {
+    // последняя попытка: клик мышью в область DevTools
+    const how = clickDevtoolsArea();
+    log(`   попытка кликом в область DevTools: ${how}`);
     console.error('кнопка не нажата');
     console.error(`причина: ${why}`);
     process.exit(1);
