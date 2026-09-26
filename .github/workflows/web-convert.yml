@@ -363,7 +363,7 @@ jobs:
             echo "Spine уже в кеше — пропускаю скачивание"
             exit 0
           fi
-          curl -sL -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
+          curl -sL --max-time 600 --retry 2 -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36" \
             "$SPINE_LINUX_URL" -o /tmp/linux.gz
           gzip -d /tmp/linux.gz
           mkdir -p /tmp/spine
@@ -378,6 +378,7 @@ jobs:
           # все Spine-проекты стартуют одновременно: без пачек и без прогона
           SPINE_BATCH: "0"
           SPINE_WARMUP: "0"
+          SPINE_TIMEOUT: "2400"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
@@ -410,9 +411,18 @@ jobs:
           SPRITES_PID=$!
           echo "распаковка спрайтов запущена в фоне (pid $SPRITES_PID)"
 
+          # жёсткий лимит на компиляцию + одна повторная попытка:
+          # без этого job может висеть на Spine бесконечно
           set +e
-          python3 .codespace/compile_block.py work/compile.zip work/compile.zip
+          timeout --kill-after=120 "$SPINE_TIMEOUT" \
+            python3 .codespace/compile_block.py work/compile.zip work/compile.zip
           COMPILE_RC=$?
+          if [ "$COMPILE_RC" -ne 0 ]; then
+            echo "компиляция Spine не удалась (код $COMPILE_RC) — повторяю один раз"
+            timeout --kill-after=120 "$SPINE_TIMEOUT" \
+              python3 .codespace/compile_block.py work/compile.zip work/compile.zip
+            COMPILE_RC=$?
+          fi
           set -e
           echo "компиляция Spine завершилась с кодом $COMPILE_RC"
 

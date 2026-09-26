@@ -40,6 +40,16 @@ on:
         description: 'Селекторы, которые не кликать'
         required: false
         type: string
+      attempts:
+        description: 'Сколько попыток скачать через AnyDownload'
+        required: false
+        default: '3'
+        type: string
+      try_timeout:
+        description: 'Лимит секунд на одну попытку AnyDownload'
+        required: false
+        default: '480'
+        type: string
 
 jobs:
   tests:
@@ -96,17 +106,38 @@ jobs:
       - name: Скачать через AnyDownload (render)
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          WAIT_MS: ${{ inputs.spa_wait || '4000' }}
+          WAIT_MS: ${{ inputs.spa_wait || '8000' }}
+          ATTEMPTS: ${{ inputs.attempts || '3' }}
+          TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
         run: |
           npm install -g anydownload@2.3.9
+          rm -rf artifacts/anydownload artifacts/anydownload.keep
+          best=0
+          for i in $(seq 1 "$ATTEMPTS"); do
+            dir="artifacts/try-$i"
+            rm -rf "$dir"; mkdir -p "$dir"
+            echo "=== попытка $i/$ATTEMPTS, ожидание ${WAIT_MS} мс, лимит ${TRY_TIMEOUT}с"
+            printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$URL" \
+              --mode render \
+              --headless \
+              --wait "$WAIT_MS" \
+              --preset page \
+              -o "$dir" \
+              -v && rc=0 || rc=$?
+            n=$(find "$dir" -type f 2>/dev/null | wc -l)
+            a=$(find "$dir" -type f -name '*.atlas' 2>/dev/null | wc -l)
+            echo "попытка $i: код $rc, файлов $n, атласов $a"
+            if [ "$n" -gt "$best" ]; then
+              best=$n
+              rm -rf artifacts/anydownload.keep
+              mv "$dir" artifacts/anydownload.keep
+            else
+              rm -rf "$dir"
+            fi
+          done
           mkdir -p artifacts/anydownload
-          printf 'n\n' | timeout 900 anydownload "$URL" \
-            --mode render \
-            --headless \
-            --wait "$WAIT_MS" \
-            --preset page \
-            -o artifacts/anydownload \
-            -v
+          if [ -d artifacts/anydownload.keep ]; then mv artifacts/anydownload.keep/* artifacts/anydownload/ 2>/dev/null || true; fi
+          rm -rf artifacts/anydownload.keep artifacts/try-* 2>/dev/null || true
           echo "файлов AnyDownload: $(find artifacts/anydownload -type f | wc -l)"
 
       - name: Восстановить имена файлов (hash_to_name)
