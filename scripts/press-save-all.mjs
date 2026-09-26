@@ -573,18 +573,42 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
         log(`   классы вкладок: ${dump}`);
       }
 
-      const tabClicked = await browser.eval(`(() => {
+      // панель расширения может быть не в строке вкладок, а в меню More tools
+      const CLICK_TAB = `(() => {
         const roots = (${SHADOW_ROOTS})(document);
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          if (el.children.length) continue;
           const t = (el.innerText || el.textContent || '').trim();
           if (t !== 'Resources Saver') continue;
-          const leaf = el.querySelector('*') || el;
-          leaf.click();
-          return 'вкладка Resources Saver нажата (' + el.tagName + '.' + String(el.className).slice(0, 30) + ')';
+          el.click();
+          return 'вкладка Resources Saver нажата';
         }
         return 'вкладка Resources Saver в тенях не найдена';
-      })()`, sid, best.id, 3000).catch((e) => 'вкладка: ошибка ' + e.message);
-      log(`   ${tabClicked}`);
+      })()`;
+      const OPEN_MORE = `(() => {
+        const roots = (${SHADOW_ROOTS})(document);
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          const cls = String(el.className || '');
+          if (!/drop-down/i.test(cls)) continue;
+          const b = el.querySelector('button') || el;
+          b.click();
+          return 'меню More tools открыто: ' + cls.split(' ')[0];
+        }
+        return 'кнопка More tools не найдена';
+      })()`;
+
+      let tabState = await browser.eval(CLICK_TAB, sid, best.id, 3000)
+        .catch((e) => 'вкладка: ошибка ' + e.message);
+      log(`   ${tabState}`);
+      if (/не найдена/.test(String(tabState))) {
+        const dd = await browser.eval(OPEN_MORE, sid, best.id, 3000)
+          .catch((e) => 'меню: ошибка ' + e.message);
+        log(`   ${dd}`);
+        await sleep(800);
+        tabState = await browser.eval(CLICK_TAB, sid, best.id, 3000)
+          .catch((e) => 'вкладка: ошибка ' + e.message);
+        log(`   ${tabState}`);
+      }
 
       const r = await browser.eval(`(() => {
         const roots = (${SHADOW_ROOTS})(document);
