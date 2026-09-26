@@ -387,10 +387,16 @@ async function main() {
     if (!t) { log('   окно панели не появилось среди целей'); continue; }
     log(`   панель открыта расширением: ${t.url}`);
     const c = await RawCDP.connect(t.webSocketDebuggerUrl);
-    // реальный id вкладки игры — читаем из контекста расширения
-    const rawTabs = await c.eval(`new Promise((res) => chrome.tabs.query({}, (l) => res(
-        (l || []).map((x) => ({ id: x.id, url: x.url || '' })))))`).catch(() => []);
-    const tabs = Array.isArray(rawTabs) ? rawTabs : [];
+    await sleep(3000);                 // панель должна прогрузиться
+    // реальный id вкладки игры — читаем из контекста расширения, с повторами
+    let tabs = [];
+    for (let i = 0; i < 10 && !tabs.length; i++) {
+      const raw = await c.eval(`new Promise((res) => { try {
+          chrome.tabs.query({}, (l) => res((l || []).map((x) => ({ id: x.id, url: x.url || '' }))));
+        } catch (e) { res([]); } })`).catch(() => []);
+      tabs = Array.isArray(raw) ? raw : [];
+      if (!tabs.length) await sleep(1000);
+    }
     const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
     const gameTab = tabs.find((x) => x.url.startsWith(origin)) || tabs[0];
     const realTabId = gameTab ? gameTab.id : 0;
@@ -426,7 +432,9 @@ async function main() {
   log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
 
   // 4) подменяем панели chrome.devtools собранными ресурсами и жмём кнопку
-  if (panel === panel.page()) {
+  if (panel && panel.raw) {
+    log('   кнопка уже нажата через прямой CDP');
+  } else if (panel === panel.page()) {
     await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
     await panel.reload({ waitUntil: 'domcontentloaded' });
   } else {
@@ -449,7 +457,13 @@ async function main() {
     await sleep(2000);
   }
   if (!zip) {
-    const state = (await panel.textContent('body').catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+    let state = '';
+    if (panel && panel.raw) {
+      state = await panel.raw.eval('document.body.innerText').catch(() => '');
+    } else if (panel) {
+      state = await panel.textContent('body').catch(() => '');
+    }
+    state = String(state || '').replace(/\s+/g, ' ').slice(0, 300);
     log(`состояние панели: ${state}`);
     await browser.close().catch(() => {});
     throw new Error('ZIP не появился после нажатия Save All Resources');
