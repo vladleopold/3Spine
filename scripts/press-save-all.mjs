@@ -214,29 +214,47 @@ async function pressViaIframe(browser, extId, shimSrc) {
   log(`   статус iframe: ${st}`);
   log(`   контексты: ${contexts.map((c) => c.origin).join(' | ')}`);
 
-  // контекст фрейма панели
-  let panelCtx = null;
-  for (let i = 0; i < 20 && !panelCtx; i++) {
-    panelCtx = contexts.find((c) => /\/content\.html/.test(c.origin || '')
-      || /content\.html/.test(c.name || '')) || null;
-    if (!panelCtx) await sleep(500);
+  // фрейм панели берём из дерева фреймов — это быстро и надёжно
+  const tree = await browser.send('Page.getFrameTree', {}, sessionId, 4000)
+    .catch(() => null);
+  let frameId = '';
+  if (tree && tree.frameTree) {
+    const walk = (n) => {
+      if (n.frame && /\/content\.html/.test(n.frame.url || '')) { frameId = n.frame.id; return true; }
+      return (n.childFrames || []).some(walk);
+    };
+    walk(tree.frameTree);
   }
-  if (!panelCtx) {
-    // иначе пробуем каждый свежий контекст
+  log(`   фрейм панели: ${frameId || 'не найден в дереве'}`);
+  if (!frameId) {
+    // запасной путь — перебор контекстов
     for (const c of contexts) {
-      const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id)
+      const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id, 2000)
         .catch(() => false);
-      if (has) { panelCtx = c; break; }
+      if (has) {
+        return await browser.eval(`(() => {
+          const b = document.getElementById('up-save');
+          const t = (b.textContent || '').trim();
+          b.click();
+          return 'НАЖАТА: "' + t + '"';
+        })()`, sessionId, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
+      }
     }
+    return 'фрейм панели не найден';
   }
-  if (!panelCtx) return 'контекст панели не появился';
+  const world = await browser.send('Page.createIsolatedWorld',
+    { frameId, worldName: 'rs-world', grantUniveralAccess: true }, sessionId, 4000)
+    .catch(() => null);
+  const ctxId = world && world.executionContextId;
+  if (!ctxId) return 'не создался изолированный мир панели';
+  log(`   контекст панели: ${ctxId}`);
   return await browser.eval(`(() => {
     const b = document.getElementById('up-save');
     if (!b) return 'кнопки #up-save нет';
     const t = (b.textContent || '').trim();
     b.click();
     return 'НАЖАТА: "' + t + '"';
-  })()`, sessionId, panelCtx.id).catch((e) => 'ошибка: ' + e.message);
+  })()`, sessionId, ctxId, 4000).catch((e) => 'ошибка: ' + e.message);
 }
 
 
@@ -267,19 +285,11 @@ async function collectFromGame(browser) {
           mimeType: response.mimeType || 'text/plain' });
       }).catch(() => {}));
   };
-  try { await browser.send('Network.enable', {}, sessionId, 4000); log('   Network.enable ok'); }
-  catch (e) { log(`   Network.enable: ${e.message}`); }
-  try { await browser.send('Page.enable', {}, sessionId, 4000); log('   Page.enable ok'); }
-  catch (e) { log(`   Page.enable: ${e.message}`); }
-  try {
-    await browser.send('Page.navigate', { url: game.url }, sessionId, 8000);
-    log('   Page.navigate ok');
-  } catch (e) {
-    log(`   Page.navigate: ${e.message}`);
-    try { await browser.send('Page.reload', { ignoreCache: false }, sessionId, 6000); } catch { /* всё равно пробуем собирать */ }
-  }
-  await sleep(10000);
-  await Promise.race([Promise.all(pend), sleep(2000)]);
+  // игра на WebGL не отвечает на CDP быстро — потолок 4 с, иначе съедаем лимит шага
+  try { await browser.send('Network.enable', {}, sessionId, 1500); } catch (e) { log(`   Network.enable: ${e.message}`); }
+  try { await browser.send('Page.enable', {}, sessionId, 1000); } catch { /* не критично */ }
+  await sleep(2500);
+  await Promise.race([Promise.all(pend), sleep(500)]);
   log(`   ресурсов собрано: ${bodies.size} (${since()})`);
   return { sessionId, bodies };
 }
@@ -366,6 +376,42 @@ async function main() {
   // 0) нажатие: сначала прямо во фронтенде DevTools, затем вводом X11
   let pressed = false;
   let why = 'нажатие не выполнено';
+  // окно DevTools как CDP-цель: в нём и живёт панель с кнопкой
+  const devtoolsTarget = async () => {
+    const list = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json())
+      .catch(() => []);
+    return list.find((t) => (t.url || '').startsWith('devtools://')) || null;
+  };
+  let dt = null;
+  for (let i = 0; i < 12 && !dt; i++) { dt = await devtoolsTarget(); if (!dt) await sleep(1000); }
+  if (dt) {
+    log(`   окно DevTools: ${dt.url.slice(0, 80)}`);
+    const dw = await CDP.connect(dt.webSocketDebuggerUrl);
+    const contexts = [];
+    dw.onEvent = (m) => {
+      if (m.method === 'Runtime.executionContextCreated') contexts.push(m.params.context);
+    };
+    await dw.send('Runtime.enable', {}, undefined, 4000).catch((e) => log(`   Runtime.enable: ${e.message}`));
+    await sleep(1000);
+    log(`   контекстов DevTools: ${contexts.length}`);
+    for (const c of contexts) {
+      const has = await dw.eval('!!document.getElementById("up-save")', undefined, c.id, 2500)
+        .catch(() => false);
+      if (!has) continue;
+      why = await dw.eval(`(() => {
+        const b = document.getElementById('up-save');
+        const t = (b.textContent || '').trim();
+        b.click();
+        return 'НАЖАТА: "' + t + '"';
+      })()`, undefined, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
+      pressed = /НАЖАТА/.test(why);
+      log(`   ${why}`);
+      break;
+    }
+  } else {
+    log('   окно DevTools среди целей не найдено');
+  }
+
   const extId = process.env.EXT_ID || unpackedExtensionId(EXT_DIR);
 
   // 1) реальные ресурсы страницы — их панель заберёт через подмену chrome.devtools
@@ -380,7 +426,8 @@ async function main() {
     .replace('__HAR__', JSON.stringify(har));
   log(`   в шэм пойдёт ресурсов: ${resources.length}`);
 
-  let clicked = extId ? await pressViaIframe(browser, extId, shim) : 'EXT_ID не задан';
+  let clicked = pressed ? why
+    : (extId ? await pressViaIframe(browser, extId, shim) : 'EXT_ID не задан');
   why = String(clicked);
   log(`   панель в iframe: ${why}`);
   if (/НАЖАТА/.test(why)) pressed = true; else why = why;
