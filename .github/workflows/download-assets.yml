@@ -112,6 +112,15 @@ jobs:
       - name: Собрать spine-паки
         run: node scripts/spine-pack.mjs artifacts/anydownload artifacts/spine
 
+      - name: Распаковать спрайты из атласов
+        continue-on-error: true
+        run: |
+          python3 -m pip install --quiet Pillow
+          mkdir -p artifacts/sprites
+          python3 .codespace/unpack_atlases.py artifacts/anydownload \
+            --output artifacts/sprites
+          echo "распакованных спрайтов: $(find artifacts/sprites -type f | wc -l)"
+
       - name: Отчёт по Spine
         if: always()
         run: |
