@@ -500,6 +500,13 @@ async function main() {
   const browser = await CDP.connect(v.webSocketDebuggerUrl);
   log('Chrome подключён по CDP');
 
+  // Chrome 137+ больше не грузит --load-extension, поэтому расширение
+  // ставим через CDP — иначе все chrome-extension:// страницы блокируются
+  try {
+    const loaded = await browser.send('Extensions.loadUnpacked', { path: EXT }, undefined, 10000);
+    log(`   расширение загружено через CDP: ${(loaded && loaded.id) || 'ок'}`);
+  } catch (e) { log(`   Extensions.loadUnpacked: ${e.message}`); }
+
   // 1) вкладка с игрой (нажатие от неё не зависит — берём мягко)
   let sessionId = null;
   let bodies = new Map();

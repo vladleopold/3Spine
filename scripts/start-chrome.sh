@@ -41,9 +41,8 @@ DISPLAY=":$DISPLAY_NUM" "$CHROME_BIN" \
   --no-sandbox --disable-dev-shm-usage --no-first-run --no-default-browser-check \
   --disable-blink-features=AutomationControlled \
   --window-size=1500,950 --window-position=0,0 \
-  --disable-features=DisableLoadExtensionCommandLineSwitch \
   --enable-unsafe-extension-debugging \
-  --disable-features=Translate,OptimizationHints \
+  --disable-features=DisableLoadExtensionCommandLineSwitch,Translate,OptimizationHints \
   --disable-extensions-except="$EXT_DIR" \
   --load-extension="$EXT_DIR" \
   "$URL_" >/tmp/chrome.log 2>&1 &
