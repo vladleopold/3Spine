@@ -7,63 +7,91 @@ on:
         description: 'URL через запятую (пусто = дефолтный список из 7 игр)'
         required: false
         type: string
-      game_url:
-        description: 'Игровой шелл (если уже найден) — через запятую'
-        required: false
-        type: string
       wait_ms:
-        description: 'Доп. ожидание догрузки, мс'
+        description: 'Доп. ожидание после загрузки (мс)'
         required: false
         default: '35000'
         type: string
+      full:
+        description: 'Прогнать все URL в одной job вместо матрицы'
+        required: false
+        default: 'false'
+        type: string
 
 jobs:
-  download:
+  tests:
+    name: Тесты логики сейвера
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    permissions:
-      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: unit-тесты (пути, манифесты, Spine-пары)
+        run: npm test
 
+  download:
+    name: ${{ matrix.name }}
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: first-ua-kendoo
+            url: 'https://first.ua/ua/igrovie-avtomaty/kendoo/4-gold-carts'
+          - name: slotcity-spinjoy
+            url: 'https://slotcity.ua/?modals=game&game-term=spinjoy-meduzas-fortune&demo=true'
+          - name: cosmolot-demonic-dolls
+            url: 'https://cosmolot.ua/ua/game/demonic-dolls'
+          - name: playson-clover-strike
+            url: 'https://playson.com/game/clover-strike-hold-and-win'
+          - name: 3oaks-superpower-diamonds
+            url: 'https://3oaks.com/game/3_superpower_diamonds'
+          - name: slotor777-demo
+            url: 'https://slotor777.ua/ru/game/view/56dab5f9954f459f919d800306e48b35?mode=demo'
+          - name: beton-dog-house
+            url: 'https://beton.ua/game/pragmaticplay-direct-the-dog-house-megaways-1000?isDemo=true'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
 
-      - name: Install Playwright browsers
-        run: npx playwright install chromium --with-deps
-
-      - name: Download resources
+      - name: Скачать все ресурсы игры
         env:
-          URLS: ${{ github.event.inputs.urls || '' }}
-          GAME_URL: ${{ github.event.inputs.game_url }}
-          WAIT_MS: ${{ github.event.inputs.wait_ms || '35000' }}
+          URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           OUTPUT_DIR: ./artifacts
+          WAIT_MS: ${{ inputs.wait_ms || '35000' }}
           HEADLESS: 'true'
-        run: npm run download
+        run: node scripts/download-resources.mjs
 
-      - name: Отчёт по Spine-ассетам
+      - name: Отчёт по Spine
         if: always()
         run: |
           set -euo pipefail
-          echo "Файлов: $(find artifacts -type f | wc -l)"
-          echo "atlas:  $(find artifacts -type f -name '*.atlas' | wc -l)"
-          echo "skel:   $(find artifacts -type f -name '*.skel'  | wc -l)"
-          echo "json:   $(find artifacts -type f -name '*.json'  | wc -l)"
-          echo "images: $(find artifacts -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.webp' -o -name '*.avif' \) | wc -l)"
+          A=$(find artifacts -type f -name '*.atlas' 2>/dev/null | wc -l)
+          K=$(find artifacts -type f -name '*.skel'  2>/dev/null | wc -l)
+          B=$(find artifacts -type f -name '*.bin'   2>/dev/null | wc -l)
+          N=$(find artifacts -type f 2>/dev/null | wc -l)
+          IMG=$(find artifacts -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.webp' -o -name '*.avif' \) 2>/dev/null | wc -l)
+          printf '### %s\nфайлов: %s | atlas: %s | skel: %s | bin: %s | картинок: %s\n\n' \
+            "${{ matrix.name }}" "$N" "$A" "$K" "$B" "$IMG" >> "$GITHUB_STEP_SUMMARY"
+          echo "файлов=$N atlas=$A skel=$K bin=$B img=$IMG"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: slot-resources-${{ github.run_id }}
-          path: |
-            artifacts/*.zip
-            artifacts/**
+          name: slot-${{ matrix.name }}-${{ github.run_id }}
+          path: artifacts
           retention-days: 14
           if-no-files-found: warn

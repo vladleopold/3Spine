@@ -9,6 +9,19 @@ import path from 'path';
 import { createWriteStream } from 'fs';
 import archiver from 'archiver';
 import { URL } from 'url';
+import fsSync from 'fs';
+
+// системный Chrome, если не заданы playwright-браузеры (экономит ~150 МБ в CI)
+function systemChrome() {
+  const cands = [
+    process.env.CHROME_PATH || '',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
+  ];
+  for (const c of cands) { if (c && fsSync.existsSync(c)) return c; }
+  return '';
+}
+const EXEC = systemChrome();
 
 const DEFAULT_URLS = [
   'https://first.ua/ua/igrovie-avtomaty/kendoo/4-gold-carts',
@@ -37,6 +50,7 @@ const SPINE_EXT = /\.(atlas|skel|bin)$/i;
 
 const manifestUrls = new Set();                     // url -> из манифестов
 const spineUrls = new Set();                        // найденные Spine-ассеты
+const seenHosts = new Set();                        // все хосты, что реально стучались
 
 const log = (...a) => console.log(...a);
 
@@ -89,6 +103,87 @@ function harvest(src, base, depth, out, seen) {
   }
 }
 
+
+// ---------------------------------------------------------------- резолвер шелла
+// Страница казино — обёртка: сама игра лежит на отдельном хосте. Ищем её через
+// API площадки (каталог игр → demo-endpoint) и идём туда в этой же сессии.
+const SLUG_RE = /(?:game-term|game=|term=|\/game\/view\/|\/)([a-z0-9][a-z0-9_-]{3,60})\/?(?:$|[?#&])/i;
+
+async function resolveGameUrl(ctx, page, pageUrl) {
+  const slug = (() => {
+    try {
+      const u = new URL(pageUrl);
+      const m = u.searchParams.get('game-term') || u.searchParams.get('game')
+        || u.pathname.split('/').filter(Boolean).pop();
+      return (m || SLUG_RE.exec(pageUrl)?.[1] || '').toLowerCase();
+    } catch { return ''; }
+  })();
+
+  // 1) кандидаты в API-хосты: из уже пойманной сети + из HTML
+  const hosts = new Set();
+  for (const u of seenHosts) {
+    const h = (() => { try { return new URL(u).hostname; } catch { return ''; } })();
+    if (/^(api\d?v?\d*|api-gw|games-api)\./.test(h)) hosts.add(h);
+  }
+  try {
+    const html = await page.content().catch(() => '');
+    for (const m of html.matchAll(/"(https?:\/\/[a-z0-9.-]+)"/gi)) {
+      try {
+        const h = new URL(m[1].replace(/&quot;/g, '')).hostname;
+        if (/^(api\d?v?\d*)\./.test(h)) hosts.add(h);
+      } catch { /* не URL */ }
+    }
+  } catch { /* нет DOM */ }
+
+  if (!hosts.size) return '';
+  log(`  → ищу игру по «${slug || '?'}» через API: ${[...hosts].join(', ')}`);
+
+  // 2) каталог игр площадки → provider/term/id
+  for (const host of hosts) {
+    const api = `https://${host}`;
+    for (const cat of ['/games/providers/games', '/api/games/providers/games', '/games']) {
+      let games;
+      try {
+        const r = await page.request.get(api + cat, { timeout: 12000 });
+        if (!r.ok()) continue;
+        games = await r.json();
+      } catch { continue; }
+      const flat = (Array.isArray(games) ? games : games?.games
+        || games?.data?.games || games?.data || []).flat(9)
+        .filter((g) => g && typeof g === 'object');
+      const hit = flat.find((g) => {
+        const t = String(g.term || g.slug || g.name_slug || '').toLowerCase();
+        return slug && t && (t === slug || t.includes(slug) || slug.includes(t));
+      });
+      if (!hit) continue;
+      const provider = hit.provider || hit.provider_name || hit.p || '';
+      const term = hit.term || hit.slug || slug;
+      const id = hit.id || hit.game_id || '';
+      log(`  → каталог: игра «${hit.name || hit.title || term}» (id=${id}, провайдер=${provider})`);
+
+      // 3) demo-endpoint → реальный игровой URL
+      for (const u of [
+        `${api}/games/demo?provider=${encodeURIComponent(provider)}&term=${encodeURIComponent(term)}`,
+        `${api}/games/${id}/demo`,
+        `${api}/games/play?provider=${encodeURIComponent(provider)}&term=${encodeURIComponent(term)}&demo=true`,
+      ]) {
+        try {
+          const r = await page.request.get(u, { timeout: 12000 });
+          if (!r.ok()) continue;
+          const j = await r.json();
+          const g = typeof j === 'string' ? j : (j.url || j.game_url || j.launch_url
+            || j.data?.url || j.game?.url);
+          if (g && /^https?:/i.test(g)) {
+            log(`  → запускающий URL: ${g.slice(0, 120)}`);
+            return g;
+          }
+        } catch { /* следующий вариант */ }
+      }
+    }
+  }
+  return '';
+}
+
 // ---------------------------------------------------------------- сохранение
 async function saveBytes(resUrl, buf, outRoot, saved) {
   if (!buf || buf.length === 0) return false;
@@ -98,6 +193,7 @@ async function saveBytes(resUrl, buf, outRoot, saved) {
   await fs.ensureDir(path.dirname(localPath));
   await fs.writeFile(localPath, buf);
   saved.set(resUrl, localPath);
+  try { seenHosts.add(new URL(resUrl).hostname); } catch { /* не URL */ }
   const kb = (buf.length / 1024).toFixed(1);
   const tag = SPINE_EXT.test(resUrl) ? '★SPINE' : '     ';
   log(`  ✓ ${tag} ${kb.padStart(8)} KB  ${resUrl.slice(0, 110)}`);
@@ -123,10 +219,13 @@ async function saveResponse(response, outRoot, saved) {
 }
 
 // ---------------------------------------------------------------- один URL
-async function capturePage(browser, url, outRoot, saved) {
-  log(`\n════ ${url}`);
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+  + '(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+
+async function openCtx() {
   const opts = {
     headless: HEADLESS,
+    ...(EXEC ? { executablePath: EXEC } : {}),
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
       '--disable-gpu', '--disable-web-security',
@@ -135,34 +234,39 @@ async function capturePage(browser, url, outRoot, saved) {
       '--disable-blink-features=AutomationControlled',
     ],
   };
-  let ctx, browser2 = null;
   if (PROFILE) {
     await fs.ensureDir(PROFILE);
-    ctx = await chromium.launchPersistentContext(PROFILE, {
+    return await chromium.launchPersistentContext(PROFILE, {
       ...opts,
       proxy: PROXY ? { server: PROXY } : undefined,
       ignoreHTTPSErrors: true,
       viewport: { width: 1920, height: 1080 },
       locale: 'uk-UA',
       extraHTTPHeaders: { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        + '(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-    });
-  } else {
-    browser2 = await chromium.launch(opts);
-    ctx = await browser2.newContext({
-      proxy: PROXY ? { server: PROXY } : undefined,
-      viewport: { width: 1920, height: 1080 },
-      ignoreHTTPSErrors: true,
-      javaScriptEnabled: true,
-      locale: 'uk-UA',
-      extraHTTPHeaders: { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' },
-      permissions: ['clipboard-read', 'clipboard-write'],
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        + '(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+      userAgent: UA,
     });
   }
+  const b = await chromium.launch(opts);
+  const c = await b.newContext({
+    proxy: PROXY ? { server: PROXY } : undefined,
+    viewport: { width: 1920, height: 1080 },
+    ignoreHTTPSErrors: true,
+    javaScriptEnabled: true,
+    locale: 'uk-UA',
+    extraHTTPHeaders: { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' },
+    permissions: ['clipboard-read', 'clipboard-write'],
+    userAgent: UA,
+  });
+  c.__browser = b;
+  return c;
+}
 
+async function closeCtx(ctx) {
+  try { await (ctx.__browser ? ctx.__browser.close() : ctx.close()); } catch { /* уже закрыт */ }
+}
+
+async function capturePage(ctx, url, outRoot, saved) {
+  log(`\n════ ${url}`);
   const page = ctx.pages()[0] || await ctx.newPage();
   // снимаем признак автоматизации (Cloudflare / fingerprint-чеки)
   await ctx.addInitScript(() => {
@@ -248,8 +352,23 @@ async function capturePage(browser, url, outRoot, saved) {
     await walk(frameTree);
   } catch { /* не критично */ }
 
-  if (browser2) await browser2.close();
-  else await ctx.close();
+  return page;
+}
+
+function countSpine(dir) {
+  let atlas = 0, skel = 0;
+  const walk = (d) => {
+    let items = [];
+    try { items = fsSync.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const p = path.join(d, it.name);
+      if (it.isDirectory()) walk(p);
+      else if (/\.atlas$/i.test(it.name)) atlas++;
+      else if (/\.(skel|bin)$/i.test(it.name)) skel++;
+    }
+  };
+  walk(dir);
+  return Math.min(atlas, skel);
 }
 
 // ---------------------------------------------------------------- ZIP
@@ -279,23 +398,32 @@ async function main() {
     const dir = path.join(OUTPUT_DIR, safe);
     await fs.ensureDir(dir);
 
-    const browser = await chromium.launch({
-      headless: HEADLESS,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-        '--disable-gpu', '--disable-web-security', '--allow-running-insecure-content'],
-    });
-    await capturePage(browser, url, dir, all);
-    // игровой шелл — в той же сессии
-    if (GAME_URL && GAME_URL !== url) {
-      await capturePage(browser, GAME_URL, dir, all);
+    // развёрнутая сессия: один контекст на все проходы — куки/память игры живут
+    const ctx = await openCtx();
+    let page = await capturePage(ctx, url, dir, all);
+    const spineBefore = spineUrls.size;
+
+    // проход 2: если Spine не нашлись — сами находим игровой шелл через API
+    if (!spineBefore) {
+      const game = GAME_URL && GAME_URL !== url ? GAME_URL : await resolveGameUrl(ctx, page, url);
+      if (game) {
+        log('  → Spine на странице нет, иду в игровой шелл (та же сессия)');
+        page = await capturePage(ctx, game, dir, all);
+        // проход 3: шелл мог подставить ещё одну ссылку
+        if (!spineUrls.size) {
+          const g2 = await resolveGameUrl(ctx, page, game);
+          if (g2 && g2 !== game) await capturePage(ctx, g2, dir, all);
+        }
+      }
     }
-    await browser.close().catch(() => {});
+    await closeCtx(ctx);
 
     // добираем файлы из манифестов (то, что страница не запросила, но нужно)
     if (manifestUrls.size) {
       log(`  → добираю из манифестов: ${manifestUrls.size}`);
       const ctx2 = await chromium.launchPersistentContext(PROFILE || path.join(OUTPUT_DIR, '.tmp-profile'),
-        { headless: HEADLESS, args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-web-security'] });
+        { headless: HEADLESS, ...(EXEC ? { executablePath: EXEC } : {}),
+          args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-web-security'] });
       const p2 = ctx2.pages()[0] || await ctx2.newPage();
       let n = 0;
       for (const u of Array.from(manifestUrls).slice(0, 4000)) {
@@ -310,17 +438,24 @@ async function main() {
     }
 
     const cnt = all.size;
-    log(`\n  Итого по ${safe}: ${cnt} файлов (Spine: ${spineUrls.size})`);
+    const spine = all.size ? countSpine(dir) : 0;
+    log(`\n  Итого по ${safe}: ${cnt} файлов (Spine: ${spine})`);
     if (cnt > 0) {
       const zip = path.join(OUTPUT_DIR, `${safe}.zip`);
       await createZip(dir, zip);
       log(`  → ZIP: ${zip}`);
     }
     await fs.writeJson(path.join(dir, 'saver-report.json'), {
-      url, files: cnt, spine: spineUrls.size, manifestUrls: manifestUrls.size,
+      url, files: cnt, spine, manifestUrls: manifestUrls.size,
     }, { spaces: 2 });
   }
   log('\nГотово.');
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// тесты импортируют модуль — main() только при прямом запуске
+const isDirectRun = process.argv[1] && process.argv[1].endsWith('download-resources.mjs');
+if (isDirectRun) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}
+
+export { sanitizePath, harvest, countSpine, resolveGameUrl, openCtx, closeCtx, capturePage };
