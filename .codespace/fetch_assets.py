@@ -39,6 +39,7 @@ REJECTED = []
 MANIFESTS = []
 REMOTE = {}
 NAME2URL = {}
+URL2NAME = {}
 
 
 def _guard_state(url: str, data: bytes) -> str:
@@ -111,8 +112,10 @@ def manifest_index(urls) -> dict:
             continue
         base = u.rsplit("/", 1)[0] + "/"
         for files, name in parse_manifest(body):
-            out.setdefault(name, base + files)
-            out.setdefault(name.rsplit("/", 1)[-1], base + files)
+            full = base + files
+            out.setdefault(name, full)
+            out.setdefault(name.rsplit("/", 1)[-1], full)
+            URL2NAME.setdefault(full, name)          # чтобы сохранять под логическим именем
     return out
 
 
@@ -460,7 +463,7 @@ def download_set(urls, root: str, workers: int, timeout: int, log_prefix: str) -
     done = [0]
 
     def one(u: str):
-        rel = u.split("://", 1)[-1].split("/", 1)[-1] or "index"
+        rel = URL2NAME.get(u) or u.split("://", 1)[-1].split("/", 1)[-1] or "index"
         rel = re.sub(r"[\\:*?\"<>|]", "_", rel)
         dst = os.path.join(root, rel)
         if os.path.exists(dst) and os.path.getsize(dst) > 0:
