@@ -89,14 +89,22 @@ class HealReader(Spine38BinaryReader):
         self.scale = 1.0
         self._pending = []
         self.last_unknown = None
+        self.best_effort = False
+        self.eof_zero = False
+        self.soft_errors: list = []
 
     def _need(self, n: int) -> None:
         if self.upos + n > len(self.units):
+            if self.eof_zero:
+                return
             raise EOFError(f"нужно {n} байт на позиции {self.upos}, всего {len(self.units)}")
 
     def _unit(self, role: str) -> int:
         if self._pending:
             return self._pending.pop(0)
+        if self.eof_zero and self.upos >= len(self.units):
+            self.upos += 1
+            return 0x00            # хвост файла: подставляем ноль вместо исключения
         self._need(1)
         u = self.units[self.upos]
         idx = self.upos
@@ -116,6 +124,16 @@ class HealReader(Spine38BinaryReader):
         self.applied.append((idx, width, value, role))
         self._pending = [0x00] * (width - 1)
         return value & 0xFF
+
+    # ---- режим «дочитывания»: сбой внутри вложенной структуры не роняет весь файл ----
+    def soft(self, fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:            # noqa: BLE001
+            self.soft_errors.append(f"{type(e).__name__}: {e}")
+            if not self.best_effort:
+                raise
+            return None
 
     def read_byte(self) -> int:
         return self._unit("byte")
@@ -175,9 +193,50 @@ class HealReader(Spine38BinaryReader):
         self.upos = v
 
 
-def parse_once(units, decisions=None):
+def make_soft_reader_class():
+    """Класс чтения с tolerant-грамматикой (индексы проверяются)."""
+    return tolerant_reader_class()
+
+
+class SoftReader(HealReader):
+    """HealReader, который не сдаётся на первом битом байте.
+
+    Вложенные структуры (анимации, вложения скина) при сбое пропускаются,
+    а разбор продолжается — так из сильно повреждённого файла получается
+    пригодный для просмотра скелет: кости, слоты, уцелевшие анимации.
+    """
+
+    def _read_animation(self, *a, **kw):
+        try:
+            anim = super()._read_animation(*a, **kw)
+        except Exception as e:            # noqa: BLE001
+            self.soft_errors.append(f"animation: {type(e).__name__}: {e}")
+            return None
+        if anim and isinstance(anim, dict):
+            name = anim.get("name") or "animation"
+            self.kept.setdefault("animations", {})[name] = anim
+        return anim
+
+    def _read_attachment(self, *a, **kw):
+        try:
+            return super()._read_attachment(*a, **kw)
+        except Exception as e:            # noqa: BLE001
+            self.soft_errors.append(f"attachment: {type(e).__name__}: {e}")
+            return None
+
+    @property
+    def kept(self) -> dict:
+        if not hasattr(self, "_kept"):
+            self._kept = {}
+        return self._kept
+
+
+def parse_once(units, decisions=None, best_effort=False):
     """Один проход грамматики. Всегда возвращает (json|None, reader, error|None)."""
-    r = HealReader(units, decisions)
+    cls = make_soft_reader_class() if best_effort else SoftReader
+    r = cls(units, decisions)
+    r.best_effort = best_effort
+    r.eof_zero = best_effort
     try:
         data = r.read_skeleton_data()
     except Exception as e:            # noqa: BLE001
@@ -570,6 +629,152 @@ def sanitize(doc):
         doc["animations"] = {(_clean_name(k, "animation")): v for k, v in anims.items()}
     walk(doc.get("animations"))
     return doc
+
+
+def align_repair(units, time_limit: float = 100.0, allow_tail: float = 0.0, beam: int = 40):
+    """Восстановление выравнивания перебором комбинаций.
+
+    Один U+FFFD скрывает 1..4 исходных байта, из-за чего разбор разходится с
+    реальностью. Состояние поиска — назначенная ширина для каждого неизвестного
+    байта; мера прогресса — позиция разбора. Из состояния пробуем все варианты
+    для первого нерешённого байта перед точкой сбоя, лучшие состояния ведём
+    дальше (луч поиска). Возвращает (json|None, reader|None, инфо).
+    """
+    import time as _t
+    t0 = _t.monotonic()
+    unks = [i for i, u in enumerate(units) if isinstance(u, tuple)]
+    if not unks:
+        return None, None, {"error": "нет неизвестных байтов"}
+    seen = set()
+    queued = set()
+    attempts = 0
+
+    def run(state):
+        nonlocal attempts
+        attempts += 1
+        p, r, e = parse_tolerant(units, state)
+        if p is not None and _plausible(p) and _tail_is_clean(units, r.upos, allow_tail):
+            return "ok", r.upos, p, r
+        return "bad", (r.upos if r else -1), None, e
+
+    def done(p, r, st):
+        return p, r, {"attempts": attempts, "fixes": len(st),
+                      "seconds": round(_t.monotonic() - t0, 1)}
+
+    frontier = [{}]
+    while frontier and _t.monotonic() - t0 < time_limit:
+        scored = []
+        for st in frontier:
+            kk = tuple(sorted(st.items()))
+            if kk in seen:
+                continue
+            seen.add(kk)
+            status, pos, p_obj, r_obj = run(st)
+            if status == "ok":
+                return done(p_obj, r_obj, st)
+            if _t.monotonic() - t0 >= time_limit:
+                break
+            scope = [j for j in unks if j < pos and j not in st]
+            if scope:
+                j = scope[0]
+                for w in (1, 2, 3, 4):
+                    t2 = dict(st)
+                    if w != 1:
+                        t2[j] = (w, 0x00)
+                    nxt_key = tuple(sorted(t2.items()))
+                    if nxt_key in seen or nxt_key in queued:
+                        continue
+                    queued.add(nxt_key)
+                    s2, p2, o2, x2 = run(t2)
+                    if s2 == "ok":
+                        return done(p2, o2, t2)
+                    scored.append((p2, t2))
+            else:
+                prev = sorted(st)
+                if not prev:
+                    continue
+                j = prev[-1]
+                for w in (2, 3, 4):
+                    t2 = dict(st)
+                    t2[j] = (w, 0x00)
+                    nxt_key = tuple(sorted(t2.items()))
+                    if nxt_key in seen or nxt_key in queued:
+                        continue
+                    queued.add(nxt_key)
+                    s2, p2, o2, x2 = run(t2)
+                    if s2 == "ok":
+                        return done(p2, o2, t2)
+                    scored.append((p2, t2))
+        if not scored:
+            break
+        scored.sort(key=lambda x: -x[0])
+        frontier = [st for _pos, st in scored[:beam]]
+    return None, None, {"error": "комбинации не нашлись", "attempts": attempts,
+                        "seconds": round(_t.monotonic() - t0, 1)}
+
+
+SAFE_PATCHES = (
+    ('bone["parent"] = bones[parent_idx]["name"]',
+     'bone["parent"] = bones[parent_idx]["name"] if 0 <= parent_idx < len(bones) else (bones[-1]["name"] if bones else "root")'),
+    ('"bone": bones[bone_idx]["name"],',
+     '"bone": bones[bone_idx]["name"] if 0 <= bone_idx < len(bones) else (bones[0]["name"] if bones else "root"),'),
+    ('slot_name = slots[slot_idx]["name"]',
+     'slot_name = slots[slot_idx]["name"] if 0 <= slot_idx < len(slots) else (slots[0]["name"] if slots else "")'),
+    ('bone_name = bones[bone_idx]["name"]',
+     'bone_name = bones[bone_idx]["name"] if 0 <= bone_idx < len(bones) else (bones[0]["name"] if bones else "root")'),
+    ('"slot": slots[slot_idx]["name"]',
+     '"slot": slots[slot_idx]["name"] if 0 <= slot_idx < len(slots) else (slots[0]["name"] if slots else "")'),
+)
+
+
+def _load_tolerant_grammar():
+    """Грамматика 3.8 с проверяемыми индексами: битый индекс не роняет разбор.
+
+    Класс собирается как подкласс HealReader (примитивы чтения с подстановкой
+    неизвестных байтов), но с методами грамматики из пропатченного исходника.
+    """
+    import types
+    path = os.path.join(HERE, "spine_restore", "spine38_binary_to_json.py")
+    with open(path, encoding="utf-8") as f:
+        src = f.read()
+    for old, new in SAFE_PATCHES:
+        src = src.replace(old, new)
+    # оставшиеся «списочные» индексы из read_int_var — заменяем на безопасный вид
+    import re as _re
+    src = _re.sub(r"(\w+)\[self\.read_int_var\(True\)\]\[.name.\]",
+                  r'_safe(\1, self.read_int_var(True))', src)
+    src = _re.sub(r"\[(\w+)\[self\.read_int_var\(True\)\]\[.name.\] for _ in range\((\w+)\)\]",
+                  r'[_safe(\1, self.read_int_var(True)) for _ in range(\2)]', src)
+    helper = """
+def _safe(seq, idx, default="root"):
+    try:
+        return seq[idx]["name"] if 0 <= idx < len(seq) else default
+    except Exception:
+        return default
+"""
+    src = src.replace("class Spine38BinaryReader:", helper + "\n\nclass Spine38BinaryReader:", 1)
+    mod = types.ModuleType("spine38_tolerant")
+    mod.__file__ = path
+    exec(compile(src, path, "exec"), mod.__dict__)
+    patched = mod.Spine38BinaryReader
+    # примитивы чтения остаются от HealReader (в них подставляются неизвестные байты)
+    own = {"_need", "read_byte", "read_sbyte", "read_boolean", "read_int", "read_int_var",
+           "read_float", "read_string", "read_string_ref", "read_color_rgba",
+           "read_skeleton_data", "pos"}
+    methods = {k: v for k, v in patched.__dict__.items()
+               if callable(v) and not k.startswith("__") and k not in own}
+    methods["read_skeleton_data"] = patched.__dict__["read_skeleton_data"]
+    return type("TolerantGrammar", (HealReader,), methods)
+
+
+TolerantGrammar = None
+
+
+def tolerant_reader_class():
+    global TolerantGrammar
+    if TolerantGrammar is None:
+        TolerantGrammar = _load_tolerant_grammar()
+    return TolerantGrammar
 
 
 HINTS_CACHE = os.path.join(HERE, "repair_hints.json")
