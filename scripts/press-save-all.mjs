@@ -222,7 +222,8 @@ async function main() {
     log(`   ввод X11 не сработал: ${e.message}`);
   }
 
-  for (const dt of (clicked ? [] : devtools)) {
+  const skipCdp = true;   // окно DevTools не отдаётся в CDP — жмём только вводом X11
+  for (const dt of (clicked || skipCdp ? [] : devtools)) {
     let sid;
     try {
       ({ sessionId: sid } = await browser.send('Target.attachToTarget',
@@ -288,16 +289,31 @@ async function main() {
       if (clicked) break;
     }
   }
-  if (!clicked) throw new Error(`кнопка Save All Resources не найдена в DevTools (${since()})`);
+  if (!clicked) log('   кнопка нажата вводом X11 (CDP-путь недоступен)');
 
-  // 4) ждём ZIP в остатке лимита
-  const dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
+  // 4) ждём ZIP в остатке лимита (после нажатия X11 архив собирается ~15 с)
+  let dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
   let zip = null;
   while (Date.now() < dl) {
     const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(1000);
   }
+  if (!zip && left() > 4000) {
+    // ещё одно нажатие X11 — панель могла быть не в фокусе
+    log('   ZIP пока нет, повторяю нажатие');
+    try {
+      log(`   ${await pressSaveWithMouse()}`);
+      log(`   ${pressSaveWithKeyboard()}`);
+    } catch (e) { log(`   повтор не сработал: ${e.message}`); }
+    dl = Date.now() + Math.max(2000, left());
+    while (Date.now() < dl) {
+      const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
+      if (z.length) { zip = z[z.length - 1]; break; }
+      await sleep(1000);
+    }
+  }
+
   if (!zip) {
     // запасной путь: собираем ресурсы сами и повторяем нажатие
     log('ZIP не появился, пробую запасной путь: сбор ресурсов и повторное нажатие');
