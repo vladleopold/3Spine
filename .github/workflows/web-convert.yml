@@ -40,7 +40,6 @@ jobs:
           python3 .codespace/prepare_input.py input.zip input.zip
 
       - name: Unpack block → /images (atlases → subfolders, параллельно)
-        env:
         run: |
           set -euo pipefail
           python3 -m pip install --quiet Pillow
