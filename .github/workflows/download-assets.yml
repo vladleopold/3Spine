@@ -109,6 +109,13 @@ jobs:
             -v
           echo "файлов AnyDownload: $(find artifacts/anydownload -type f | wc -l)"
 
+      - name: Восстановить имена файлов (hash_to_name)
+        continue-on-error: true
+        run: |
+          # файлы приходят хеш-именами (кэш CDN) → возвращаем originals по манифестам игры
+          python3 .codespace/hash_to_name/manifest_resolver.py artifacts/anydownload --apply
+          python3 .codespace/hash_to_name/restore_names_cli.py artifacts/anydownload
+
       - name: Собрать spine-паки
         run: node scripts/spine-pack.mjs artifacts/anydownload artifacts/spine
 
@@ -117,9 +124,6 @@ jobs:
         run: |
           python3 -m pip install --quiet Pillow
           mkdir -p artifacts/sprites
-          # атласы ссылаются на логические имена (symbols.png), файлы хешованные —
-          # строим алиасы по манифесту из launcher.js
-          python3 .codespace/resolve_sprite_names.py artifacts/anydownload
           UNPACK_LAYOUT=global python3 .codespace/unpack_atlases.py artifacts/anydownload \
             --output artifacts/sprites
           echo "распакованных спрайтов: $(find artifacts/sprites -type f | wc -l)"
