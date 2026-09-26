@@ -559,6 +559,39 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       await sleep(1500);
     }
 
+    // Панель расширения — отдельный документ (фрейм) внутри окна DevTools.
+    // В нём работает настоящий chrome.devtools, поэтому кнопку жмём прямо там.
+    {
+      const tree = await browser.send('Page.getFrameTree', {}, sid, 5000).catch(() => null);
+      const frames = [];
+      if (tree && tree.frameTree) {
+        const walk = (n, d) => {
+          frames.push({ id: n.frame.id, url: n.frame.url || '', d });
+          (n.childFrames || []).forEach((c) => walk(c, d + 1));
+        };
+        walk(tree.frameTree, 0);
+      }
+      log(`   фреймов после открытия панели: ${frames.length}`);
+      for (const f of frames) log(`      ${'  '.repeat(f.d)}[${String(f.url).slice(0, 90)}]`);
+      for (const f of frames.slice(1)) {
+        const w = await browser.send('Page.createIsolatedWorld',
+          { frameId: f.id, worldName: 'panel', grantUniveralAccess: true }, sid, 5000).catch(() => null);
+        if (!w || !w.executionContextId) { log(`   фрейм ${f.id.slice(0, 6)}: мир не создался`); continue; }
+        const has = await browser.eval('!!document.getElementById("up-save")', sid, w.executionContextId, 3000)
+          .catch(() => false);
+        log(`   фрейм ${f.id.slice(0, 6)}: кнопка ${has ? 'есть' : 'нет'}`);
+        if (!has) continue;
+        const res = await browser.eval(`(() => {
+          const b = document.getElementById('up-save');
+          const t = (b.textContent || '').trim();
+          b.click();
+          return 'НАЖАТА: "' + t + '"';
+        })()`, sid, w.executionContextId, 4000).catch((e) => 'ошибка: ' + e.message);
+        log(`   ${res}`);
+        if (/НАЖАТА/.test(String(res))) return res;
+      }
+    }
+
     for (let i = 0; i < 8; i++) {
       const tabs = await browser.eval(`(() => {
         const roots = (${SHADOW_ROOTS})(document);
