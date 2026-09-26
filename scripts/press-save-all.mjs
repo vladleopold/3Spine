@@ -211,6 +211,8 @@ async function main() {
   log(`окон DevTools среди целей: ${devtools.length}`);
   if (!devtools.length) throw new Error('не найдено ни одного окна DevTools');
 
+  let pc = null;   // панель по CDP недоступна, используется только X11
+
   // 0) сначала настоящее нажатие вводом X11 — окно DevTools недоступно по CDP
   let clicked = null;
   try {
@@ -316,14 +318,15 @@ async function main() {
 
   if (!zip) {
     // запасной путь: собираем ресурсы сами и повторяем нажатие
-    log('ZIP не появился, пробую запасной путь: сбор ресурсов и повторное нажатие');
+    log('нажатие не дало архива, пробую запасной путь: сбор ресурсов и повторное нажатие');
     await collectResources();
-    const again = await pc.eval(`(() => {
+    if (!pc) { log('   панель недоступна по CDP, повторное нажатие только вводом X11'); }
+    const again = pc ? await pc.eval(`(() => {
       const b = document.getElementById('up-save');
       if (!b) return 'кнопки нет';
       b.click();
       return 'повторно нажата';
-    })()`).catch((e) => 'ошибка: ' + e.message);
+    })()`).catch((e) => 'ошибка: ' + e.message) : 'пропущено';
     log(`   ${again} (${since()})`);
     const dl2 = Date.now() + Math.max(2000, left());
     while (Date.now() < dl2) {
@@ -332,7 +335,10 @@ async function main() {
       await sleep(1000);
     }
   }
-  if (!zip) throw new Error(`ZIP не появился после нажатия кнопки (${since()})`);
+  if (!zip) {
+    // главный вывод: кнопка не нажата (окно не активировалось) — архив не начи��ался
+    throw new Error(`кнопка Save All Resources не нажата — архив не создавался (${since()})`);
+  }
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
   process.exit(0);
 }

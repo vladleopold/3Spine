@@ -23,6 +23,17 @@ fi
 echo "DISPLAY=:$DISPLAY_NUM" >> "$GITHUB_ENV"
 log "Xvfb готов на :$DISPLAY_NUM"
 
+# window manager: без него xdotool не может активировать окно (_NET_ACTIVE_WINDOW)
+if ! pgrep -x matchbox-window-manager >/dev/null 2>&1; then
+  if ! command -v matchbox-window-manager >/dev/null 2>&1; then
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq matchbox-window-manager >/dev/null
+  fi
+  DISPLAY=":$DISPLAY_NUM" matchbox-window-manager -use_titlebar no >/dev/null 2>&1 &
+  sleep 1
+fi
+log "window manager запущен"
+
 # 2) Chrome с расширением и ссылкой
 DISPLAY=":$DISPLAY_NUM" "$CHROME_BIN" \
   --remote-debugging-port="$PORT" \
