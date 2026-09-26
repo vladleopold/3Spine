@@ -527,13 +527,66 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       if (n > bestN) { bestN = n; best = cx; }
     }
     if (!best) continue;
-    // весь UI DevTools лежит в shadow root, а панели открываются через
-    // UI.InspectorView.instance() — именно он живой в загруженном фронтенде
-    const isFrontend = await browser.eval(
-      '!!(globalThis.UI && UI.InspectorView && UI.InspectorView.instance)',
-      sid, best.id, 3000).catch(() => false);
-    if (!isFrontend) continue;
+    // весь UI DevTools лежит в shadow root, а приватные API (UI.InspectorView)
+    // в сборке 153 недоступны — работаем через настоящий UI: вкладка и кнопка
+    const isDevtoolsDoc = await browser.eval(
+      "String(location.href).startsWith('devtools://')", sid, best.id, 3000).catch(() => false);
+    if (!isDevtoolsDoc) continue;
+
+    const SHADOW_ROOTS = `(root) => {
+      const out = [root];
+      const scan = (r) => {
+        const all = r.querySelectorAll ? r.querySelectorAll('*') : [];
+        for (const el of all) if (el.shadowRoot) { out.push(el.shadowRoot); scan(el.shadowRoot); }
+      };
+      scan(root);
+      return out;
+    }`;
+
     for (let i = 0; i < 8; i++) {
+      const tabs = await browser.eval(`(() => {
+        const roots = ${SHADOW_ROOTS}(document);
+        const names = [];
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          const role = el.getAttribute && el.getAttribute('role');
+          if (role !== 'tab') continue;
+          const t = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+          if (t && t.length < 40) names.push(t);
+        }
+        return 'вкладки: ' + [...new Set(names)].join(' | ').slice(0, 300);
+      })()`, sid, best.id, 3000).catch((e) => 'вкладки: ошибка ' + e.message);
+      log(`   ${tabs}`);
+
+      const tabClicked = await browser.eval(`(() => {
+        const roots = ${SHADOW_ROOTS}(document);
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          if (el.children.length) continue;
+          const t = (el.innerText || el.textContent || '').trim();
+          if (!/^resources saver$/i.test(t)) continue;
+          el.click();
+          return 'вкладка Resources Saver нажата';
+        }
+        return 'вкладка Resources Saver в тенях не найдена';
+      })()`, sid, best.id, 3000).catch((e) => 'вкладка: ошибка ' + e.message);
+      log(`   ${tabClicked}`);
+
+      const r = await browser.eval(`(() => {
+        const roots = ${SHADOW_ROOTS}(document);
+        for (const r2 of roots) {
+          const b = r2.querySelector('#up-save');
+          if (!b) continue;
+          const t2 = (b.textContent || '').trim();
+          b.click();
+          return 'НАЖАТА: "' + t2 + '"';
+        }
+        return 'в тенях кнопки #up-save нет';
+      })()`, sid, best.id, 4000).catch((e) => 'ошибка: ' + e.message);
+      log(`   ${r}`);
+      if (/НАЖАТА/.test(String(r))) return r;
+      await sleep(700);
+      continue;
+    }
+    if (false) {
       const tabs = await browser.eval(`(() => {
         try {
           const view = UI.InspectorView.instance();
