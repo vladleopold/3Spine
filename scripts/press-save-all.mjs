@@ -543,6 +543,22 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       return out;
     }`;
 
+    // официальный хук фронтенда DevTools: открыть панель по имени
+    {
+      const api = await browser.eval(`(async () => {
+        try {
+          if (!globalThis.DevToolsAPI) return 'DevToolsAPI нет';
+          const keys = Object.keys(DevToolsAPI).slice(0, 12).join(',');
+          let res = '';
+          try { await DevToolsAPI.showPanel('Resources Saver'); res = 'showPanel Resources Saver: ок'; }
+          catch (e) { res = 'showPanel: ' + e.message; }
+          return res + ' | методы: ' + keys;
+        } catch (e) { return 'DevToolsAPI: ' + e.message; }
+      })()`, sid, best.id, 6000).catch((e) => 'DevToolsAPI: ошибка ' + e.message);
+      log(`   ${api}`);
+      await sleep(1500);
+    }
+
     for (let i = 0; i < 8; i++) {
       const tabs = await browser.eval(`(() => {
         const roots = (${SHADOW_ROOTS})(document);
