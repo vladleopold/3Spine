@@ -292,6 +292,9 @@ const SHIM = (payload) => `(() => {
   };
 })();`;
 
+// id распакованного расширения: Chrome считает его от абсолютного пути
+function extIdGuess() { return unpackedExtensionId(EXT); }
+
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
@@ -350,6 +353,24 @@ async function main() {
   // 2) перебираем известные id: из профиля, вычисленный по пути, из целей.
   //    Берём тот, у которого панель реально открывается — так не зависим от
   //    того, откуда взялся id (цели Chrome могут принадлежать чужим расширениям).
+  // 0) если панель уже открыта в реальном DevTools (её выбрали через Ctrl+Shift+P),
+  //    она видна среди целей и chrome.devtools в ней настоящий — подменять ничего не надо
+  const realPanel = await panelTarget(PORT, extIdGuess(), 60000);
+  const panel0 = realPanel ? {} : null;
+  if (realPanel) {
+    log(`реальная панель DevTools: ${realPanel.url}`);
+    const pc0 = await RawCDP.connect(realPanel.webSocketDebuggerUrl);
+    const clicked0 = await pc0.eval(`(() => {
+      const b = document.getElementById('up-save');
+      if (!b) return 'кнопки #up-save нет';
+      const t = (b.textContent || '').trim();
+      b.click();
+      return 'нажата: ' + t;
+    })()`).catch((e) => 'ошибка: ' + e.message);
+    log(`   ${clicked0}`);
+    panel = { raw: pc0, clicked: clicked0 };
+  }
+
   // сначала пробуем официальную загрузку через CDP — она же даёт id
   let loaded = '';
   try {
@@ -365,9 +386,9 @@ async function main() {
     : [...new Set([fromProfile, computed, fromTargets].filter(Boolean))];
   log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
 
-  let panel = null;
+  let panel = panel0 || null;
   const shimSrc = SHIM(JSON.stringify({ resources, har, tabId: 0 }));
-  for (const id of candidates) {
+  for (const id of (panel ? [] : candidates)) {
     log(`   пробуем id ${id}`);
     const found = await openPanel(ctx, id, shimSrc);
     if (found) { panel = found.panel; break; }
