@@ -880,6 +880,35 @@ async function main() {
     log(`   расширение загружено через CDP: ${(loaded && loaded.id) || 'ок'}`);
   } catch (e) { log(`   Extensions.loadUnpacked: ${e.message}`); }
 
+  // состояние расширения на странице chrome://extensions: установлено ли и
+  // не выключено ли (если выключено — панели в DevTools не будет)
+  try {
+    const { targetId } = await browser.send('Target.createTarget', { url: 'chrome://extensions/' }, undefined, 5000);
+    const { sessionId: esid } = await browser.send('Target.attachToTarget',
+      { targetId, flatten: true }, undefined, 5000);
+    const ectx = [];
+    browser.onEvent = (m) => {
+      if (m.sessionId === esid && m.method === 'Runtime.executionContextCreated') ectx.push(m.params.context);
+    };
+    await browser.send('Runtime.enable', {}, esid, 4000);
+    await sleep(2500);
+    for (const c of ectx) {
+      const info = await browser.eval(`(() => {
+        const roots = [document];
+        const scan = (r) => { for (const el of r.querySelectorAll('*')) if (el.shadowRoot) { roots.push(el.shadowRoot); scan(el.shadowRoot); } };
+        scan(document);
+        const items = [];
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          if (!/extensions-item/.test(String(el.tagName || ''))) continue;
+          items.push((el.id || '?') + (el.hasAttribute('disabled') ? ' ВЫКЛЮЧЕНО' : ' включено'));
+        }
+        return 'расширений: ' + (items.join(' , ') || 'ни одного') + ' | title=' + document.title;
+      })()`, esid, c.id, 4000).catch((e) => 'ошибка: ' + e.message);
+      log(`   chrome://extensions → ${info}`);
+    }
+    await browser.send('Target.closeTarget', { targetId }, undefined, 3000).catch(() => {});
+  } catch (e) { log(`   chrome://extensions: ${e.message}`); }
+
   // 1) вкладка с игрой (нажатие от неё не зависит — берём мягко)
   let sessionId = null;
   let bodies = new Map();
