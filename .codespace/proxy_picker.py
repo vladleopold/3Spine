@@ -106,6 +106,49 @@ def pick(target: str, limit: int = 40, workers: int = 24, cache: str = "") -> st
     return best
 
 
+def pick_many(target: str, want: int = 7, limit: int = 160, workers: int = 32,
+              deadline: int = 55) -> list:
+    """Собираем пул рабочих прокси (минимум want), идём по списку по очереди.
+
+    Возвращает список проверенных прокси; порядок — по времени ответа.
+    """
+    import time as _t
+    cands = candidates(limit)
+    print("прокси-кандидатов: %d" % len(cands), flush=True)
+    if not cands:
+        return []
+    good, t0 = [], _t.time()
+    pending = list(cands)
+    while pending and len(good) < want and (_t.time() - t0) < deadline:
+        wave, pending = pending[:64], pending[64:]
+        with cf.ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(check, c, target): c for c in wave}
+            for fut in cf.as_completed(futs, timeout=max(5, deadline - int(_t.time() - t0))):
+                cand = futs[fut]
+                try:
+                    ok, size = fut.result()
+                except Exception:                         # noqa: BLE001
+                    continue
+                if ok and size > 20000:
+                    good.append((cand, size))
+                    print("  рабочий прокси: %s (%d Б)" % (cand, size), flush=True)
+                    if len(good) >= want:
+                        break
+        if len(good) >= want or _t.time() - t0 > deadline:
+            break
+    good.sort(key=lambda x: -x[1])
+    print("подходящих прокси: %d из %d проверенных" % (len(good), min(limit, len(cands))), flush=True)
+    return [g[0] for g in good]
+
+
+def verify(proxy: str, target: str, timeout: int = 10) -> bool:
+    """Перепроверка прокси перед следующей попыткой."""
+    ok, size = check(proxy, target, timeout=timeout)
+    return bool(ok and size > 5000)
+
+
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "https://api.ipify.org?format=json"
-    print(pick(target))
+    want = int(sys.argv[2]) if len(sys.argv) > 2 else 7
+    for c in pick_many(target, want=want):
+        print(c)

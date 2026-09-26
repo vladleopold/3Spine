@@ -705,7 +705,9 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     netlog = os.path.join(tmp, "netlog.json")
     got = netlog_urls(url, netlog, budget_ms)  # первый проход самый важный
     if len(got) < 10 and budget_ms >= 8000:
-        log("браузер вернул %d адрес��в — повторяем с другим профилем" % len(got))
+        log("браузер вернул %d адресов — повтор через другой прокси/профиль" % len(got))
+        if len(PROXY_POOL) > 1:
+            rotate_proxy("пустой браузерный сбор")
         got += [u for u in netlog_urls(url, netlog + ".r",
                                        int(budget_ms * 0.8)) if u not in got]
     urls |= set(got)
