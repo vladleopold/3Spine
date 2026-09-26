@@ -172,10 +172,16 @@ def find_chrome() -> str:
 
 
 def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
-    """headless Chrome: все запросы страницы включая iframe и XHR."""
+    """Снимаем все сетевые запросы страницы через net-log Chrome.
+
+    Бюджет — реальное время: запускаем Chrome, ждём budget_ms и снимаем его
+    сами. Chrome с --virtual-time-budget на тяжёлых SPA (капча, вебсокеты)
+    не завершается сам и висит до бесконечности, из-за чего обрывается всё.
+    """
     chrome = find_chrome()
     if not chrome:
         return []
+    prof = os.path.join(os.path.dirname(netlog), "chrome-%d" % (budget_ms % 100000))
     cmd = [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
            "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
            "--disable-extensions", "--mute-audio", "--hide-scrollbars",
@@ -183,25 +189,86 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
            "--user-agent=" + NORMAL_UA, "--lang=en-US", "--window-size=1280,900",
            "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader",
            "--disable-features=IsolateOrigins,site-per-process",
-           "--user-data-dir=" + os.path.join(os.path.dirname(netlog), "chrome-" + str(os.getpid())),
-           "--virtual-time-budget=%d" % budget_ms,
-           "--log-net-log=" + netlog, url]
+           "--user-data-dir=" + prof, "--log-net-log=" + netlog, url]
     try:
-        subprocess.run(cmd, timeout=budget_ms / 1000 + 60,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:                                    # noqa: BLE001
-        pass
-    try:
-        with open(netlog, encoding="utf-8", errors="replace") as f:
-            raw = f.read()
-    except OSError:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:                                     # noqa: BLE001
         return []
+    deadline = time.time() + budget_ms / 1000.0
+    while time.time() < deadline and proc.poll() is None:
+        time.sleep(0.4)
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=6)
+        except Exception:                                 # noqa: BLE001
+            proc.kill()
+            try:
+                proc.wait(timeout=4)
+            except Exception:                             # noqa: BLE001
+                pass
+    time.sleep(0.6)                                       # даём дописать net-log
     out = set()
-    for m in re.finditer(r'"url":\s*"([^"]+)"', raw):
-        u = m.group(1).replace("\\/", "/")
-        if u.startswith(("http://", "https://")):
-            out.add(u)
-    return sorted({u.split("?")[0].split("#")[0] for u in out})
+    for path in (netlog, netlog + ".1"):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        for m in re.finditer(r'"url":\s*"([^"]+)"', raw):
+            u = m.group(1).replace("\\\\/", "/")
+            if u.startswith(("http://", "https://")):
+                out.add(u.split("#")[0])
+        if out:
+            break
+    return sorted({u.split("?")[0] for u in out})
+
+
+SHELL_RE = re.compile(
+    r"https?://[^\"'\s\\]{6,240}?(?:openGame|html5Game|gameService|game\.do|"
+    r"play\.do|launch\.do|/game/|/play/|/launch/|/portal/)[^\"'\s\\]{0,200}", re.I)
+
+
+def shell_candidates(url: str, urls) -> list:
+    """Ищем адрес шелла игры статически: в HTML и в мелких JS.
+
+    Нужно, когда игра не стартует в headless (антибот, hCaptcha) — шелл
+    всё равно лежит в коде страницы, а из него уже видно структуру ассетов.
+    """
+    out, seen = [], set()
+
+    def add(u: str) -> None:
+        u = u.rstrip('",\');')
+        if not u.lower().startswith(("http://", "https://")):
+            return
+        base = u.split("?")[0]
+        if base in seen:
+            return
+        seen.add(base)
+        out.append(u)
+
+    try:
+        html = fetch(url, timeout=30).decode("utf-8", "replace")
+    except Exception:                                     # noqa: BLE001
+        html = ""
+    for m in SHELL_RE.finditer(html):
+        add(m.group(0))
+    for u in list(urls):
+        if not u.lower().endswith((".js", ".html")):
+            continue
+        try:
+            raw = fetch(u, timeout=20)                    # один запрос на файл
+            if len(raw) > 3 * 1024 * 1024 or not SHELL_RE.search(
+                    raw[:400000].decode("utf-8", "replace")):
+                continue
+            body = raw.decode("utf-8", "replace")
+        except Exception:                                 # noqa: BLE001
+            continue
+        for m in SHELL_RE.finditer(body):
+            add(m.group(0))
+        if len(out) >= 6:
+            break
+    return out[:6]
 
 
 IFRAME_RE = re.compile(
@@ -293,11 +360,16 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
             log("хук CDP не сработал: %s" % e)
     pages_from_browser = {u for u in got if u not in urls0}
 
+    # шеллы игры, найденные статически (работает без запуска игры)
+    shells = shell_candidates(url, urls)
+    if shells:
+        log("шелл игры найден статически: %s" % shells[0][:100])
+
     # второй проход: игра почти всегда живёт во внутренней странице/iframe,
     # и её ассеты грузятся уже без обёртки сайта
     if args_passes > 1:
         page_ext = (".html", ".htm", ".xhtml", ".php", ".do", ".asp", ".aspx", "/")
-        kids = [u for u in got
+        kids = list(shells) + [u for u in got
                 if u not in urls0 and not looks_junk(u)
                 and u.lower().split("?")[0].endswith(page_ext)
                 and re.search(r"(openGame|html5Game|play|game|launch|portal|index|shell|\.do|\.html|\.php)", u, re.I)
@@ -332,7 +404,8 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
                 urls.add(nxt)
                 if lvl + 1 <= depth and len(queue) < 6:
                     queue.append((nxt, lvl + 1))
-    return {"urls": urls, "pages": pages_from_browser, "engine": detect_engine(urls)}
+    return {"urls": urls | set(shells), "pages": pages_from_browser, "shells": shells,
+            "engine": detect_engine(urls)}
 
 
 def atlas_page_refs(atlas_text: str) -> list:
