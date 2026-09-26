@@ -197,11 +197,12 @@ async function handleDownload(request, env) {
   const url = new URL(request.url);
   const archive = url.searchParams.get("archive");
   const job = url.searchParams.get("job");
-  let tree, headMessage;
+  let tree, headMessage, headSha = "";
   try {
     const res = await resultsTree(env);
     tree = res.tree;
     headMessage = res.branch.commit.commit.message || "";
+    headSha = res.branch.commit.sha || "";
   } catch (_) {
     return json({ ready: false }, 202);
   }
@@ -221,6 +222,20 @@ async function handleDownload(request, env) {
     entry = own || (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
     name = own ? `spine-${safe}.zip` : "spine-converted.zip";
     if (!entry) return json({ error: "output.zip not found in results" }, 500);
+  }
+
+  // большие архивы отдаём редиректом на raw.githubusercontent: держать
+  // сотни мегабайт в памяти воркера нельзя (Cloudflare 1102)
+  if (entry.size && entry.size > 6 * 1024 * 1024 && headSha) {
+    const raw = `https://raw.githubusercontent.com/${REPO}/${headSha}/${entry.path}`;
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: raw,
+        "Content-Disposition": 'attachment; filename="' + name + '"',
+        ...CORS,
+      },
+    });
   }
 
   const blob = await j(env, "GET", `/repos/${REPO}/git/blobs/${entry.sha}`);
