@@ -14,6 +14,7 @@ import { spawn } from 'child_process';
 import { chromium } from 'playwright';
 
 const SELF = path.resolve(process.argv[1]);
+let keepAlive = false;      // демон не должен завершаться после listen
 
 const ROLES = new Set(['button', 'link', 'tab', 'checkbox', 'radio', 'menuitem',
   'menuitemcheckbox', 'menuitemradio', 'option', 'combobox', 'switch', 'treeitem', 'tabpanel']);
@@ -433,6 +434,7 @@ async function main() {
   const argv = process.argv.slice(2);
   if (argv[0] === '__daemon') {
     const { flags } = parseArgs(argv.slice(1));
+    keepAlive = true;
     await daemon(parseInt(flags.port, 10), String(flags.session || 'default'), flags);
     return;
   }
@@ -502,5 +504,5 @@ async function main() {
 }
 
 main()
-  .then(() => process.exit(process.exitCode || 0))
+  .then(() => { if (!keepAlive) process.exit(process.exitCode || 0); })
   .catch((e) => { console.error('ошибка websnap:', e.message); process.exit(1); });
