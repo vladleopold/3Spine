@@ -25,6 +25,40 @@ if os.path.join(HERE, "spine_restore") not in sys.path:
 FFFD = b"\xef\xbf\xbd"
 
 
+def differential_lengths(buf: bytearray) -> int:
+    """O(N): восстанавливает длины строк, убитые в нули.
+
+    Срабатывает только при однозначном паттерне: нулевой байт, за ним валидная
+    длина 3.8 (2..65) и печатные байты ровно этой длины. Один проход по файлу.
+    """
+    n = len(buf)
+    fixed = 0
+    i = 1
+    while i < n - 2:
+        if buf[i] == 0x00:
+            L = buf[i + 1]
+            if 2 <= L <= 65 and i + L <= n:
+                if all(33 <= buf[i + 2 + k] < 127 for k in range(L - 1)):
+                    buf[i] = L
+                    fixed += 1
+                    i += L
+                    continue
+        i += 1
+    return fixed
+
+
+def differential(buf: bytearray, passes: int = 3) -> dict:
+    """Полный дифференциальный проход: длины строк + проверка разбором."""
+    info = {"length_fixes": 0}
+    for _ in range(passes):
+        fixed = differential_lengths(buf)
+        info["length_fixes"] += fixed
+        if not fixed:
+            break
+    info["bytes"] = len(buf)
+    return info
+
+
 def length_preserving(data: bytes) -> bytes:
     """EF BF BD -> 00 00 00, затем 3F 00 00 00 -> 3F 80 00 00."""
     buf = bytearray()
@@ -99,6 +133,8 @@ def repair(path: str, anchor: str = "root", target_bones: int = 0, out_dir: str 
         data = f.read()
     buf = bytearray(length_preserving(data))
     info = {"file": os.path.basename(path), "bytes": len(buf)}
+    d = differential(buf)
+    info["length_fixes"] = d["length_fixes"]
     cal = calibrate(bytes(buf), anchor.encode())
     if not cal:
         info["error"] = f"якорь '{anchor}' не найден"
