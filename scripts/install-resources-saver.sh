@@ -39,6 +39,21 @@ else
   log "Расширение установлено: $EXT_DIR"
 fi
 
+# страницы панели должны быть доступны как web-ресурсы, иначе Chrome
+# блокирует их загрузку (ERR_BLOCKED_BY_CLIENT) даже внутри iframe
+node -e '
+const fs = require("fs");
+const p = process.argv[1] + "/manifest.json";
+const m = JSON.parse(fs.readFileSync(p, "utf8"));
+m.web_accessible_resources = [{
+  resources: ["content.html", "content.js", "styles.css", "fonts/*",
+              "icons/*", "zip/*", "loading.svg", "refresh.svg", "icon.svg"],
+  matches: ["<all_urls>"],
+}];
+fs.writeFileSync(p, JSON.stringify(m, null, 2));
+console.log("web_accessible_resources добавлен");
+' "$EXT_DIR"
+
 # что именно установили
 node -e '
 const m = require(process.argv[1] + "/manifest.json");

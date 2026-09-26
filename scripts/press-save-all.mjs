@@ -3,11 +3,32 @@
 // ожидание архива. Лимит шага — 30 секунд (TOTAL_LIMIT_MS).
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
 
 const URL_ = process.env.URL || '';
 const PROFILE_DIR = path.resolve(process.env.PROFILE || './.chrome-profile');
+const EXT_DIR = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');   // нужен для папки загрузок
+
+// id распакованного расширения Chrome считает от абсолютного пути
+import crypto from 'crypto';
+function unpackedExtensionId(dir) {
+  const h = crypto.createHash('sha256').update(dir).digest('hex').slice(0, 32);
+  return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
+}
+
+// подмена chrome.devtools для панели: панель сама получит ресурсы и соберёт ZIP
+const SHIM_SOURCE = `(() => {
+  const noop = { addListener() {}, removeListener() {} };
+  chrome.devtools = {
+    inspectedWindow: {
+      tabId: ${Number(process.env.TAB_ID || 0)},
+      getResources(cb) { cb([]); },
+      onResourceAdded: noop,
+      reload() {}, eval() {},
+    },
+    network: { getHAR(cb) { cb({ log: { version: '1.2', entries: [] } }); }, onRequestFinished: noop },
+  };
+})();`;
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const TOTAL_LIMIT = parseInt(process.env.TOTAL_LIMIT_MS || '30000', 10);   // лимит шага
@@ -144,6 +165,70 @@ async function pressInDevtoolsFrontend() {
   return 'кнопка #up-save не найдена во фронтенде';
 }
 
+
+// Панель через iframe прямо в странице: страницы расширения помечены как
+// web-ресурсы, поэтому Chrome их грузит. Внутри iframe кнопка #up-save
+// настоящая — жмём её через контекст этого фрейма.
+async function pressViaIframe(browser, extId, shimSrc) {
+  const ts = await browser.send('Target.getTargets');
+  const infos = ts.targetInfos.filter((t) => t.type === 'page');
+  const want = URL_ ? URL_.split('?')[0] : '';
+  const target = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
+  if (!target) return 'нет вкладки для iframe';
+
+  const { sessionId } = await browser.send('Target.attachToTarget',
+    { targetId: target.targetId, flatten: true });
+  const contexts = [];
+  browser.onEvent = (m) => {
+    if (m.sessionId !== sessionId) return;
+    if (m.method === 'Runtime.executionContextCreated') contexts.push(m.params.context);
+  };
+  await browser.send('Runtime.enable', {}, sessionId, 5000);
+  await browser.send('Page.enable', {}, sessionId, 5000).catch(() => {});
+  // подмена chrome.devtools действует во всех фреймах, включая новый iframe
+  await browser.send('Page.addScriptToEvaluateOnNewDocument',
+    { source: shimSrc }, sessionId, 5000).catch(() => {});
+
+  const mainCtx = contexts[0];
+  if (!mainCtx) return 'нет контекста страницы';
+  const made = await browser.eval(`(() => {
+    const old = document.getElementById('rs-panel');
+    if (old) old.remove();
+    const f = document.createElement('iframe');
+    f.id = 'rs-panel';
+    f.style.cssText = 'position:fixed;left:0;top:0;width:900px;height:600px;z-index:2147483647';
+    f.src = ${JSON.stringify('chrome-extension://' + extId + '/content.html')};
+    document.body.appendChild(f);
+    return 'iframe создан';
+  })()`, sessionId, mainCtx.id).catch((e) => 'ошибка: ' + e.message);
+  log(`   ${made}`);
+  await sleep(2500);
+
+  // контекст фрейма панели
+  let panelCtx = null;
+  for (let i = 0; i < 20 && !panelCtx; i++) {
+    panelCtx = contexts.find((c) => /\/content\.html/.test(c.origin || '')
+      || /content\.html/.test(c.name || '')) || null;
+    if (!panelCtx) await sleep(500);
+  }
+  if (!panelCtx) {
+    // иначе пробуем каждый свежий контекст
+    for (const c of contexts) {
+      const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id)
+        .catch(() => false);
+      if (has) { panelCtx = c; break; }
+    }
+  }
+  if (!panelCtx) return 'контекст панели не появился';
+  return await browser.eval(`(() => {
+    const b = document.getElementById('up-save');
+    if (!b) return 'кнопки #up-save нет';
+    const t = (b.textContent || '').trim();
+    b.click();
+    return 'НАЖАТА: "' + t + '"';
+  })()`, sessionId, panelCtx.id).catch((e) => 'ошибка: ' + e.message);
+}
+
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -226,9 +311,10 @@ async function main() {
   // 0) нажатие: сначала прямо во фронтенде DevTools, затем вводом X11
   let pressed = false;
   let why = 'нажатие не выполнено';
-  let clicked = await pressInDevtoolsFrontend();
+  const extId = process.env.EXT_ID || unpackedExtensionId(EXT_DIR);
+  let clicked = extId ? await pressViaIframe(browser, extId, SHIM_SOURCE) : 'EXT_ID не задан';
   why = String(clicked);
-  log(`   фронтенд: ${why}`);
+  log(`   панель в iframe: ${why}`);
   if (/НАЖАТА/.test(why)) pressed = true; else why = why;
   const skipCdp = true;   // окно DevTools не отдаётся в CDP — жмём только вводом X11
   for (const dt of (clicked || skipCdp ? [] : devtools)) {
