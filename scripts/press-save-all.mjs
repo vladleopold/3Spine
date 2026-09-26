@@ -89,6 +89,43 @@ async function openPanel(ctx, extId, shimSrc) {
   return null;
 }
 
+
+// Chrome блокирует навигацию на chrome-extension://<id>/* (ERR_BLOCKED_BY_CLIENT).
+// Но расширение само открывает свои страницы: просим его service worker сделать это.
+async function openPanelViaExtension(port, extId) {
+  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const sw = targets.find((t) => t.type === 'service_worker'
+    && (t.url || '').startsWith(`chrome-extension://${extId}/`));
+  if (!sw) { log('   service worker расширения не найден среди целей'); return ''; }
+  const ws = new WebSocket(sw.webSocketDebuggerUrl);
+  await new Promise((res, rej) => {
+    ws.addEventListener('open', res, { once: true });
+    ws.addEventListener('error', () => rej(new Error('WS не подключился')), { once: true });
+  });
+  const ask = (method, params) => new Promise((res) => {
+    const id = Math.floor(Math.random() * 1e6);
+    const h = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.id === id) { ws.removeEventListener('message', h); res(m); }
+    };
+    ws.addEventListener('message', h);
+    ws.send(JSON.stringify({ id, method, params }));
+    setTimeout(() => res({ error: { message: 'таймаут' } }), 15000);
+  });
+  const r = await ask('Runtime.evaluate', {
+    expression: `(() => { try {
+        chrome.windows.create({ url: chrome.runtime.getURL('content.html'),
+                               type: 'popup', width: 1400, height: 900 });
+        return 'ok';
+      } catch (e) { return 'ошибка: ' + e.message; } })()`,
+    returnByValue: true, awaitPromise: true,
+  });
+  ws.close();
+  const val = (r.result && r.result.result && r.result.result.value) || 'нет ответа';
+  log(`   service worker открывает панель: ${val}`);
+  return val === 'ok' ? sw.webSocketDebuggerUrl : '';
+}
+
 async function dumpExtensions(ctx) {
   const p = await ctx.newPage();
   try {
@@ -249,6 +286,21 @@ async function main() {
     log(`   пробуем id ${id}`);
     const found = await openPanel(ctx, id, shimSrc);
     if (found) { panel = found.panel; break; }
+    // расширение само открывает свою страницу — навигация извне заблокирована
+    const ok = await openPanelViaExtension(PORT, id);
+    if (!ok) continue;
+    for (let i = 0; i < 20; i++) {
+      const p = ctx.pages().find((x) => x.url().includes(`${id}/content.html`));
+      if (p) {
+        await p.addInitScript(shimSrc);
+        await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+        panel = p;
+        log('   панель открыта самим расширением');
+        break;
+      }
+      await sleep(500);
+    }
+    if (panel) break;
   }
   if (!panel) throw new Error('ни один id не открыл панель Resources Saver');
 
