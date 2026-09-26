@@ -511,6 +511,67 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     return sanitize(parsed), report
 
 
+CTRL = {c for c in range(32)} - {9, 10, 13}
+
+
+def _clean_name(name, fallback):
+    """Имя без управляющих символов — иначе редактор не импортирует скелет."""
+    if not isinstance(name, str):
+        return fallback
+    out = "".join(ch for ch in name if ord(ch) not in CTRL).strip()
+    return out or fallback
+
+
+def sanitize(doc):
+    """Приводит восстановленный скелет к виду, который принимает редактор."""
+    def num(v):
+        return isinstance(v, (int, float)) and v == v and v not in (float("inf"), float("-inf"))
+
+    def fix_curve(tl):
+        c = tl.get("curve")
+        if c is None:
+            for k in ("c2", "c3", "c4"):
+                tl.pop(k, None)
+            return
+        if not num(c):
+            c = 0
+        c = max(0.0, min(1.0, float(c)))
+        tl["curve"] = c
+        if c <= 0 or c >= 1:
+            for k in ("c2", "c3", "c4"):
+                tl.pop(k, None)
+        else:
+            for k, dflt in (("c2", 0.0), ("c3", 0.0), ("c4", 1.0)):
+                v = tl.get(k, dflt)
+                tl[k] = float(v) if num(v) else dflt
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "curve" in node and ("time" in node or "x" in node):
+                fix_curve(node)
+            for val in node.values():
+                walk(val)
+        elif isinstance(node, list):
+            for val in node:
+                walk(val)
+
+    skel = doc.get("skeleton")
+    if isinstance(skel, dict):
+        skel["spine"] = _clean_name(skel.get("spine"), "3.8.99")
+    for i, b in enumerate(doc.get("bones") or []):
+        if isinstance(b, dict):
+            b["name"] = _clean_name(b.get("name"), "bone%d" % i)
+    for i, sl in enumerate(doc.get("slots") or []):
+        if isinstance(sl, dict):
+            sl["name"] = _clean_name(sl.get("name"), "slot%d" % i)
+            sl["bone"] = _clean_name(sl.get("bone"), "root")
+    anims = doc.get("animations")
+    if isinstance(anims, dict):
+        doc["animations"] = {(_clean_name(k, "animation")): v for k, v in anims.items()}
+    walk(doc.get("animations"))
+    return doc
+
+
 HINTS_CACHE = os.path.join(HERE, "repair_hints.json")
 
 
