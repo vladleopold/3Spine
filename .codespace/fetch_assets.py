@@ -769,6 +769,8 @@ def main() -> int:
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
     ap.add_argument("--bodies", type=int, default=1,
                     help="1 — добирать тела из сессии браузера (подход Resources Saver)")
+    ap.add_argument("--discover-share", type=float, default=0.5,
+                    help="доля бюджета на браузерный обход, остальное — зонд и загрузка")
     ap.add_argument("--total-budget", type=int, default=55,
                     help="жёсткий лимит секунд на всю выкачку")
     ap.add_argument("--pw-min-urls", type=int, default=120,
@@ -799,8 +801,8 @@ def main() -> int:
         log("страница закрывает доступ (HTTP %s). Пробую обход через браузер и статику."
             % diag["status"])
 
-    info = discover(args.url, tmp, int(min(args.budget_ms, left() * 1000)),
-                    args.depth, args.passes, args.cdp)
+    discover_ms = int(min(args.budget_ms, max(4000, left() * args.discover_share)))
+    info = discover(args.url, tmp, discover_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
     page_text = (diag.get("html") or "")[:400000]
     looks_game = bool(re.search(
@@ -920,7 +922,8 @@ def main() -> int:
                     grid.append(d + "/" + (t % i))
         log("зонд сетки манифестов: %d кандидатов" % len(grid))
         # ~60 проб в секунду при 20 потоках; в оставшееся время
-        probe_cap = int(min(args.grid_probe, max(0, left() - 6) * 60))
+        reserve = max(8.0, (args.total_budget - (time.time() - started)) * 0.55)
+        probe_cap = int(min(args.grid_probe, max(0, min(left() - 4, reserve)) * 60))
         if probe_cap <= 0:
             log("на зонд времени не осталось — пропускаю")
             grid = []
