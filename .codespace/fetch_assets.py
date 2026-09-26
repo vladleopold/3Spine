@@ -362,6 +362,67 @@ def pw_collect(url: str, budget_ms: int) -> list:
     return sorted(got)
 
 
+ANTIBOT_MARKERS = (
+    "just a moment", "checking your browser", "cf-browser-verification",
+    "attention required", "access denied", "enable javascript and cookies",
+    "captcha", "px-captcha", "perimeterx", "akamai", "datadome",
+    "antibot", "bot detection", "request unsuccessful",
+)
+ENGINE_FINGERPRINTS = {
+    "cocos": (r"cocos2?d|cocos-js|CocosCreator|res/import/|spine/", "settings.json/main.js"),
+    "gs2c": (r"/gs2c/|games-html5|openGame\.do|UHTSpine", "main_resources%03d.json"),
+    "unity": (r"\.framework\.js|\.loader\.js|\.wasm|build/unity|UnityLoader", "*.data"),
+    "pixi": (r"pixi(\.min)?\.js|pixi-spine", ""),
+    "phaser": (r"phaser(\.min)?\.js", ""),
+    "egret": (r"egret|default\.res\.json", ""),
+    "construct": (r"constructjs|c3runtime|rkwebgl", ""),
+    "gdevelop": (r"gdjs_|gdevelop", ""),
+    "unknown": (r".", ""),
+}
+
+
+def diagnose_page(url: str) -> dict:
+    """Один раз дёргаем страницу как браузер и запоминаем, что получили.
+
+    Нужно для честного отчёта: страница могла отдать 403, редирект на капчу
+    или отдаться пустой SPA-оболочкой — и это видно сразу, а не по догадкам.
+    """
+    out = {"url": url, "final": url, "status": 0, "bytes": 0, "antibot": [],
+           "engine": "unknown", "html": ""}
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": NORMAL_UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read(4 * 1024 * 1024)
+            out["status"] = r.status
+            out["final"] = r.geturl()
+            out["bytes"] = len(data)
+    except urllib.error.HTTPError as e:
+        out["status"] = e.code
+    except Exception:                                     # noqa: BLE001
+        pass
+    text = data.decode("utf-8", "replace") if "data" in dir() else ""
+    out["html"] = text
+    low = text.lower()
+    out["antibot"] = [m for m in ANTIBOT_MARKERS if m in low]
+    for name, (pat, _hint) in ENGINE_FINGERPRINTS.items():
+        if name == "unknown":
+            break
+        if re.search(pat, text, re.I):
+            out["engine"] = name
+            break
+    return out
+
+
+def report_diagnosis(d: dict) -> None:
+    log("диагностика страницы: HTTP %s, %d Б, финальный URL: %s"
+        % (d["status"], d["bytes"], d["final"][:110]))
+    if d["antibot"]:
+        log("антибот на странице: %s" % ", ".join(d["antibot"][:4]))
+    log("отпечаток движка по HTML: %s" % d["engine"])
+
+
 def game_id_from_url(url: str) -> str:
     """Идентификатор игры из query-параметров (game-term, game, gameName, symbol)."""
     from urllib.parse import parse_qs, urlsplit
@@ -671,6 +732,12 @@ def main() -> int:
     log("ссылка: %s" % args.url)
     log("браузер: %s" % (find_chrome() or "не найден — только статический обход"))
 
+    diag = diagnose_page(args.url)
+    report_diagnosis(diag)
+    if diag["status"] in (401, 403, 429, 503) or diag["antibot"]:
+        log("страница закрывает доступ (HTTP %s). Пробую обход через браузер и статику."
+            % diag["status"])
+
     info = discover(args.url, tmp, args.budget_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
     log("найдено адресов: %d (движок: %s)" % (len(urls), info["engine"]))
@@ -745,6 +812,10 @@ def main() -> int:
         for d in sorted(game_dirs, key=lambda x: -x.count("/")) + sorted(all_dirs, key=lambda x: -x.count("/")):
             if d not in dirs:
                 dirs.append(d)
+        junk_dirs = re.compile(r"(chrome/|hpke_|report-to/|optimizationguide|"
+                               r"content/items|safebrowsing|google\.com|"
+                               r"gstatic|doubleclick)", re.I)
+        dirs = [d for d in dirs if not junk_dirs.search(d)]
         dirs = dirs[:args.grid_dirs]
         log("каталоги для зонда: %s" % ", ".join("/".join(d.rsplit("/", 2)[-2:]) for d in dirs[:4]))
         tpl = ("main_resources%03d.json", "resources%03d.json", "game_resources%03d.json",
@@ -926,7 +997,19 @@ def main() -> int:
     if total > limit:
         log("ВНИМАНИЕ: архив больше лимита %d МБ" % args.max_mb)
     if not files:
-        log("НИЧЕГО НЕ НАЙДЕНО: движок «%s» — возможно, это не Spine-игра или нужен вход на сайт" % info["engine"])
+        log("--- СВОДКА ПОИСКА ---")
+        log("HTTP %s, антибот: %s" % (diag["status"], ", ".join(diag["antibot"][:3]) or "нет"))
+        log("HTML-отпечаток движка: %s | движок по сети: %s" % (diag["engine"], info["engine"]))
+        log("адресов найдено: %d | кандидатов: json=%d atlas=%d skel=%d"
+            % (len(urls), len(picked["json"]), len(picked["atlas"]), len(picked["skel"])))
+        log("манифестов: %d | шеллов: %d | id игры: %s"
+            % (len(manifests), len(info.get("shells", [])), gid or "—"))
+        if diag["antibot"] or diag["status"] in (401, 403, 429, 503):
+            log("ВЫВОД: площадка не отдаёт игру CI-runner'у (антибот/гео-блок). "
+                "Нужен другой IP или ручная выгрузка ассетов.")
+            return 3
+        log("ВЫВОД: игра не отдаёт Spine-ассеты без запуска сессии "
+            "(капча/логин) либо это не Spine-игра.")
         return 2
     return 0
 
