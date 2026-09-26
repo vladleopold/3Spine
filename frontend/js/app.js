@@ -385,7 +385,7 @@
       if (d.ready) return;
       if (Date.now() - lastLog > 15000) {
         const sec = Math.round((Date.now() - t0) / 1000);
-        log("… ждём GitHub Actions (" + sec + " c), в очереди: " + started.length + " шт.…", "dim");
+        log("… ждём GitHub Actions (" + sec + " c): выкачивание идёт в браузере, обычно 1–3 мин, максимум 9 мин…", "dim");
         lastLog = Date.now();
       }
       await sleep(3000);
