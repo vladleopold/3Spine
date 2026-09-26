@@ -651,16 +651,20 @@ def main() -> int:
     if gid:
         log("идентификатор игры из ссылки: %s" % gid)
 
-    # netlog может остаться пустым (игра за модалкой) -> запасной путь с кликами
-    if args.pw == 1 or (args.pw == -1 and len(urls) < args.pw_min_urls):
-        log("netlog тонкий (%d) -> запускаю Playwright-сбор с кликами" % len(urls))
+    picked = pick_assets(urls, kinds)
+
+    # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами
+    thin = len(urls) < args.pw_min_urls or not (picked["json"] or picked["atlas"] or picked["skel"])
+    if args.pw == 1 or (args.pw == -1 and thin):
+        log("netlog без Spine-кандидатов (url=%d, json=%d, atlas=%d) -> Playwright с кликами"
+            % (len(urls), len(picked["json"]), len(picked["atlas"])))
         extra = pw_collect(args.url, args.budget_ms)
         if extra:
             add = len(set(extra) - urls)
             log("Playwright добавил адресов: %d (всего %d)" % (add, len(urls) + add))
             urls |= set(extra)
+            picked = pick_assets(urls, kinds)
             info = {"urls": urls, "engine": detect_engine(urls), "shells": info.get("shells", [])}
-    picked = pick_assets(urls, kinds)
     log("кандидаты: json=%d atlas=%d skel=%d картинки=%d (прочее отброшено: %d)" % (
         len(picked["json"]), len(picked["atlas"]), len(picked["skel"]),
         len(picked.get("png", [])), len(picked["_other"])))
