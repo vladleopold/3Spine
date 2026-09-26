@@ -36,6 +36,7 @@ NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 DEFAULT_KINDS = ("json", "atlas", "png")
 DEADLINE = [0.0]          # абсолютное время окончания всей выкачки
+INLINE_SEEN = set()
 REJECTED = []
 MANIFESTS = []
 REMOTE = {}
@@ -692,6 +693,8 @@ def download_set(urls, root: str, workers: int, timeout: int, log_prefix: str) -
     done = [0]
 
     def one(u: str):
+        if DEADLINE[0] and time.time() > DEADLINE[0] - 2:
+            return 0                      # время вышло — не начинаем новых файлов
         rel = URL2NAME.get(u) or u.split("://", 1)[-1].split("/", 1)[-1] or "index"
         rel = re.sub(r"[\\:*?\"<>|]", "_", rel)
         dst = os.path.join(root, rel)
@@ -775,7 +778,7 @@ def main() -> int:
     ap.add_argument("--grid-dirs", type=int, default=20, help="сколько каталогов проверять")
     ap.add_argument("--grid-count", type=int, default=30, help="сколько файлов в сетке на каталог")
     ap.add_argument("--grid-probe", type=int, default=900, help="потолок сетевых проб")
-    ap.add_argument("--probe-workers", type=int, default=20, help="потоков для проб")
+    ap.add_argument("--probe-workers", type=int, default=32, help="потоков для проб")
     args = ap.parse_args()
 
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
@@ -906,10 +909,11 @@ def main() -> int:
         log("каталоги для зонда: %s" % ", ".join("/".join(d.rsplit("/", 2)[-2:]) for d in dirs[:4]))
         tpl = ("main_resources%03d.json", "resources%03d.json", "game_resources%03d.json",
                "data%03d.json", "bundle%03d.json", "chunk%03d.json")
-        # сначала самые вероятные шаблоны по всем каталогам, потом остальные
+        # сначала самые вероятные шаблоны по всем каталогам, потом остальные;
+        # индексы идут наружу, чтобы при обрыве по времени покрыть 0..N
         for t in list(tpl[:2]) + list(tpl[2:]):
-            for d in dirs:
-                for i in range(args.grid_count):
+            for i in range(args.grid_count):
+                for d in dirs:
                     grid.append(d + "/" + (t % i))
         log("зонд сетки манифестов: %d кандидатов" % len(grid))
         # ~60 проб в секунду при 20 потоках; в оставшееся время
@@ -918,6 +922,20 @@ def main() -> int:
             log("на зонд времени не осталось — пропускаю")
             grid = []
         alive = url_ok_many(grid[:probe_cap], args.probe_workers) if grid else []
+        if alive and len(alive) < 4 and left() > 6:
+            # нашли единицы — значит каталог верный, дотягиваем соседей
+            got_dirs = {u.rsplit("/", 1)[0] for u in alive}
+            extra = []
+            for d in got_dirs:
+                for t in ("main_resources%03d.json", "GUI_resources%03d.json",
+                          "other_resources%03d.json", "game%03d.json"):
+                    for i in range(args.grid_count):
+                        extra.append(d + "/" + (t % i))
+            extra = [u for u in extra if u not in alive and u not in grid]
+            more = url_ok_many(extra[:int(max(0, left() - 4) * 60)], args.probe_workers)
+            if more:
+                log("сетка (повторно): +%d манифестов" % len(more))
+                alive += more
         if alive:
             log("сетка дала манифестов: %d" % len(alive))
             urls |= set(alive)
@@ -967,7 +985,7 @@ def main() -> int:
             picked = pick_assets(urls, kinds)
 
     # проход 1.55: ассеты, вшитые в манифесты движка (base64 внутри JSON)
-    if args.inline and left() > 3:
+    if args.inline and left() > 1.5:
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from inline_assets import extract as extract_inline
@@ -982,6 +1000,8 @@ def main() -> int:
                         continue
                     fp = os.path.join(dirpath, fn)
                     if os.path.getsize(fp) > 60 * 1048576:
+                        continue
+                    if not INLINE_SEEN.add(fp) or not args.inline:
                         continue
                     try:
                         with open(fp, encoding="utf-8", errors="replace") as f:
