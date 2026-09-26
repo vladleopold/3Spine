@@ -102,10 +102,24 @@ async function main() {
       response: { status: 200, content: { size: v.size, mimeType: v.mimeType } } };
   });
 
-  // 2) открываем панель Resources Saver и подменяем ей chrome.devtools
+  // 2) настоящий id вкладки: content.js берёт список сайтов через
+  //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
+  //    список был пуст и кнопка ничего не качала
+  const probe = await ctx.newPage();
+  await probe.goto(`chrome-extension://${extId}/manifest.json`, { waitUntil: 'domcontentloaded' });
+  const tabs = await probe.evaluate(() => new Promise((res) => {
+    chrome.tabs.query({}, (list) => res((list || []).map((t) => ({ id: t.id, url: t.url || '' }))));
+  })).catch(() => []);
+  await probe.close().catch(() => {});
+  const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
+  const gameTab = tabs.find((t) => t.url.startsWith(origin)) || tabs[0];
+  const tabId = gameTab ? gameTab.id : 0;
+  log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
+
+  // 3) открываем панель Resources Saver и подменяем ей chrome.devtools
   const panel = await ctx.newPage();
   await panel.addInitScript(SHIM(JSON.stringify({
-    resources, har, tabId: 9001,
+    resources, har, tabId,
   })));
   const url = `chrome-extension://${extId}/content.html`;
   await panel.goto(url, { waitUntil: 'domcontentloaded' });
@@ -117,7 +131,7 @@ async function main() {
   log(`нажимаю кнопку: "${label.trim()}"`);
   await panel.evaluate(() => document.getElementById('up-save').click());
 
-  // 3) ждём ZIP
+  // 4) ждём ZIP
   const deadline = Date.now() + ZIP_TIMEOUT;
   let zip = null;
   while (Date.now() < deadline) {
