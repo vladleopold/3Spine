@@ -14,11 +14,13 @@ const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
-const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '240000', 10);
-const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '60000', 10);
+const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '90000', 10);
+const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '20000', 10);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
+const t0 = Date.now();
+const since = () => `${((Date.now() - t0) / 1000).toFixed(1)}с`;
 
 class CDP {
   constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); this.onEvent = null; }
@@ -110,7 +112,7 @@ async function main() {
   await browser.send('Page.reload', { ignoreCache: false }, sessionId).catch(() => {});
   await sleep(COLLECT_MS);
   await Promise.race([Promise.all(pending), sleep(5000)]);
-  log(`ресурсов собрано: ${bodies.size}`);
+  log(`ресурсов собрано: ${bodies.size} (${since()})`);
 
   // 3) панель Resources Saver в DevTools
   let panel = null;
@@ -121,7 +123,7 @@ async function main() {
     if (!panel) await sleep(1000);
   }
   if (!panel) throw new Error('панель Resources Saver не найдена среди целей');
-  log(`панель: ${panel.url}`);
+  log(`панель: ${panel.url} (${since()})`);
 
   // 4) нажимаем «Save All Resources»
   const pc = await CDP.connect(panel.webSocketDebuggerUrl);
@@ -133,7 +135,7 @@ async function main() {
     b.click();
     return 'нажата: ' + t;
   })()`).catch((e) => 'ошибка: ' + e.message);
-  log(`кнопка: ${clicked}`);
+  log(`кнопка: ${clicked} (${since()})`);
 
   // 5) ждём ZIP
   const dl = Date.now() + ZIP_TIMEOUT;
@@ -148,7 +150,7 @@ async function main() {
     log(`состояние панели: ${String(state || '').replace(/\s+/g, ' ').slice(0, 300)}`);
     throw new Error('ZIP не появился после нажатия Save All Resources');
   }
-  log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ)`);
+  log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
   process.exit(0);
 }
 
