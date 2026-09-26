@@ -566,7 +566,35 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
           + ' | DevToolsAPI.showPanel=' + typeof (globalThis.DevToolsAPI || {}).showPanel;
       })()`, sid, best.id, 4000).catch((e) => 'UI: ошибка ' + e.message);
       log(`   ${ui}`);
-      await sleep(1500);
+
+      // UI.panels — реестр панелей DevTools. Показываем нужную панель
+      // её собственным view.show(), после чего появляется её документ.
+      const reg = await browser.eval(`(() => {
+        try {
+          const items = UI.panels.panelItems ? UI.panels.panelItems() : [];
+          const panels = UI.panels.panels ? UI.panels.panels() : [];
+          return 'элементов: ' + items.length + ' | панелей: ' + panels.length
+            + ' || элементы: ' + items.map((i) => (i.name || '') + '#' + (i.id || '')).join(', ').slice(0, 260);
+        } catch (e) { return 'реестр: ' + e.message; }
+      })()`, sid, best.id, 4000).catch((e) => 'реестр: ошибка ' + e.message);
+      log(`   ${reg}`);
+
+      const shownPanel = await browser.eval(`(async () => {
+        try {
+          const panels = UI.panels.panels();
+          let names = [];
+          for (const p of panels) {
+            names.push(p.name || '?');
+            if (!/resources saver/i.test(String(p.name || ''))) continue;
+            const v = p.view ? p.view() : null;
+            if (v && v.show) await v.show();
+            return 'панель показана: ' + p.name;
+          }
+          return 'панели нет среди: ' + names.join(', ').slice(0, 200);
+        } catch (e) { return 'view.show: ' + e.message; }
+      })()`, sid, best.id, 6000).catch((e) => 'показ: ошибка ' + e.message);
+      log(`   ${shownPanel}`);
+      await sleep(2000);
     }
 
     // Панель расширения — отдельный документ: ищем её среди целей, фреймов
