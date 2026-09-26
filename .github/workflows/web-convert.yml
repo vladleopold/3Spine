@@ -12,6 +12,7 @@ jobs:
   convert:
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -116,6 +117,7 @@ jobs:
     needs: convert
     continue-on-error: true
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
