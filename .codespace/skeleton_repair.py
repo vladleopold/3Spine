@@ -112,6 +112,8 @@ class HealReader(Spine38BinaryReader):
         if isinstance(u, int):
             return u
         width, value = self.decisions.get(idx, (1, self.FILL.get(role, 0x00)))
+        if isinstance(value, (list, tuple)):
+            width = len(value)
         self.unknown_bytes += width
         if role in ("var", "byte"):
             self.last_unknown = (idx, role)
@@ -122,6 +124,9 @@ class HealReader(Spine38BinaryReader):
         if width != 1 and idx not in self.width_unknowns:
             self.width_unknowns.append(idx)
         self.applied.append((idx, width, value, role))
+        if isinstance(value, (list, tuple)):
+            self._pending = [b & 0xFF for b in value[1:]]
+            return value[0] & 0xFF
         self._pending = [0x00] * (width - 1)
         return value & 0xFF
 
