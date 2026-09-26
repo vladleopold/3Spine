@@ -84,6 +84,12 @@ async function main() {
   log('подключился к уже запущенному Chrome');
   const ctx = browser.contexts()[0];
   const extId = await realExtensionId(ctx, PORT, EXT);
+  const computed = unpackedExtensionId(EXT);
+  if (extId === computed) {
+    // id вычислен по пути — значит Chrome не показал ни одной цели расширения
+    log('ВНИМАНИЕ: Chrome не показал целей расширения — проверь флаг '
+      + '--disable-features=DisableLoadExtensionCommandLineSwitch');
+  }
   log(`id расширения: ${extId}`);
 
   // 1) собираем все ресурсы страницы через CDP
@@ -143,7 +149,12 @@ async function main() {
     resources, har, tabId,
   })));
   const url = `chrome-extension://${extId}/content.html`;
-  await panel.goto(url, { waitUntil: 'domcontentloaded' });
+  await panel.goto(url, { waitUntil: 'domcontentloaded' }).catch((e) => {
+    if (/ERR_BLOCKED_BY_CLIENT/.test(e.message)) {
+      throw new Error('расширение не загрузилось в Chrome (страница панели заблокирована)');
+    }
+    throw e;
+  });
   log(`панель Resources Saver открыта: ${url}`);
 
   const btn = panel.locator('#up-save');

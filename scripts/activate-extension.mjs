@@ -41,6 +41,7 @@ async function main() {
       '--headless=new',                    // в новом headless расширения работают
       '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
       '--disable-blink-features=AutomationControlled',
+      '--disable-features=DisableLoadExtensionCommandLineSwitch',
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
     ],
