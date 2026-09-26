@@ -707,7 +707,7 @@ def main() -> None:
                 for bi, batch in enumerate(batches, 1):
                     say(f"compile-block: ЭТАП 2, пачка {bi}/{len(batches)}: {len(batch)} файлов")
                     with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as pool:
-                        results.extend(pool.map(lambda j: json_to_spine(j, True), batch))
+                        results.extend(pool.map(lambda j: json_to_spine(j), batch))
                 compiled = sum(1 for _r, ok, _m in results if ok)
                 for _r, ok, msg in results:
                     if ok:
