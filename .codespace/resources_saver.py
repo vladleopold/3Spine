@@ -10,6 +10,7 @@
 Алгоритм отбора, имена и структура папок — оригинальные, расширения.
 """
 import asyncio
+import json
 import os
 import re
 import sys
@@ -60,7 +61,7 @@ def vendor_files() -> tuple:
 
 
 SHIM = r"""
-window.__rs = {urls: %URLS%, bodies: {}};
+window.__rs = {urls: __URLS__, bodies: {}};
 window.__rs_out = [];
 window.__rs_seen = {};
 
@@ -169,7 +170,8 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
         collected = []
         await page.expose_function("__rs_collect", lambda name, b64: collected.append((name, b64)))
         await page.set_content(content_html or "<html><body></body></html>")
-        await page.add_script_tag(content=SHIM % {"URLS": __import__("json").dumps(sorted(urls))})
+        await page.add_script_tag(content=SHIM.replace("__URLS__",
+                                              json.dumps(sorted(urls))))
         await page.add_script_tag(content=content_js)
         try:
             await page.evaluate("document.getElementById('up-save').click()")
@@ -178,8 +180,8 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
         await asyncio.sleep(3)
         for name, b64 in collected:
             try:
-                import base64
-                data = base64.b64decode(b64)
+                import base64 as _b64
+                data = _b64.b64decode(b64)
             except Exception:                             # noqa: BLE001
                 continue
             rel = re.sub(r"[^A-Za-z0-9_./-]+", "_", unquote(name)).lstrip("/")
