@@ -18,6 +18,20 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 HERE = Path(__file__).resolve().parent
+BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
+
+
+def proxy_for_browser() -> dict:
+    """Прокси для Chromium: наш edge либо внешний."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from edge_proxy import serve
+        import edge_proxy
+        return {"server": "http://127.0.0.1:%d" % serve(edge_proxy.free_port(8899))}
+    except Exception:                                     # noqa: BLE001
+        if BROWSER_PROXY:
+            return {"server": BROWSER_PROXY}
+        return {}
 VENDOR = HERE / "vendor"
 def _find_chrome() -> str:
     import shutil
@@ -121,12 +135,17 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
 
     async with async_playwright() as p:
         kw = {"headless": True}
-        kw.update(proxy_for_browser())
         if CHROME and os.path.exists(CHROME):
             kw["executable_path"] = CHROME
         browser = await p.chromium.launch(**kw, args=["--no-sandbox", "--disable-gpu",
                                                       "--disable-dev-shm-usage"])
-        ctx = await browser.new_context(ignore_https_errors=True,
+        ctx = await browser.new_context(proxy=proxy_for_browser() or None,
+                                        ignore_https_errors=True,
+                                        extra_http_headers={
+                                            "Referer": url,
+                                            "Accept": "*/*",
+                                            "Accept-Language": "en-US,en;q=0.9",
+                                        },
                                         user_agent="Mozilla/5.0 (X11; Linux x86_64) "
                                                    "Chrome/131.0.0.0 Safari/537.36")
         page = await ctx.new_page()
@@ -160,6 +179,31 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
                     pass
         # тела ресурсов забираем из сессии браузера (куки уже применены)
         bodies = {}
+        # манифест лаунчера: логическое имя -> реальный URL (скачиваем сразу)
+        name2url = {}
+        for u in list(urls):
+            if not u.lower().split("?")[0].endswith((".js", ".json")):
+                continue
+            try:
+                raw = bodies.get(u) or await page.evaluate(
+                    "async (x) => await (await fetch(x)).text()", u)
+            except Exception:                             # noqa: BLE001
+                continue
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "replace")
+            if '"files"' not in raw:
+                continue
+            base = u.rsplit("/", 1)[0] + "/"
+            for files, logical in re.findall(
+                    r'"files":"([^"]+)"\s*,\s*"path":"([^"]+)"', raw):
+                if not files.startswith("res/"):
+                    continue
+                name = logical.split(":")[-1]
+                name2url.setdefault(name, base + files)
+                name2url.setdefault(name.rsplit("/", 1)[-1], base + files)
+        if name2url:
+            print("resources-saver: манифест лаунчера — %d записей" % len(name2url),
+                  flush=True)
         for u in list(urls):
             try:
                 resp = await ctx.request.get(u, timeout=30000)
@@ -191,12 +235,70 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
             dst.write_bytes(data)
         await browser.close()
 
+    # докачиваем то, что перечислил манифест, и страницы атласов
+    extra = {}
+    for name, u in name2url.items():
+        if re.search(r"\.(json|atlas|skel|scn)$", name, re.I):
+            extra.setdefault(u, name)
+    pages = set()
+    for name, u in list(extra.items()):
+        if not name.lower().endswith(".atlas"):
+            continue
+        try:
+            txt = (bodies.get(u) or b"").decode("utf-8", "replace")
+        except Exception:                                 # noqa: BLE001
+            txt = ""
+        for line in txt.split("\n"):
+            head = line.split(":")[0].strip()
+            if re.search(r"\.(png|jpg|jpeg|webp)$", head, re.I):
+                cand = name2url.get(head)
+                if cand:
+                    pages.add(cand)
+    for u in list(pages):
+        extra.setdefault(u, u.rsplit("/", 1)[-1])
+    if extra:
+        # прямая загрузка из пайплайна работает, а APIRequestContext упирается
+        # в 404 — поэтому отдаём карту URL, а тела качает fetch_assets
+        import json as _json
+        with open(out_dir.parent / "saver-manifest.json", "w", encoding="utf-8") as _f:
+            _json.dump({n: u for u, n in extra.items()}, _f, ensure_ascii=False)
+        print("resources-saver: карта манифеста — %d файлов (качает конвейер)"
+              % len(extra), flush=True)
+    if False:
+        print("resources-saver: докачиваю по манифесту %d файлов" % len(extra), flush=True)
+        sem = asyncio.Semaphore(8)
+
+        import base64 as _b64
+
+        async def grab(u: str, name: str):
+            if u in bodies or not keep(u):
+                return
+            async with sem:
+                # качаем из контекста страницы: её заголовки, куки и декодирование
+                try:
+                    res = await page.evaluate(
+                        "async (x) => { const r = await fetch(x, {credentials:'include'});"
+                        " if (!r.ok) return null; const b = await r.arrayBuffer();"
+                        " let s=''; const u8=new Uint8Array(b);"
+                        " for (let i=0;i<u8.length;i+=8192) s += String.fromCharCode.apply(null,"
+                        " u8.subarray(i,i+8192)); return btoa(s); }", u)
+                    if res:
+                        bodies[u] = _b64.b64decode(res)
+                except Exception:                         # noqa: BLE001
+                    pass
+        await asyncio.gather(*[grab(u, n) for u, n in extra.items()], return_exceptions=True)
+
     # игровые ассеты пишем всегда: наш фильтр строже расширения
     game_files = 0
     for u, b in bodies.items():
         if not keep(u) or not b:
             continue
-        rel = re.sub(r"[^A-Za-z0-9_./-]+", "_", unquote(urlsplit(u).path.lstrip("/")))
+        rel = name2url_name = None
+        for nm, mu in name2url.items():
+            if mu == u:
+                rel = nm
+                break
+        rel = rel or re.sub(r"[^A-Za-z0-9_./-]+", "_", unquote(urlsplit(u).path.lstrip("/")))
         dst = out_dir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(b)

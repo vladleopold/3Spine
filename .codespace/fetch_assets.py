@@ -19,6 +19,7 @@ import tempfile
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -1035,6 +1036,96 @@ def finish_empty(args, diag, verdict: str, urls) -> int:
     return 3
 
 
+def run_saver_only(args, diag, tmp) -> int:
+    """Единственный путь выкачки: код расширения Resources-Saver.
+
+    Он сам открывает страницу в браузере, собирает все ресурсы (включая
+    iframe/popup) и отдаёт их телами — без повторных HTTP-запросов.
+    """
+    import subprocess
+    log("режим: только Resources-Saver")
+    out_dir = os.path.join(tmp, "saver")
+    os.makedirs(out_dir, exist_ok=True)
+    saver = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "resources_saver.py")
+    budget = int(max(20, min(70, args.saver_seconds)))
+    log("запускаю Resources-Saver, бюджет %d c" % budget)
+    try:
+        subprocess.run([sys.executable, saver, args.url, out_dir, str(budget)],
+                       timeout=budget + 60, check=False)
+    except subprocess.TimeoutExpired:
+        log("Resources-Saver не уложился — берём что успел")
+    except Exception as e:                                 # noqa: BLE001
+        log("Resources-Saver не отработал: %s" % str(e)[:60])
+
+    # карта URL из расширения качаем прямой загрузкой (она рабочая)
+    manifest_map = os.path.join(tmp, "saver-manifest.json")
+    if os.path.exists(manifest_map):
+        try:
+            import json as _json
+            with open(manifest_map, encoding="utf-8") as f:
+                pairs = _json.load(f)
+            log("Resources-Saver дал %d URL, качаю прямой загрузкой" % len(pairs))
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _one(item):
+                name, u = item
+                try:
+                    data = fetch(u, timeout=40)
+                except Exception:                         # noqa: BLE001
+                    return None
+                if not data or _guard_state(name, data) == "reject":
+                    return None
+                dst = os.path.join(out_dir, name)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                with open(dst, "wb") as f:
+                    f.write(data)
+                return len(data)
+
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                got = [x for x in pool.map(_one, pairs.items()) if x]
+            log("скачано по карте: %d файлов, %.1f МБ"
+                % (len(got), sum(got) / 1048576))
+        except Exception as e:                             # noqa: BLE001
+            log("скачивание по карте не удалось: %s" % str(e)[:60])
+
+    files, total = [], 0
+    for dirpath, _dirs, fns in os.walk(out_dir):
+        for fn in fns:
+            if fn == "mapping.json":
+                continue
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, out_dir)
+            try:
+                with open(fp, "rb") as f:
+                    data = f.read()
+            except OSError:
+                continue
+            if _guard_state(rel, data) == "reject":
+                continue
+            with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED) as z:
+                pass
+            files.append((rel, len(data)))
+            total += len(data)
+
+    with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED) as z:
+        for rel, _sz in files:
+            fp = os.path.join(out_dir, rel)
+            if os.path.exists(fp):
+                z.write(fp, rel)
+        z.writestr("fetch-report.json", json.dumps({
+            "url": args.url, "mode": "resources-saver", "ok": bool(files),
+            "files": len(files), "bytes": total,
+            "http_status": diag["status"], "antibot": diag["antibot"],
+        }, ensure_ascii=False, indent=1))
+    log("Resources-Saver: файлов %d, %.1f МБ" % (len(files), total / 1048576))
+    if not files:
+        log("ВЫВОД: расширение не нашло игровых ресурсов — площадка не отдаёт игру "
+            "автоматической сессии (капTCHA/модалка) или это не Spine-игра")
+        return 3
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Универсальная выкачка игровых ассетов по ссылке")
     ap.add_argument("url", help="ссылка на игру (любую страницу, где она играется)")
@@ -1054,6 +1145,12 @@ def main() -> int:
                     help="1 — не тратить время, если страница под антиботом")
     ap.add_argument("--pw", type=int, default=0,
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
+    ap.add_argument("--only-saver", type=int, default=1,
+                    help="1 — единственный путь: код расширения Resources-Saver")
+    ap.add_argument("--saver-seconds", type=int, default=40,
+                    help="бюджет браузера внутри Resources-Saver")
+    ap.add_argument("--saver", type=int, default=1,
+                    help="1 — последний рубеж: код расширения Resources-Saver")
     ap.add_argument("--bodies", type=int, default=1,
                     help="1 — добирать тела из сессии браузера (подход Resources Saver)")
     ap.add_argument("--discover-share", type=float, default=0.5,
@@ -1087,6 +1184,9 @@ def main() -> int:
     if diag["status"] in (401, 403, 429, 503) or diag["antibot"]:
         log("страница закрывает доступ (HTTP %s). Пробую обход через браузер и статику."
             % diag["status"])
+
+    if args.only_saver:
+        return run_saver_only(args, diag, tmp)
 
     discover_ms = int(min(max(args.budget_ms, 18000), max(6000, left() * 0.62)))
     if not diag.get("bytes"):
@@ -1416,6 +1516,41 @@ def main() -> int:
         % (len(files), total / 1048576, report["seconds"], args.total_budget))
     if total > limit:
         log("ВНИМАНИЕ: архив больше лимита %d МБ" % args.max_mb)
+    if not files and args.saver:
+        try:
+            log("ничего нет — включаю сохранение через код Resources-Saver")
+            import subprocess
+            out_dir = os.path.join(tmp, "saver")
+            os.makedirs(out_dir, exist_ok=True)
+            saver = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "resources_saver.py")
+            subprocess.run([sys.executable, saver, args.url, out_dir,
+                            str(max(12, min(40, int(left() + 12))))],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=90, check=False)
+            for dirpath, _dirs, fns in os.walk(out_dir):
+                for fn in fns:
+                    if fn == "mapping.json":
+                        continue
+                    fp = os.path.join(dirpath, fn)
+                    rel = os.path.relpath(fp, out_dir)
+                    state = _guard_state(fp, open(fp, "rb").read(4096))
+                    if state == "reject":
+                        continue
+                    dst = os.path.join(root, rel)
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copy2(fp, dst)
+            files, total = [], 0
+            for dirpath, _dirs, fns in os.walk(root):
+                for fn in fns:
+                    fp = os.path.join(dirpath, fn)
+                    files.append((os.path.relpath(fp, root), os.path.getsize(fp)))
+                    total += os.path.getsize(fp)
+            if files:
+                log("Resources-Saver дал файлов: %d" % len(files))
+        except Exception as e:                             # noqa: BLE001
+            log("Resources-Saver не отработал: %s" % str(e)[:60])
+
     if not files and args.bodies:
         log("по URL ничего нет — забираю тела ресурсов из сессии браузера")
         bodies, rep = collect_bodies(args.url, int(min(30000, max(8000, left() * 1000))))
