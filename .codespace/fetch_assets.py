@@ -340,6 +340,40 @@ def pick_assets(urls, kinds) -> dict:
     return out
 
 
+def pw_collect(url: str, budget_ms: int) -> list:
+    """Запасной путь: Playwright с кликами (модалка, iframe, popup).
+
+    Нужен для SPA-казино, где игра открывается только после клика и net-log
+    без кликов остаётся пустым.
+    """
+    import asyncio
+    import os as _os
+    sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    try:
+        from spine_aggressive import collect as _collect
+    except Exception as e:                                 # noqa: BLE001
+        log("Playwright-сбор недоступен: %s" % e)
+        return []
+    try:
+        got = asyncio.run(_collect(url))
+    except Exception as e:                                 # noqa: BLE001
+        log("Playwright-сбор не отработал: %s" % e)
+        return []
+    return sorted(got)
+
+
+def game_id_from_url(url: str) -> str:
+    """Идентификатор игры из query-параметров (game-term, game, gameName, symbol)."""
+    from urllib.parse import parse_qs, urlsplit
+    q = parse_qs(urlsplit(url).query)
+    for key in ("game-term", "gameTerm", "game", "gameName", "game_name",
+                "gameSymbol", "symbol", "slug"):
+        for k in q:
+            if k.lower() == key.lower() and q[k] and q[k][0]:
+                return re.sub(r"[^A-Za-z0-9_-]+", "", q[k][0])[:48]
+    return ""
+
+
 def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
              args_passes: int = 3, args_cdp: int = 1) -> dict:
     """Универсальное обнаружение: браузер (все фреймы) + рекурсивный обход HTML."""
@@ -587,6 +621,10 @@ def main() -> int:
     ap.add_argument("--probe-limit", type=int, default=400, help="потолок сетевых проб")
     ap.add_argument("--passes", type=int, default=3, help="сколько страниц обходить браузером")
     ap.add_argument("--cdp", type=int, default=0, help="1 — лёгкий CDP-хук поверх netlog")
+    ap.add_argument("--pw", type=int, default=-1,
+                    help="-1 авто (если netlog тонкий), 1 всегда, 0 выкл")
+    ap.add_argument("--pw-min-urls", type=int, default=120,
+                    help="ниже этого числа URL считаем netlog тонким")
     ap.add_argument("--escalate", type=int, default=1, help="1 — углублять обход при неполноте")
     ap.add_argument("--min-json", type=int, default=12, help="меньше этого — считаем неполным")
     ap.add_argument("--inline", type=int, default=1, help="1 — извлекать ассеты, вшитые в манифесты")
@@ -608,6 +646,20 @@ def main() -> int:
     info = discover(args.url, tmp, args.budget_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
     log("найдено адресов: %d (движок: %s)" % (len(urls), info["engine"]))
+
+    gid = game_id_from_url(args.url)
+    if gid:
+        log("идентификатор игры из ссылки: %s" % gid)
+
+    # netlog может остаться пустым (игра за модалкой) -> запасной путь с кликами
+    if args.pw == 1 or (args.pw == -1 and len(urls) < args.pw_min_urls):
+        log("netlog тонкий (%d) -> запускаю Playwright-сбор с кликами" % len(urls))
+        extra = pw_collect(args.url, args.budget_ms)
+        if extra:
+            add = len(set(extra) - urls)
+            log("Playwright добавил адресов: %d (всего %d)" % (add, len(urls) + add))
+            urls |= set(extra)
+            info = {"urls": urls, "engine": detect_engine(urls), "shells": info.get("shells", [])}
     picked = pick_assets(urls, kinds)
     log("кандидаты: json=%d atlas=%d skel=%d картинки=%d (прочее отброшено: %d)" % (
         len(picked["json"]), len(picked["atlas"]), len(picked["skel"]),

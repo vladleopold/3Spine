@@ -29,6 +29,7 @@ jobs:
           URL=$(tr -d '\r\n' < fetch-url.txt)
           echo "ссылка на игру: $URL"
           echo "$URL" > work/fetch-url.txt 2>/dev/null || true
+          python3 -m pip install --quiet playwright aiohttp brotli
           python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 | tee fetch-log.txt
           rm -f fetch-url.txt
           unzip -l input.zip | head -30

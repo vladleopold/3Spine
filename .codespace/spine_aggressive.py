@@ -208,7 +208,10 @@ async def collect(url: str) -> set:
     early = 30 if prov == "pragmatic" else 80
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(executable_path=BROWSER, headless=True,
+        launch_kw = {"headless": True}
+        if BROWSER and os.path.exists(BROWSER):
+            launch_kw["executable_path"] = BROWSER
+        browser = await p.chromium.launch(**launch_kw,
                                           args=["--no-sandbox", "--disable-dev-shm-usage",
                                                 "--disable-gpu", "--mute-audio",
                                                 "--autoplay-policy=no-user-gesture-required",
