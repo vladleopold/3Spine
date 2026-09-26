@@ -45,6 +45,7 @@ PROXY = os.environ.get(
 PROXY_HOSTS = set()
 # резидентный прокси для браузера: solves гео-блокировки и капчи
 BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
+PICKED_PROXY = os.environ.get("SPINE_PICKED_PROXY", "").strip()
 
 
 def proxy_flags() -> list:
@@ -104,10 +105,54 @@ def _fetch_via_proxy(url: str, timeout: int = 60, quiet: bool = False) -> bytes:
         return b""
 
 
+def _fetch_via_picked(url: str, timeout: int = 60) -> bytes:
+    """Загрузка через подобранный публичный прокси (обход гео-блокировок)."""
+    if not PICKED_PROXY:
+        return b""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({
+            "http": PICKED_PROXY, "https": PICKED_PROXY}))
+        req = urllib.request.Request(url, headers=browser_headers())
+        with opener.open(req, timeout=timeout) as r:
+            return r.read()
+    except Exception:                                     # noqa: BLE001
+        return b""
+
+
+def auto_pick_proxy(target: str, limit: int = 40) -> str:
+    """Подбираем рабочий публичный прокси, если сайт не отдаёт страницу напрямую."""
+    global PICKED_PROXY, BROWSER_PROXY
+    if BROWSER_PROXY or not target.lower().startswith("http"):
+        return PICKED_PROXY
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from proxy_picker import pick
+    except Exception as e:                                 # noqa: BLE001
+        log("подбор прокси недоступен: %s" % e)
+        return ""
+    t0 = time.time()
+    log("страница недоступна напрямую — подбираю прокси автоматически…")
+    try:
+        cand = pick(target, limit=limit, workers=24)
+    except Exception as e:                                 # noqa: BLE001
+        log("подбор прокси не удался: %s" % str(e)[:60])
+        return ""
+    if not cand:
+        return ""
+    PICKED_PROXY = cand
+    BROWSER_PROXY = cand
+    log("прокси подобран за %.0f c: %s" % (time.time() - t0, cand))
+    return cand
+
+
 def fetch(url: str, timeout: int = 60) -> bytes:
     """Браузерные заголовки; при блокировке (403) — автоматически edge-прокси."""
     from urllib.parse import urlsplit as _us
     host = _us(url).netloc
+    if host in PROXY_HOSTS and PICKED_PROXY:
+        data = _fetch_via_picked(url, timeout)
+        if data:
+            return data
     if PROXY and host in PROXY_HOSTS:
         data = _fetch_via_proxy(url, timeout, quiet=True)
         if data:
@@ -984,6 +1029,17 @@ def main() -> int:
             % diag["status"])
 
     discover_ms = int(min(max(args.budget_ms, 18000), max(6000, left() * 0.62)))
+    if diag["status"] in (0, 401, 403, 429, 451, 503) and not diag.get("via_proxy"):
+        if auto_pick_proxy(args.url):
+            # перепроверяем страницу через найденный выход
+            d2 = diagnose_page(args.url)
+            if d2["bytes"]:
+                diag.update({"status": d2["status"], "bytes": d2["bytes"],
+                             "html": d2["html"], "final": d2["final"]})
+                report_diagnosis(diag)
+            from urllib.parse import urlsplit as _us2
+            PROXY_HOSTS.add(_us2(args.url).netloc)
+
     info = discover(args.url, tmp, discover_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
     page_text = (diag.get("html") or "")[:400000]
