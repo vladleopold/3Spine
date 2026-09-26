@@ -27,7 +27,33 @@ function unpackedExtensionId(dir) {
   return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
 }
 
-// Реальный id: Chrome сам сообщает его в целях (service worker расширения).
+// id нашего расширения: в chrome://extensions-internals есть запись с путём,
+// по которому мы грузили расширение. Цели Chrome тут ненадёжны — среди них
+// бывают встроенные компонентные расширения без popup.html.
+async function extensionIdFromProfile(ctx, extDir) {
+  const p = await ctx.newPage();
+  let txt = '';
+  try {
+    await p.goto('chrome://extensions-internals/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    txt = (await p.textContent('body').catch(() => '')) || '';
+  } catch { /* страница недоступна */ }
+  await p.close().catch(() => {});
+  let data = [];
+  try { data = JSON.parse(txt); } catch { /* не JSON */ }
+  if (!Array.isArray(data)) data = [];
+  const dir = extDir.replace(/\/$/, '');
+  for (const e of data) {
+    const where = `${e.path || ''} ${e.manifest_path || ''} ${e.install_path || ''}`;
+    if (where.includes(dir)) return e.id;
+  }
+  for (const e of data) {
+    const nm = e.name || (e.manifest && e.manifest.name) || '';
+    if (/resources saver/i.test(nm)) return e.id;
+  }
+  return '';
+}
+
+// Запасной путь: Chrome сам сообщает id в целях (service worker расширения).
 // Вычисленный по пути id может не совпасть — тогда страница панели отдаёт
 // ERR_BLOCKED_BY_CLIENT.
 async function realExtensionId(ctx, port, extDir) {
@@ -83,7 +109,9 @@ async function main() {
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
   log('подключился к уже запущенному Chrome');
   const ctx = browser.contexts()[0];
-  const extId = await realExtensionId(ctx, PORT, EXT);
+  let extId = await extensionIdFromProfile(ctx, EXT);
+  log(extId ? `id расширения (из профиля): ${extId}` : 'id в профиле не найден, ищем в целях Chrome');
+  if (!extId) extId = await realExtensionId(ctx, PORT, EXT);
   const computed = unpackedExtensionId(EXT);
   if (extId === computed) {
     // id вычислен по пути — значит Chrome не показал ни одной цели расширения
