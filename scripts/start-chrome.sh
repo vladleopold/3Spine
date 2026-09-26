@@ -47,6 +47,21 @@ DISPLAY=":$DISPLAY_NUM" "$CHROME_BIN" \
   --load-extension="$EXT_DIR" \
   "$URL_" >/tmp/chrome.log 2>&1 &
 echo $! > /tmp/chrome.pid
+# Режим разработчика в профиле: без него распакованное расширение
+# загружается, но остаётся выключенным, и панели в DevTools не появляются
+mkdir -p "$PROFILE/Default"
+PROFILE_DIR_ABS="$PROFILE" node -e '
+const fs = require("fs");
+const p = process.env.PROFILE_DIR_ABS + "/Default/Preferences";
+let j = {};
+try { j = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+j.extensions = j.extensions || {};
+j.extensions.ui = j.extensions.ui || {};
+j.extensions.ui.developer_mode = true;
+fs.writeFileSync(p, JSON.stringify(j));
+console.error("developer_mode=true в Preferences");
+' || true
+
 log "Chrome запущен, pid $(cat /tmp/chrome.pid), DevTools порт $PORT"
 
 # ждём, когда DevTools-порт поднимется
