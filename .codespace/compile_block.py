@@ -107,6 +107,51 @@ def main() -> None:
                 except OSError:
                     pass
 
+    def updates_dir() -> str:
+        """Каталог загруженных версий редактора (в CI это ~/.spine/updates)."""
+        env = os.environ.get("SPINE_UPDATES_DIR")
+        if env:
+            return env
+        home = os.path.expanduser("~")
+        for cand in (os.path.join(home, ".spine", "updates"),
+                     os.path.join(home, "Library", "Application Support", "Spine", "updates")):
+            if os.path.isdir(cand):
+                return cand
+        return os.path.join(home, ".spine", "updates")
+
+    broken_versions: set = set()
+    retried_versions: set = set()
+
+    def editor_installed(ver: str) -> bool:
+        """Файл версии редактора существует и выглядит целым (норма — десятки МБ)."""
+        if not ver:
+            return True
+        path = os.path.join(updates_dir(), ver)
+        try:
+            return os.path.isfile(path) and os.path.getsize(path) > 5 * 1024 * 1024
+        except OSError:
+            return False
+
+    def editor_broken(ver: str, log_hint: str = "") -> bool:
+        """Версия не запускается: помечаем, чтобы не тратить время на каждом файле."""
+        if not ver:
+            return False
+        if ver in broken_versions:
+            return True
+        hint = (log_hint or "").lower()
+        if ("validating update file" in hint or "classformaterror" in hint
+                or "an error occurred starting" in hint or "[eof]" in hint):
+            broken_versions.add(ver)
+            path = os.path.join(updates_dir(), ver)
+            try:
+                if os.path.isfile(path) and os.path.getsize(path) < 1024:
+                    os.remove(path)
+                    print(f"compile-block: удалён битый файл версии {ver}")
+            except OSError:
+                pass
+            return True
+        return False
+
     def base_cmd() -> list[str]:
         return [spine] + (["-Xmx" + xmx + "m"] if xmx else [])
 
@@ -569,8 +614,33 @@ def main() -> None:
                     p, out_spine, ver, rel = job
                     rel_spine = rel[:-5] + ".spine" if rel.lower().endswith(".json") else rel
                     tail = ["-i", p, "-o", out_spine, "-r"]
-                    attempts = (([base_cmd() + ["-u", ver] + tail] * 2) if (ver and not fallback) else []) \
-                        + [base_cmd() + tail] * 3
+                    # если в JSON указана версия — используем ровно её:
+                    # подстановка «последней» (4.3.x) ломает 3.x-кривые и тянет
+                    # лишнюю загрузку редактора
+                    if ver and not fallback:
+                        attempts = [base_cmd() + ["-u", ver] + tail] * 2
+                    else:
+                        attempts = [base_cmd() + tail] * 3
+                    if ver and not editor_installed(ver) and ver not in retried_versions:
+                        # первый запуск сам скачает нужную версию редактора
+                        retried_versions.add(ver)
+                        run(base_cmd() + ["-u", ver, "-i", p, "-o", out_spine, "-r"])
+                        if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
+                            return rel, True, (f"compile-block: ✓ {rel} → "
+                                               f"{os.path.basename(out_spine)} (Spine {ver}, версия {ver})")
+                        if not editor_installed(ver):
+                            path = os.path.join(updates_dir(), ver)
+                            try:
+                                if os.path.exists(path):
+                                    os.remove(path)
+                            except OSError:
+                                pass
+                            broken_versions.add(ver)
+                            return rel, False, (f"compile-block: FAIL {rel}: не удалось загрузить "
+                                                f"редактор Spine {ver} (файл обновления повреждён)")
+                    if ver and editor_broken(ver):
+                        return rel, False, (f"compile-block: FAIL {rel}: редактор Spine {ver} "
+                                            f"не запускается (битое обновление), нужна версия {ver}")
                     rc = -1
                     for idx, cmd in enumerate(attempts):
                         used = ("версия " + ver) if "-u" in cmd else "последняя"
