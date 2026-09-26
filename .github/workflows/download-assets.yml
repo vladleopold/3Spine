@@ -71,7 +71,6 @@ jobs:
           google-chrome --version
           echo "CHROME_PATH=/usr/bin/google-chrome" >> "$GITHUB_ENV"
 
-      - run: npx playwright install chromium --with-deps
 
       - name: Скачать все ресурсы игры
         env:
