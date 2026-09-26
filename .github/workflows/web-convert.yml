@@ -28,9 +28,15 @@ jobs:
           if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
           URL=$(tr -d '\r\n' < fetch-url.txt)
           echo "ссылка на игру: $URL"
-          echo "$URL" > work/fetch-url.txt 2>/dev/null || true
           python3 -m pip install --quiet playwright aiohttp brotli
-          python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 | tee fetch-log.txt
+          # страховка от зависания: весь шаг обязан уложиться в 9 минут
+          set +e
+          timeout 540 python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 | tee fetch-log.txt
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" = "124" ]; then
+            echo "::warning::выкачивание не уложилось в 9 минут — берём то, что успело"
+          fi
           rm -f fetch-url.txt
           unzip -l input.zip | head -30
 
