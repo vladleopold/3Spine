@@ -44,6 +44,7 @@ jobs:
           SPINE_REPAIR_BUDGET: "1200"
           SPINE_REPAIR_MIN_CONFIDENCE: "0.5"
           SPINE_REPAIR_MAX_FILES: "60"
+          SPINE_REPAIR_TIME_LIMIT: "30"
         run: |
           set -euo pipefail
           test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }

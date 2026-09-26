@@ -3,7 +3,7 @@
 # Использование: convert.py <input.zip> <output.zip>
 # Для каждого .skel внутри входного ZIP запускает настоящий C++-конвертер,
 # прикладывает сопутствующие изображения и кладёт результат в output.zip.
-import os, re, sys, json, zipfile, shutil, subprocess, tempfile, threading
+import os, re, sys, json, time, zipfile, shutil, subprocess, tempfile, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from safezip import safe_unzip
 from concurrent.futures import ThreadPoolExecutor
@@ -211,6 +211,8 @@ def main():
         repair_budget = int(os.environ.get("SPINE_REPAIR_BUDGET", "1500"))
         repair_min_conf = float(os.environ.get("SPINE_REPAIR_MIN_CONFIDENCE", "0.5"))
         repair_max_files = int(os.environ.get("SPINE_REPAIR_MAX_FILES", "60"))
+        repair_time_limit = float(os.environ.get("SPINE_REPAIR_TIME_LIMIT", "30"))
+        repair_deadline = time.monotonic() + repair_time_limit
         repair_state = {"on": repair_on, "left": repair_max_files, "done": [], "fail": []}
         repair_tool = None
         if repair_on:
@@ -232,11 +234,22 @@ def main():
             with repair_state_lock:
                 if repair_state["left"] <= 0:
                     return ""
+                if time.monotonic() > repair_deadline:
+                    repair_state.setdefault("skipped_time", 0)
+                    repair_state["skipped_time"] += 1
+                    return ""
                 repair_state["left"] -= 1
             try:
                 with open(sk, "rb") as f:
                     data = f.read()
-                parsed, rep = repair_tool.heal(data, budget=repair_budget,
+            except OSError:
+                return ""
+            # бюджет обратно пропорционален размеру: крупные файлы иначе
+            # съедают весь лимит времени, не давая попробовать мелкие
+            scale = 40000.0 / max(40000, len(data))
+            budget_here = max(200, int(repair_budget * scale))
+            try:
+                parsed, rep = repair_tool.heal(data, budget=budget_here,
                                                 min_unknown_pct=0.0)
             except Exception as e:
                 repair_state["fail"].append({"file": rel, "error": f"{type(e).__name__}: {e}"})
@@ -321,6 +334,8 @@ def main():
                 }, f, ensure_ascii=False, indent=1)
             line = (f"repair: восстановлено {len(repair_state['done'])}, "
                     f"не поддалось {len(repair_state['fail'])}")
+            if repair_state.get("skipped_time"):
+                line += f", пропущено по времени: {repair_state['skipped_time']}"
             print(line)
             loglines.append(line)
             if repair_state["done"]:
