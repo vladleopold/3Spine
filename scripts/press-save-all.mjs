@@ -557,14 +557,29 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       })()`, sid, best.id, 3000).catch((e) => 'вкладки: ошибка ' + e.message);
       log(`   ${tabs}`);
 
+      if (i === 0) {
+        const dump = await browser.eval(`(() => {
+          const roots = (${SHADOW_ROOTS})(document);
+          const seen = [];
+          for (const r of roots) for (const el of r.querySelectorAll('*')) {
+            const cls = String((el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className) || '');
+            if (!/tab/i.test(cls)) continue;
+            const t = (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 26);
+            seen.push(cls.split(' ').slice(0, 2).join('.') + '=' + t);
+          }
+          return [...new Set(seen)].slice(0, 46).join(' ; ');
+        })()`, sid, best.id, 4000).catch((e) => 'дамп: ошибка ' + e.message);
+        log(`   классы вкладок: ${dump}`);
+      }
+
       const tabClicked = await browser.eval(`(() => {
         const roots = (${SHADOW_ROOTS})(document);
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
-          if (el.children.length) continue;
           const t = (el.innerText || el.textContent || '').trim();
-          if (!/^resources saver$/i.test(t)) continue;
-          el.click();
-          return 'вкладка Resources Saver нажата';
+          if (t !== 'Resources Saver') continue;
+          const leaf = el.querySelector('*') || el;
+          leaf.click();
+          return 'вкладка Resources Saver нажата (' + el.tagName + '.' + String(el.className).slice(0, 30) + ')';
         }
         return 'вкладка Resources Saver в тенях не найдена';
       })()`, sid, best.id, 3000).catch((e) => 'вкладка: ошибка ' + e.message);
