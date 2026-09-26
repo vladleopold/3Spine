@@ -61,7 +61,11 @@ def left() -> float:
     return max(0.0, DEADLINE[0] - time.time())
 
 
+LOG_LINES = []
+
+
 def log(msg: str) -> None:
+    LOG_LINES.append(str(msg))
     print(msg, flush=True)
 
 
@@ -703,6 +707,21 @@ def download_set(urls, root: str, workers: int, timeout: int, log_prefix: str) -
     return done[0]
 
 
+def finish_empty(args, diag, verdict: str, urls) -> int:
+    """Отдаём архив с логом и вердиктом: пользователь видит причину, а не пустоту."""
+    tmp = tempfile.mkdtemp(prefix="gfetch-empty-")
+    with zipfile.ZipFile(args.out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("fetch-log.txt", "\n".join(LOG_LINES) + "\n")
+        z.writestr("fetch-report.json", json.dumps({
+            "url": args.url, "ok": False, "verdict": verdict,
+            "http_status": diag["status"], "bytes": diag["bytes"],
+            "antibot": diag["antibot"], "engine_html": diag["engine"],
+            "discovered_urls": len(urls), "seconds": round(time.time(), 1),
+        }, ensure_ascii=False, indent=1))
+    log("архив с причиной: %s (%d Б)" % (args.out, os.path.getsize(args.out)))
+    return 3
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Универсальная выкачка игровых ассетов по ссылке")
     ap.add_argument("url", help="ссылка на игру (любую страницу, где она играется)")
@@ -759,7 +778,8 @@ def main() -> int:
     looks_game = bool(re.search(
         r"(gs2c|openGame|gameSymbol|games-html5|unity|phaser|pixi|cocos|egret|"
         r"construct|\.atlas|\.skel|spine|WebGL|canvas)", page_text, re.I))
-    hopeless = bool(diag["antibot"]) and not looks_game
+    blocked = diag["status"] in (401, 403, 429, 451, 503)
+    hopeless = (blocked or bool(diag["antibot"])) and not looks_game
     if hopeless:
         log("страница под антиботом и без признаков игры — не тратим время на обход")
     log("найдено адресов: %d (движок: %s)" % (len(urls), info["engine"]))
@@ -769,6 +789,16 @@ def main() -> int:
         log("идентификатор игры из ссылки: %s" % gid)
 
     picked = pick_assets(urls, kinds)
+
+    if hopeless and not (picked["json"] or picked["atlas"] or picked["skel"]):
+        verdict = ("площадка блокирует IP runner'а (HTTP %s%s) — автоматическая выкачка невозможна"
+                   % (diag["status"],
+                      (", антибот: " + ", ".join(diag["antibot"][:2])) if diag["antibot"] else ""))
+        log("--- СВОДКА ПОИСКА ---")
+        log("HTTP %s | байт: %d | адресов в сети: %d | кандидатов Spine: 0"
+            % (diag["status"], diag["bytes"], len(urls)))
+        log("ВЫВОД: %s. Нужен другой IP/прокси или ручная выгрузка ассетов." % verdict)
+        return finish_empty(args, diag, verdict, urls)
 
     # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами
     thin = len(urls) < args.pw_min_urls or not (picked["json"] or picked["atlas"] or picked["skel"])

@@ -523,3 +523,16 @@ footer {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ---------- вердикт выкачивания ---------- */
+
+.fetch-verdict {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #7a2f2f;
+  background: #2a1616;
+  color: #ffd9d9;
+  font-size: 13px;
+  line-height: 1.4;
+}

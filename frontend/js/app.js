@@ -707,6 +707,13 @@
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
+  function showFetchVerdict(text) {
+    const box = $("fetch-verdict");
+    if (!box) return;
+    box.textContent = text;
+    box.classList.remove("hidden");
+  }
+
   async function renderPreviews(blob) {
     const grid = $("previews-grid");
     revokePreviewUrls();
@@ -717,6 +724,19 @@
       z = await JSZip.loadAsync(blob);
     } catch (e) {
       return false;
+    }
+    const report = z.file("fetch-report.json");
+    if (report) {
+      try {
+        const r = JSON.parse(await report.async("string"));
+        if (r && r.ok === false) {
+          showFetchVerdict(
+            "Выкачивание не удалось: " + (r.verdict || "причина неизвестна") +
+            (r.http_status ? " (HTTP " + r.http_status + ")" : "") +
+            (r.antibot && r.antibot.length ? ". Антибот: " + r.antibot.slice(0, 3).join(", ") : "")
+          );
+        }
+      } catch (e) { /* отчёт не читается — не критично */ }
     }
     const idxFile = z.file("previews/index.json");
     if (!idxFile) { showPreviewsPanel(false); return false; }
