@@ -214,8 +214,61 @@ async function pressViaIframe(browser, extId, shimSrc) {
   log(`   статус iframe: ${st}`);
   log(`   контексты: ${contexts.map((c) => c.origin).join(' | ')}`);
 
-  // фрейм панели берём из дерева фреймов — это быстро и надёжно
-  const tree = await browser.send('Page.getFrameTree', {}, sessionId, 4000)
+  // панель — отдельная цель (OOPIF) с URL content.html: ищем её среди всех целей
+  let panelTargetInfo = null;
+  for (let i = 0; i < 20 && !panelTargetInfo; i++) {
+    await browser.send('Target.setDiscoverTargets', { discover: true });
+    const infos = (await browser.send('Target.getTargets')).targetInfos || [];
+    panelTargetInfo = infos.find((t) => /\/content\.html/.test(t.url || '')) || null;
+    if (!panelTargetInfo) await sleep(500);
+  }
+  if (panelTargetInfo) {
+    log(`   цель панели: [${panelTargetInfo.type}] ${panelTargetInfo.url.slice(0, 80)}`);
+    let pw = null, pwSess = null;
+    if (panelTargetInfo.webSocketDebuggerUrl) {
+      pw = await CDP.connect(panelTargetInfo.webSocketDebuggerUrl).catch(() => null);
+    }
+    if (!pw) {
+      try {
+        ({ sessionId: pwSess } = await browser.send('Target.attachToTarget',
+          { targetId: panelTargetInfo.targetId, flatten: true }, undefined, 5000));
+      } catch (e) { log(`   attach панели: ${e.message}`); }
+    }
+    const evalP = (expr, ctxId) => (pw
+      ? pw.eval(expr, undefined, ctxId, 3000)
+      : browser.eval(expr, pwSess, ctxId, 3000));
+    const sendP = (m, pr) => (pw ? pw.send(m, pr, undefined, 4000) : browser.send(m, pr, pwSess, 4000));
+    const ctxs = [];
+    const onC = (m) => {
+      if (m.method === 'Runtime.executionContextCreated') ctxs.push(m.params.context);
+    };
+    if (pw) pw.onEvent = onC; else browser.onEvent = onC;
+    await sendP('Runtime.enable', {}).catch((e) => log(`   Runtime.enable: ${e.message}`));
+    await sleep(1000);
+    log(`   контекстов панели: ${ctxs.length}`);
+    for (const c of ctxs) {
+      const has = await evalP('!!document.getElementById("up-save")', c.id).catch(() => false);
+      if (!has) continue;
+      return await evalP(`(() => {
+        const b = document.getElementById('up-save');
+        const t = (b.textContent || '').trim();
+        b.click();
+        return 'НАЖАТА: "' + t + '"';
+      })()`, c.id).catch((e) => 'ошибка: ' + e.message);
+    }
+    // контекстов нет — пробуем без контекста
+    return await evalP(`(() => {
+      const b = document.getElementById('up-save');
+      if (!b) return 'кнопки #up-save нет';
+      const t = (b.textContent || '').trim();
+      b.click();
+      return 'НАЖАТА: "' + t + '"';
+    })()`).catch((e) => 'ошибка: ' + e.message);
+  }
+  log('   цель панели среди целей не появилась');
+
+  // фрейм панели берём из дерева фреймов — это запасной путь
+  const tree = await browser.send('Page.getFrameTree', {}, sessionId, 3000)
     .catch(() => null);
   let frameId = '';
   if (tree && tree.frameTree) {
@@ -225,23 +278,8 @@ async function pressViaIframe(browser, extId, shimSrc) {
     };
     walk(tree.frameTree);
   }
-  log(`   фрейм панели: ${frameId || 'не найден в дереве'}`);
-  if (!frameId) {
-    // запасной путь — перебор контекстов
-    for (const c of contexts) {
-      const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id, 2000)
-        .catch(() => false);
-      if (has) {
-        return await browser.eval(`(() => {
-          const b = document.getElementById('up-save');
-          const t = (b.textContent || '').trim();
-          b.click();
-          return 'НАЖАТА: "' + t + '"';
-        })()`, sessionId, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
-      }
-    }
-    return 'фрейм панели не найден';
-  }
+  log(`   фрейм панели: ${frameId || 'не найден'}`);
+  if (!frameId) return 'фрейм панели не найден';
   const world = await browser.send('Page.createIsolatedWorld',
     { frameId, worldName: 'rs-world', grantUniveralAccess: true }, sessionId, 4000)
     .catch(() => null);
