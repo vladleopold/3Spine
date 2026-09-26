@@ -422,26 +422,26 @@ async function main() {
         }
       }
     }
-    await closeCtx(ctx);
-
-    // добираем файлы из манифестов (то, что страница не запросила, но нужно)
+    // добираем файлы из манифестов — в той же сессии (куки/Referer как у браузера)
     if (manifestUrls.size) {
       log(`  → добираю из манифестов: ${manifestUrls.size}`);
-      const ctx2 = await chromium.launchPersistentContext(PROFILE || path.join(OUTPUT_DIR, '.tmp-profile'),
-        { headless: HEADLESS, ...(EXEC ? { executablePath: EXEC } : {}),
-          args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-web-security'] });
-      const p2 = ctx2.pages()[0] || await ctx2.newPage();
       let n = 0;
       for (const u of Array.from(manifestUrls).slice(0, 4000)) {
         try {
-          const r = await p2.request.get(u, { timeout: 12000 });
+          const r = await ctx.request.get(u, {
+            timeout: 12000,
+            headers: {
+              Referer: page.url(),
+              'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8',
+            },
+          });
           if (r.ok()) { const b = await r.body(); if (await saveBytes(u, b, dir, all)) n++; }
-        } catch { }
-        if (n > 1200) break;
+        } catch { /* CDN не отдал — идём дальше */ }
+        if (n > 1500) break;
       }
-      await ctx2.close().catch(() => {});
       log(`  → добрано ${n}`);
     }
+    await closeCtx(ctx);
 
     const cnt = all.size;
     const spine = all.size ? countSpine(dir) : 0;
