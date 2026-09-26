@@ -325,7 +325,8 @@ async function main() {
   const fromProfile = await extensionIdFromProfile(ctx, EXT);
   const fromTargets = await realExtensionId(ctx, PORT, EXT);
   const computed = unpackedExtensionId(EXT);
-  const candidates = [...new Set([loaded, fromProfile, computed, fromTargets].filter(Boolean))];
+  const candidates = loaded ? [loaded]
+    : [...new Set([fromProfile, computed, fromTargets].filter(Boolean))];
   log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
 
   let panel = null;
@@ -342,10 +343,11 @@ async function main() {
     log(`   панель открыта расширением: ${t.url}`);
     const c = await RawCDP.connect(t.webSocketDebuggerUrl);
     // реальный id вкладки игры — читаем из контекста расширения
-    const tabs = await c.eval(`new Promise((res) => chrome.tabs.query({}, (l) => res(
+    const rawTabs = await c.eval(`new Promise((res) => chrome.tabs.query({}, (l) => res(
         (l || []).map((x) => ({ id: x.id, url: x.url || '' })))))`).catch(() => []);
+    const tabs = Array.isArray(rawTabs) ? rawTabs : [];
     const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
-    const gameTab = (tabs || []).find((x) => x.url.startsWith(origin)) || (tabs || [])[0];
+    const gameTab = tabs.find((x) => x.url.startsWith(origin)) || tabs[0];
     const realTabId = gameTab ? gameTab.id : 0;
     log(`   вкладка игры: id=${realTabId} ${gameTab ? gameTab.url.slice(0, 60) : '—'}`);
     // подмена chrome.devtools + перезагрузка панели
