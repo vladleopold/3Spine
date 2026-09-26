@@ -30,13 +30,28 @@ log "окно Chrome: $win"
 
 xdotool windowactivate --sync "$win" 2>/dev/null || xdotool windowfocus "$win" || true
 sleep 1
-# F12 — открыть/переключить DevTools
+# 1) открываем DevTools ровно один раз (второй F12 закрыл бы его)
 xdotool key --window "$win" F12
 sleep 4
-# на всякий случай второй раз, если окно ещё не в фокусе
-xdotool key --window "$win" F12 2>/dev/null || true
-sleep 3
-# выбираем вкладку Resources Saver через командную палитру DevTools
+
+# 2) проверяем, что DevTools действительно открылся
+PORT="${CDP_PORT:-9222}"
+devtools_open() {
+  curl -fsS --max-time 3 "http://127.0.0.1:$PORT/json/list" 2>/dev/null | grep -q 'devtools://' \
+    && return 0
+  xdotool search --onlyvisible --name "DevTools" 2>/dev/null | grep -q . && return 0
+  return 1
+}
+if devtools_open; then
+  log "DevTools открыт"
+else
+  log "DevTools не открылся, повторяю F12"
+  xdotool key --window "$win" F12
+  sleep 4
+  devtools_open && log "DevTools открыт со второй попытки" || log "DevTools всё ещё не открыт"
+fi
+
+# 3) только теперь выбираем вкладку Resources Saver через командную палитру
 xdotool key --window "$win" --clearmodifiers ctrl+shift+p
 sleep 2
 xdotool type --window "$win" --delay 60 "Resources Saver"
@@ -44,8 +59,6 @@ sleep 2
 xdotool key --window "$win" Return
 sleep 4
 log "вкладка Resources Saver выбрана через командную палитру"
-
-log "DevTools открыт (F12)"
 
 # диагностика: окно DevTools в CDP не видно (Chrome отдаёт его как browser_ui),
 # поэтому шаг не считаем ошибкой — кнопку нажмём на странице панели.
