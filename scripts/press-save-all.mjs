@@ -635,6 +635,36 @@ async function main() {
       if (/панель открыта/.test(String(shown))) pressed = pressed || false;
     }
 
+    // Панель расширения рисуется в shadow DOM окна DevTools: UI.inspectorView
+    // в бандле недоступен, но кнопка #up-save лежит в одной из теней.
+    {
+      const walkBtn = `(() => {
+        const walk = (root) => {
+          const b = root.querySelector && root.querySelector('#up-save');
+          if (b) return b;
+          const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+          for (const el of all) { if (el.shadowRoot) { const r = walk(el.shadowRoot); if (r) return r; } }
+          return null;
+        };
+        const b = walk(document);
+        if (!b) {
+          return 'в тенях кнопки нет | iframe=' + document.querySelectorAll('iframe').length
+            + ' | элементов=' + document.querySelectorAll('*').length
+            + ' | title=' + String(document.title).slice(0, 30);
+        }
+        const t = (b.textContent || '').trim();
+        b.click();
+        return 'НАЖАТА: "' + t + '"';
+      })()`;
+      for (let i = 0; i < 8 && !pressed; i++) {
+        const r = await evalIn(walkBtn).catch((e) => 'ошибка: ' + e.message);
+        log(`   ${r}`);
+        if (/НАЖАТА/.test(String(r))) { pressed = true; why = String(r); break; }
+        if (!/в тенях кнопки нет/.test(String(r))) break;
+        await sleep(500);
+      }
+    }
+
     // панель лежит во фрейме внутри окна DevTools — ищем его и жмём кнопку там
     try {
       const tree = await send2('Page.getFrameTree', {}).catch(() => null);
