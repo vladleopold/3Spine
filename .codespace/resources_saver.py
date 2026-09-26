@@ -18,10 +18,21 @@ from urllib.parse import unquote, urlsplit
 
 HERE = Path(__file__).resolve().parent
 VENDOR = HERE / "vendor"
-CHROME = (os.environ.get("SPINE_CHROME")
-          or "/usr/bin/google-chrome"
-          or "/usr/local/bin/chromium"
-          or "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+def _find_chrome() -> str:
+    import shutil
+    cands = [os.environ.get("SPINE_CHROME", "")]
+    for c in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        cands.append(shutil.which(c) or "")
+    cands += ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/local/bin/chromium",
+              "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+              "/Applications/Chromium.app/Contents/MacOS/Chromium"]
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    return ""
+
+
+CHROME = _find_chrome()
 
 # что нас интересует: скелеты, атласы, текстуры, манифесты
 KEEP_EXT = (".json", ".atlas", ".skel", ".scn", ".png", ".jpg", ".jpeg", ".webp",
