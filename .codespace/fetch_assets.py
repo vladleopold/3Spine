@@ -404,21 +404,30 @@ def diagnose_page(url: str) -> dict:
     или отдаться пустой SPA-оболочкой — и это видно сразу, а не по догадкам.
     """
     out = {"url": url, "final": url, "status": 0, "bytes": 0, "antibot": [],
-           "engine": "unknown", "html": ""}
+           "engine": "unknown", "html": "", "via_proxy": False}
+    text = ""
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": NORMAL_UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9"})
+        req = urllib.request.Request(url, headers=browser_headers())
         with urllib.request.urlopen(req, timeout=30) as r:
             data = r.read(4 * 1024 * 1024)
             out["status"] = r.status
             out["final"] = r.geturl()
             out["bytes"] = len(data)
+            text = data.decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         out["status"] = e.code
     except Exception:                                     # noqa: BLE001
         pass
-    text = data.decode("utf-8", "replace") if "data" in dir() else ""
+    if not text and PROXY:
+        # прямой запрос не прошёл (403 гео/антибот) — пробуем edge-прокси
+        data = _fetch_via_proxy(url, 30, quiet=True)
+        if data:
+            out["via_proxy"] = True
+            out["status"] = 200
+            out["bytes"] = len(data)
+            text = data.decode("utf-8", "replace")
+            from urllib.parse import urlsplit as _us
+            PROXY_HOSTS.add(_us(url).netloc)
     out["html"] = text
     low = text.lower()
     out["antibot"] = [m for m in ANTIBOT_MARKERS if m in low]
@@ -436,7 +445,8 @@ def report_diagnosis(d: dict) -> None:
         % (d["status"], d["bytes"], d["final"][:110]))
     if d["antibot"]:
         log("антибот на странице: %s" % ", ".join(d["antibot"][:4]))
-    log("отпечаток движка по HTML: %s" % d["engine"])
+    log("отпечаток движка по HTML: %s%s"
+        % (d["engine"], " (через edge-прокси)" if d.get("via_proxy") else ""))
 
 
 def collect_bodies(url: str, budget_ms: int = 30000) -> tuple:

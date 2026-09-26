@@ -111,6 +111,56 @@ async function handleHistory(request, env) {
 
 const FETCH_RE = /^https?:\/\/[\w.-]+\.[a-z]{2,}(\S*)$/i;
 
+const PRIVATE_HOST = /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.0\.0\.0$|\[?::1\]?$|172\.(1[6-9]|2\d|3[01])\.)/i;
+
+async function handleProxy(request) {
+  const raw = new URL(request.url).searchParams.get("url");
+  if (!raw) return json({ error: "url required" }, 400);
+  let target;
+  try {
+    target = new URL(raw);
+  } catch (_) {
+    return json({ error: "bad url" }, 400);
+  }
+  if (target.protocol !== "https:") return json({ error: "https only" }, 400);
+  if (PRIVATE_HOST.test(target.hostname)) return json({ error: "private host" }, 400);
+
+  // страховка от редиректов во внутреннюю сеть
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const resp = await fetch(target.toString(), {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+          + "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": target.origin + "/",
+      },
+    });
+    const len = Number(resp.headers.get("content-length") || 0);
+    if (len > 8 * 1024 * 1024) {
+      return json({ error: "too large", bytes: len }, 413);
+    }
+    const buf = await resp.arrayBuffer();
+    return new Response(buf, {
+      status: resp.status,
+      headers: {
+        "Content-Type": resp.headers.get("content-type") || "application/octet-stream",
+        "X-Proxy-Status": String(resp.status),
+        "X-Proxy-Url": target.toString(),
+        ...CORS,
+      },
+    });
+  } catch (e) {
+    return json({ error: "proxy fetch failed: " + String(e).slice(0, 120) }, 502);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function handleConvert(request, env) {
   const ctype = request.headers.get("content-type") || "";
   let buf = new ArrayBuffer(0);
@@ -288,6 +338,9 @@ export default {
       if (url.pathname === "/") return json({ ok: true });
       if (request.method === "POST" && url.pathname === "/convert") {
         return await handleConvert(request, env);
+      }
+      if (request.method === "GET" && url.pathname === "/proxy") {
+        return handleProxy(request);
       }
       if (request.method === "GET" && url.pathname === "/status") {
         return await handleStatus(request, env);
