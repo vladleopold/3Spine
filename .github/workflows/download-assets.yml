@@ -91,11 +91,15 @@ jobs:
         run: bash scripts/start-chrome.sh
 
       - name: Открыть DevTools
+        continue-on-error: true
         run: bash scripts/open-devtools.sh
 
       - name: Нажать Save All Resources в Resources Saver
         env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           OUTPUT_DIR: ./artifacts
+          EXT_DIR: .chrome-ext
+          PROFILE: ${{ github.workspace }}/.chrome-profile
         run: node scripts/press-save-all.mjs
 
       - name: Скачать все ресурсы игры

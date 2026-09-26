@@ -1,149 +1,136 @@
 #!/usr/bin/env node
 // Нажимаем «Save All Resources» в панели Resources Saver.
 //
-// Playwright не показывает окно DevTools среди своих целей, поэтому работаем
-// напрямую с CDP по WebSocket (Node 22, без зависимостей):
-//   1) /json/list -> окно DevTools (devtools://)
-//   2) в нём кликаем вкладку Resources Saver
-//   3) /json/list -> цель панели chrome-extension://<id>/content.html
-//   4) в ней кликаем #up-save — это и есть кнопка Save All Resources
+// Проблема: окно DevTools не появляется среди целей CDP (Chrome не отдаёт
+// фронтенд DevTools как target), поэтому кликнуть по нему через CDP нельзя.
+//
+// Решение: открываем ту же панель расширения (chrome-extension://<id>/content.html)
+// как страницу и подставляем ей chrome.devtools через подмену: ресурсы и HAR
+// собираем сами через CDP. Кнопка #up-save — настоящая, из content.html.
+import { chromium } from 'playwright';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
+const URL_ = process.env.URL || '';
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
-const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
-const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '45000', 10);
-const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '180000', 10);
+const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
+const PROFILE = path.resolve(process.env.PROFILE || './.chrome-profile');
+const CHROME = process.env.CHROME_PATH
+  || (fs.existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : '');
+const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
+const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '240000', 10);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
 
-async function listTargets() {
-  const r = await fetch(`http://127.0.0.1:${PORT}/json/list`);
-  return r.json();
+function unpackedExtensionId(dir) {
+  const h = crypto.createHash('sha256').update(dir).digest('hex').slice(0, 32);
+  return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
 }
 
-class CDP {
-  constructor(ws) {
-    this.ws = ws; this.id = 0; this.waiting = new Map();
-    this.sessions = new Map();          // sessionId -> { url, type }
-    this.listeners = [];                // обработчики событий
-  }
-
-  onEvent(fn) { this.listeners.push(fn); }
-
-  static async connect(wsUrl) {
-    const ws = new WebSocket(wsUrl);
-    await new Promise((res, rej) => {
-      ws.addEventListener('open', res, { once: true });
-      ws.addEventListener('error', () => rej(new Error('CDP: не подключился')), { once: true });
-    });
-    const c = new CDP(ws);
-    ws.addEventListener('message', (ev) => {
-      let m;
-      try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.method) {
-        // авто-подключение к фреймам: запоминаем, где панель расширения
-        if (m.method === 'Target.attachedToTarget') {
-          const si = m.params.sessionId;
-          c.sessions.set(si, { url: m.params.targetInfo.url, type: m.params.targetInfo.type });
-        }
-        for (const fn of c.listeners) fn(m);
-        return;
-      }
-      const w = c.waiting.get(m.id);
-      if (!w) return;
-      c.waiting.delete(m.id);
-      m.error ? w.rej(new Error(m.error.message)) : w.res(m.result);
-    });
-    return c;
-  }
-
-  send(method, params = {}, sessionId) {
-    const id = ++this.id;
-    const msg = { id, method, params };
-    if (sessionId) msg.sessionId = sessionId;
-    this.ws.send(JSON.stringify(msg));
-    return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
-  }
-
-  async eval(expression, sessionId) {
-    const r = await this.send('Runtime.evaluate',
-      { expression, awaitPromise: true, returnByValue: true }, sessionId);
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
-    return r.result ? r.result.value : undefined;
-  }
-}
-
-const CLICK_TAB = `(() => {
-  const all = [...document.querySelectorAll('*')];
-  const hit = all.find((e) => {
-    const t = ((e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title'))) || '').trim();
-    return /resources saver/i.test(t);
-  }) || all.find((e) => (e.textContent || '').trim() === 'Resources Saver');
-  if (!hit) return 'вкладка не найдена';
-  hit.click();
-  return 'вкладка нажата';
-})()`;
-
-const CLICK_SAVE = `(() => {
-  const b = document.getElementById('up-save');
-  if (!b) return 'кнопки #up-save нет';
-  b.scrollIntoView();
-  b.click();
-  return 'кнопка нажата: ' + (b.textContent || '').trim();
-})()`;
+const SHIM = (payload) => `(() => {
+  const DATA = ${payload};
+  const noop = { addListener() {}, removeListener() {} };
+  const resources = DATA.resources.map((r) => ({ url: r.url, content: r.body, size: r.size }));
+  chrome.devtools = {
+    inspectedWindow: {
+      tabId: DATA.tabId,
+      getResources(cb) { cb(resources); },
+      onResourceAdded: noop,
+      reload() {},
+      eval() {},
+    },
+    network: {
+      getHAR(cb) { cb({ log: { version: '1.2', entries: DATA.har } }); },
+      onRequestFinished: noop,
+    },
+  };
+})();`;
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const all = await listTargets();
-  log(`целей в Chrome: ${all.length}`);
-  for (const t of all.slice(0, 12)) log(`   [${t.type}] ${t.url.slice(0, 100)}`);
+  fs.mkdirSync(PROFILE, { recursive: true });
+  const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
+  const extId = unpackedExtensionId(EXT);
+  log(`расширение: ${m.name} v${m.version}, id ${extId}`);
 
-  const devtools = all.find((t) => t.url.startsWith('devtools://'));
-  if (!devtools) {
-    const panel = all.find((t) => t.url.startsWith('chrome-extension://') && t.url.includes('content.html'));
-    log(panel ? 'панель есть, окна DevTools нет — жму прямо в панели' : 'нет ни окна DevTools, ни панели');
-    if (!panel) throw new Error('DevTools не открылся: нет ни devtools://, ни content.html');
-    const c = await CDP.connect(panel.webSocketDebuggerUrl);
-    log(await c.eval(CLICK_SAVE));
-  } else {
-    log(`окно DevTools: ${devtools.url.slice(0, 90)}`);
-    const dt = await CDP.connect(devtools.webSocketDebuggerUrl);
-    // панель расширения — фрейм внутри окна DevTools, подхватываем его авто-attach'ем
-    await dt.send('Target.setAutoAttach',
-      { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
-    log(await dt.eval(CLICK_TAB));
+  const ctx = await chromium.launchPersistentContext(PROFILE, {
+    headless: false,
+    executablePath: CHROME || undefined,
+    ignoreHTTPSErrors: true,
+    acceptDownloads: true,
+    args: [
+      '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
+      '--disable-blink-features=AutomationControlled',
+      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
+    ],
+  });
 
-    const deadline = Date.now() + PANEL_TIMEOUT;
-    let panelSession = null;
-    while (Date.now() < deadline && !panelSession) {
-      for (const [sid, info] of dt.sessions) {
-        if (info.url && info.url.startsWith('chrome-extension://') && info.url.includes('content.html')) {
-          panelSession = sid;
-          log(`панель в DevTools: ${info.url}`);
-          break;
-        }
-      }
-      if (!panelSession) {
-        // вкладка могла не открыться с первого раза — жмём ещё раз
-        await dt.eval(CLICK_TAB).catch(() => {});
-        await sleep(1500);
-      }
-    }
-    if (!panelSession) throw new Error('фрейм панели Resources Saver не появился в DevTools');
-    log(await dt.eval(CLICK_SAVE, panelSession));
-  }
+  // 1) собираем все ресурсы страницы через CDP
+  const page = ctx.pages()[0] || await ctx.newPage();
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send('Browser.setDownloadBehavior',
+    { behavior: 'allow', downloadPath: OUT, eventsEnabled: true });
+  await cdp.send('Network.enable');
 
-  const zipDeadline = Date.now() + ZIP_TIMEOUT;
+  const bodies = new Map();     // url -> { body, mimeType, size }
+  cdp.on('Network.responseReceived', async (ev) => {
+    const { response, requestId } = ev;
+    if (!/^https?:/i.test(response.url)) return;
+    if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
+    try {
+      const r = await cdp.send('Network.getResponseBody', { requestId });
+      const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+      bodies.set(response.url, {
+        body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
+      });
+    } catch { /* тело уже вытеснено из кеша */ }
+  });
+
+  log(`открываю ${URL_}`);
+  await page.goto(URL_, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await sleep(Math.min(COLLECT_MS, 20000));
+  log(`ресурсов собрано: ${bodies.size}`);
+
+  const resources = [...bodies].map(([url, v]) => ({ url, body: v.body, size: v.size }));
+  const har = resources.map((r) => {
+    const v = bodies.get(r.url);
+    return { request: { url: r.url, method: 'GET' },
+      response: { status: 200, content: { size: v.size, mimeType: v.mimeType } } };
+  });
+
+  // 2) открываем панель Resources Saver и подменяем ей chrome.devtools
+  const panel = await ctx.newPage();
+  await panel.addInitScript(SHIM(JSON.stringify({
+    resources, har, tabId: 9001,
+  })));
+  const url = `chrome-extension://${extId}/content.html`;
+  await panel.goto(url, { waitUntil: 'domcontentloaded' });
+  log(`панель Resources Saver открыта: ${url}`);
+
+  const btn = panel.locator('#up-save');
+  await btn.waitFor({ state: 'visible', timeout: 20000 });
+  const label = (await btn.textContent().catch(() => '')) || '';
+  log(`нажимаю кнопку: "${label.trim()}"`);
+  await panel.evaluate(() => document.getElementById('up-save').click());
+
+  // 3) ждём ZIP
+  const deadline = Date.now() + ZIP_TIMEOUT;
   let zip = null;
-  while (Date.now() < zipDeadline) {
+  while (Date.now() < deadline) {
     const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(2000);
   }
-  if (!zip) throw new Error('ZIP не появился после нажатия Save All Resources');
+  if (!zip) {
+    const state = (await panel.textContent('body').catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+    log(`состояние панели: ${state}`);
+    await ctx.close();
+    throw new Error('ZIP не появился после нажатия Save All Resources');
+  }
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ)`);
+  await ctx.close();
 }
 
 main().catch((e) => { console.error('ошибка:', e.message); process.exit(1); });
