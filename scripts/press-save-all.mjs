@@ -332,6 +332,34 @@ async function collectFromGame(browser) {
   return { sessionId, bodies };
 }
 
+
+// Открываем панель Resources Saver программно через API фронтенда DevTools.
+// X11-ввод (палитра) не срабатывает, а у фронтенда есть свой доступ.
+const LIST_PANELS = `(() => {
+  try {
+    const iv = (globalThis.UI && UI.inspectorView) || null;
+    const pane = iv && (iv._tabbedPane || iv.tabbedPane);
+    if (pane && pane.tabs) {
+      return JSON.stringify(pane.tabs.map((t) => String(t.id || t.name || '')));
+    }
+    return 'нет tabbedPane';
+  } catch (e) { return 'ошибка: ' + e.message; }
+})()`;
+
+const SHOW_PANEL = `(async () => {
+  try {
+    const iv = (globalThis.UI && UI.inspectorView) || null;
+    if (!iv) return 'нет UI.inspectorView';
+    const pane = iv._tabbedPane || iv.tabbedPane;
+    if (!pane || !pane.tabs) return 'нет панелей';
+    const ids = pane.tabs.map((t) => String(t.id || t.name || ''));
+    const want = ids.find((id) => /resource/i.test(id)) || null;
+    if (!want) return 'панель Resources Saver не найдена среди: ' + ids.join(', ');
+    await iv.showPanel(want);
+    return 'панель открыта: ' + want;
+  } catch (e) { return 'ошибка: ' + e.message; }
+})()`;
+
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -455,6 +483,17 @@ async function main() {
     await send2('Page.enable', {}).catch(() => {});
     await sleep(1500);
     log(`   контекстов DevTools: ${contexts.length}`);
+
+    // панели DevTools и открываем нужную без ввода с клавиатуры
+    if (contexts.length) {
+      const dc = contexts[0];
+      const list = await evalIn(LIST_PANELS, dc).catch((e) => 'ошибка: ' + e.message);
+      log(`   панели DevTools: ${list}`);
+      const shown = await evalIn(SHOW_PANEL, dc).catch((e) => 'ошибка: ' + e.message);
+      log(`   ${shown}`);
+      await sleep(2000);
+      if (/панель открыта/.test(String(shown))) pressed = pressed || false;
+    }
 
     // панель лежит во фрейме внутри окна DevTools — ищем его и жмём кнопку там
     try {
