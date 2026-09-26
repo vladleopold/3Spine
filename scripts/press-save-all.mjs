@@ -133,7 +133,15 @@ async function main() {
   //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
   //    список был пуст и кнопка ничего не качала
   const probe = await ctx.newPage();
-  await probe.goto(`chrome-extension://${extId}/manifest.json`, { waitUntil: 'domcontentloaded' });
+  await probe.goto(`chrome-extension://${extId}/manifest.json`, { waitUntil: 'domcontentloaded' })
+    .catch((e) => {
+      if (/ERR_BLOCKED_BY_CLIENT/.test(e.message)) {
+        throw new Error('расширение не загрузилось: Chrome блокирует страницу панели. '
+          + 'Нужен флаг --disable-features=DisableLoadExtensionCommandLineSwitch '
+          + 'и свежий Chrome из шага установки');
+      }
+      throw e;
+    });
   const tabs = await probe.evaluate(() => new Promise((res) => {
     chrome.tabs.query({}, (list) => res((list || []).map((t) => ({ id: t.id, url: t.url || '' }))));
   })).catch(() => []);
