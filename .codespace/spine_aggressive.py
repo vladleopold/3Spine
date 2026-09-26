@@ -37,7 +37,7 @@ try:
 except ImportError:
     ACCEPT = "gzip, deflate"
 
-BUDGET = {"pragmatic": 14, "playson": 16, "3oaks": 14, "generic": 16}
+BUDGET = {"pragmatic": 34, "playson": 16, "3oaks": 26, "generic": 30}
 CLICK_TEXTS = ("Play", "Start", "Continue", "OK", "Accept", "Spin", "Real Play", "Demo", "Запустить", "Играть")
 
 SPINE_EXT = re.compile(r"\.(skel|json|atlas|png|webp|ktx2?|basis|bin|scn)(\?|$)", re.I)
@@ -293,8 +293,26 @@ async def collect(url: str) -> set:
         })()
         """
 
+        async def poke_selectors(pg):
+            """Кликаем по кнопкам запуска игры — универсальный набор селекторов."""
+            for fr in pg.frames:
+                for sel in PLAY_SELECTORS:
+                    try:
+                        loc = fr.locator(sel).first
+                        if not await loc.count():
+                            continue
+                        if not await loc.is_visible():
+                            continue
+                        await loc.click(timeout=600)
+                        await asyncio.sleep(0.2)
+                        return True
+                    except Exception:                     # noqa: BLE001
+                        continue
+            return False
+
         async def poke(pg):
             """Один клик в игру: canvas/фрейм настоящей мышью + синтетические события."""
+            await poke_selectors(pg)
             for fr in pg.frames:
                 for sel in ("canvas", "#game", "#app", "body"):
                     try:
@@ -317,6 +335,12 @@ async def collect(url: str) -> set:
                 await pg.evaluate(POKE_JS)
             except Exception:                             # noqa: BLE001
                 pass
+
+        PLAY_SELECTORS = (
+            "[class*=play i]", "[id*=play i]", "[data-testid*=play i]",
+            "[class*=launch i]", "[class*=start i]", "[class*=demo i]",
+            ".game-launch", ".btn-play", "button", "[role=button]",
+        )
 
         async def try_click():
             for text in CLICK_TEXTS:
@@ -343,7 +367,8 @@ async def collect(url: str) -> set:
         asyncio.ensure_future(pokes())
 
         end = time.time() + budget
-        poked = 0
+        poked, last_click = 0, 0.0
+        opened_frames = set()
         while time.time() < end:
             for pg in context.pages:
                 try:
@@ -352,10 +377,27 @@ async def collect(url: str) -> set:
                             found.add(u)
                 except Exception:                         # noqa: BLE001
                     pass
-            if len(found) >= early and poked >= 2:
+                # iframe с игрой открываем как отдельную страницу: иногда
+                # игра грузится только в верхнем контексте
+                for fr in pg.frames:
+                    fu = fr.url
+                    if fu.startswith(("http://", "https://")) and fu not in opened_frames \
+                            and not re.search(r"(google|recaptcha|hcaptcha|clarity|hotjar|"
+                                              r"facebook|doubleclick|analytics)", fu, re.I):
+                        opened_frames.add(fu)
+                        try:
+                            await pg.goto(fu, wait_until="domcontentloaded", timeout=8000)
+                        except Exception:                 # noqa: BLE001
+                            pass
+            now = time.time()
+            if now - last_click > 1.5:
+                last_click = now
+                for pg in list(context.pages):
+                    await poke(pg)
+                poked += 1
+            if len(found) >= early and poked >= 3:
                 break
-            poked = poked + 1 if poked else 0
-            await asyncio.sleep(0.7)
+            await asyncio.sleep(0.5)
 
         await browser.close()
     return found

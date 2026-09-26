@@ -658,7 +658,7 @@ def main() -> int:
     if args.pw == 1 or (args.pw == -1 and thin):
         log("netlog без Spine-кандидатов (url=%d, json=%d, atlas=%d) -> Playwright с кликами"
             % (len(urls), len(picked["json"]), len(picked["atlas"])))
-        extra = pw_collect(args.url, args.budget_ms)
+        extra = pw_collect(args.url, max(args.budget_ms, 30000))
         if extra:
             add = len(set(extra) - urls)
             log("Playwright добавил адресов: %d (всего %d)" % (add, len(urls) + add))
