@@ -83,7 +83,9 @@ jobs:
       - name: Установить расширение Resources-Saver
         run: bash scripts/install-resources-saver.sh
 
-      - name: Активировать расширение в Chrome
+      - name: Открыть Chrome с расширением
+        env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
         run: node scripts/activate-extension.mjs
 
       - name: Chrome -> ссылка -> расширение -> перезапуск -> запуск Resources-Saver
