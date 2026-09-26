@@ -491,7 +491,7 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     """Универсальное обнаружение: браузер (все фреймы) + рекурсивный обход HTML."""
     seen_pages, queue, urls = set(), [(url, 0)], set(urls0 := [url])
     netlog = os.path.join(tmp, "netlog.json")
-    got = netlog_urls(url, netlog, budget_ms)
+    got = netlog_urls(url, netlog, budget_ms)  # первый проход самый важный
     urls |= set(got)
     # CDP-хук дополняет netlog: blob/object-URL и всё, что грузится позже
     if args_cdp:
@@ -529,6 +529,9 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     # и её ассеты грузятся уже без обёртки сайта
     if args_passes > 1:
         page_ext = (".html", ".htm", ".xhtml", ".php", ".do", ".asp", ".aspx", "/")
+        if left() < 12:
+            log("время на дополнительные проходы не осталось — заканчиваю обход")
+            kids = []
         kids = list(shells) + [u for u in got
                 if u not in urls0 and not looks_junk(u)
                 and u.lower().split("?")[0].endswith(page_ext)
@@ -538,7 +541,8 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
         kids = sorted(set(kids), key=len, reverse=True)[:args_passes - 1]
         for i, kid in enumerate(kids):
             log("проход браузера %d/%d: %s" % (i + 2, args_passes, kid[:110]))
-            more = netlog_urls(kid, os.path.join(tmp, "netlog%d.json" % (i + 2)), budget_ms)
+            per = int(min(budget_ms, max(2500, left() * 0.25)))
+            more = netlog_urls(kid, os.path.join(tmp, "netlog%d.json" % (i + 2)), per)
             new = [u for u in more if u not in urls]
             if new:
                 log("  +%d адресов" % len(new))
@@ -756,7 +760,7 @@ def main() -> int:
     ap.add_argument("--kinds", default=",".join(DEFAULT_KINDS))
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--timeout", type=int, default=1200)
-    ap.add_argument("--budget-ms", type=int, default=12000, help="реальное время ожидания браузера на страницу")
+    ap.add_argument("--budget-ms", type=int, default=18000, help="реальное время ожидания браузера на страницу")
     ap.add_argument("--depth", type=int, default=2, help="глубина обхода HTML")
     ap.add_argument("--scan", type=int, default=1, help="1 — автономный скан ссылок и бандлов")
     ap.add_argument("--scan-texts", type=int, default=60, help="сколько текстовых файлов читать")
@@ -801,7 +805,7 @@ def main() -> int:
         log("страница закрывает доступ (HTTP %s). Пробую обход через браузер и статику."
             % diag["status"])
 
-    discover_ms = int(min(args.budget_ms, max(4000, left() * args.discover_share)))
+    discover_ms = int(min(max(args.budget_ms, 18000), max(6000, left() * 0.62)))
     info = discover(args.url, tmp, discover_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
     page_text = (diag.get("html") or "")[:400000]
