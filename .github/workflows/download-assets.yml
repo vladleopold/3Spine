@@ -83,13 +83,20 @@ jobs:
       - name: Установить расширение Resources-Saver
         run: bash scripts/install-resources-saver.sh
 
-      - name: Chrome + расширение -> Save All Resources
+      - name: Запустить Chrome с расширением
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          OUTPUT_DIR: ./artifacts
           EXT_DIR: .chrome-ext
-          WAIT_MS: ${{ inputs.wait_ms || '20000' }}
-        run: xvfb-run -a --server-args='-screen 0 1400x900x24' node scripts/save-all-resources.mjs
+          PROFILE: ${{ github.workspace }}/.chrome-profile
+        run: bash scripts/start-chrome.sh
+
+      - name: Открыть DevTools
+        run: bash scripts/open-devtools.sh
+
+      - name: Нажать Save All Resources в Resources Saver
+        env:
+          OUTPUT_DIR: ./artifacts
+        run: node scripts/press-save-all.mjs
 
       - name: Скачать все ресурсы игры
         env:
