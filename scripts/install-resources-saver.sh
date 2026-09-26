@@ -26,7 +26,7 @@ else
     exit 1
   fi
   tar -xzf "$tmp/repo.tgz" -C "$tmp"
-  root="$(find "$tmp" -maxdepth 4 -name manifest.json -print 2>/dev/null | awk '{ print gsub("/","/"), FILENAME }' -F/ 2>/dev/null | sort -n | head -1 | cut -d" " -f2)"
+  root="$(find "$tmp" -maxdepth 4 -name manifest.json | head -1)"
   [ -n "$root" ] || root="$(find "$tmp" -maxdepth 4 -name manifest.json | head -1)"
   if [ -z "$root" ]; then
     log "в архиве нет manifest.json — это не расширение Chrome"
