@@ -435,9 +435,8 @@ async def collect(url: str) -> set:
                     await poke(pg)
                 await asyncio.sleep(0.6)
         if not found:
-            print("  диагностика: хостов=%d, шеллов=%d%s"
-                  % (len({x.split('/')[2] for x in []}), len(shells),
-                     (", " + ", ".join(list(shells)[:2])) if shells else ""), flush=True)
+            print("  диагностика: шеллов=%d%s" % (
+                len(shells), (", " + ", ".join(list(shells)[:2])) if shells else ""), flush=True)
         await browser.close()
     return found
 
