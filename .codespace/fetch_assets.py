@@ -606,8 +606,9 @@ def diagnose_page(url: str) -> dict:
         except Exception:                         # noqa: BLE001
             pass
     if not text and PROXY:
-        # прямой запрос не прошёл (403 гео/антибот) — пробуем edge-прокси
-        data = _fetch_via_proxy(url, 30, quiet=True)
+        # прямой запрос не прошёл (403 гео/антибот/таймаут) — пробуем edge-прокси
+        log("прямой запрос не дал страницу — пробую edge-прокси воркера")
+        data = _fetch_via_proxy(url, 45, quiet=True)
         if data:
             out["via_proxy"] = True
             out["status"] = 200
@@ -1057,7 +1058,7 @@ def main() -> int:
             % diag["status"])
 
     discover_ms = int(min(max(args.budget_ms, 18000), max(6000, left() * 0.62)))
-    if diag["status"] in (0, 401, 403, 429, 451, 503) and not diag.get("via_proxy"):
+    if not diag.get("bytes"):
         if auto_pick_proxy(args.url):
             # перепроверяем страницу через найденный выход
             d2 = diagnose_page(args.url)

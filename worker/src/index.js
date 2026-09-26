@@ -127,9 +127,9 @@ async function handleProxy(request) {
 
   // страховка от редиректов во внутреннюю сеть
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20000);
-  try {
-    const resp = await fetch(target.toString(), {
+  const timer = setTimeout(() => controller.abort(), 45000);
+  const attemptOnce = async () => {
+    const r = await fetch(target.toString(), {
       redirect: "follow",
       signal: controller.signal,
       headers: {
@@ -140,25 +140,40 @@ async function handleProxy(request) {
         "Referer": target.origin + "/",
       },
     });
-    const len = Number(resp.headers.get("content-length") || 0);
+    const len = Number(r.headers.get("content-length") || 0);
     if (len > 8 * 1024 * 1024) {
-      return json({ error: "too large", bytes: len }, 413);
+      return { error: "too large", bytes: len };
     }
-    const buf = await resp.arrayBuffer();
-    return new Response(buf, {
-      status: resp.status,
-      headers: {
-        "Content-Type": resp.headers.get("content-type") || "application/octet-stream",
-        "X-Proxy-Status": String(resp.status),
-        "X-Proxy-Url": target.toString(),
-        ...CORS,
-      },
-    });
-  } catch (e) {
-    return json({ error: "proxy fetch failed: " + String(e).slice(0, 120) }, 502);
-  } finally {
-    clearTimeout(timer);
+    const buf = await r.arrayBuffer();
+    return { status: r.status,
+             type: r.headers.get("content-type") || "application/octet-stream",
+             body: buf };
+  };
+
+  let resp = null;
+  try {
+    resp = await attemptOnce();
+  } catch (_e) {
+    try {                                   // одна повторная попытка
+      resp = await attemptOnce();
+    } catch (e) {
+      clearTimeout(timer);
+      return json({ error: "proxy fetch failed: " + String(e).slice(0, 120) }, 502);
+    }
   }
+  clearTimeout(timer);
+  if (resp.error) {
+    return json({ error: resp.error, bytes: resp.bytes || 0 }, 413);
+  }
+  return new Response(resp.body, {
+    status: resp.status,
+    headers: {
+      "Content-Type": resp.type,
+      "X-Proxy-Status": String(resp.status),
+      "X-Proxy-Url": target.toString(),
+      ...CORS,
+    },
+  });
 }
 
 async function handleConvert(request, env) {
