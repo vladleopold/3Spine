@@ -283,6 +283,51 @@ def _tail_is_clean(units, pos, allow_tail: float = 0.0) -> bool:
     return len(rest) <= 4096
 
 
+def name_ok(name: str, max_len: int = 48) -> bool:
+    """Имя пригодно, если это печатный ASCII без управляющих символов."""
+    if not name or len(name) > max_len:
+        return False
+    return all(32 <= ord(ch) < 127 for ch in name)
+
+
+# ── эвристика «3F EF BF BD → 3F 80 00 00» ───────────────────────────────
+# Потерянный байт перед байтом экспоненты float32 почти всегда закрывал
+# старшие байты мантиссы: 3F ?? ?? ?? = 1.0, C0 ?? ?? ?? = -2.0 и т.п.
+# Такие группы разворачиваем в 80 00 00, остальные оставляем одним байтом 00.
+EXP_HI = set(range(0x38, 0x43)) | {0xC0, 0xC1, 0xC2}
+
+
+def pattern_decisions(data: bytes, units=None) -> dict:
+    """Карта правок по эвристике float32: юнит -> (ширина, байты)."""
+    if units is None:
+        units = scan_units(data)
+    out = {}
+    for i, u in enumerate(units):
+        if not isinstance(u, tuple):
+            continue
+        prev = units[i - 1] if i > 0 and isinstance(units[i - 1], int) else 0
+        out[i] = (3, [0x80, 0x00, 0x00]) if prev in EXP_HI else (1, 0x00)
+    return out
+
+
+def pattern_first(data: bytes):
+    """Быстрая попытка: полная эвристическая замена, разбор без поиска."""
+    units = scan_units(data)
+    dec = pattern_decisions(data, units)
+    reader = HealReader(units, dec)
+    try:
+        doc = reader.read_skeleton_data()
+    except Exception as e:                # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}", dec
+    names_ok = all(name_ok(b.get("name", "")) for b in (doc.get("bones") or [])) and \
+        all(name_ok(s.get("name", "")) for s in (doc.get("slots") or []))
+    if _plausible(doc) and _tail_is_clean(units, reader.upos, 0.05) and names_ok:
+        return sanitize(doc), "", dec
+    return None, (f"разбор не сошёл или имена нечитаемы "
+                  f"(костей {len(doc.get('bones') or [])}, "
+                  f"имён ок: {names_ok})"), dec
+
+
 def _plausible(data: dict) -> bool:
     """Санитарная проверка результата: скелет должен быть осмысленным."""
     skel = data.get("skeleton") or {}
@@ -348,6 +393,23 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     unks = [i for i, u in enumerate(units) if isinstance(u, tuple)]
     report["units"] = len(units)
     report["unknown_groups"] = len(unks)
+
+    # быстрый путь: эвристика «3F EF BF BD → 3F 80 00 00», остальные в 00
+    fast, fast_err, fast_dec = pattern_first(data)
+    if fast is not None:
+        report["healed"] = True
+        report["method"] = "float-паттерн"
+        report["unknown_bytes_filled"] = sum(1 for _k, v in fast_dec.items() if v[0] == 1) \
+            + 3 * sum(1 for _k, v in fast_dec.items() if v[0] == 3)
+        report["bones"] = len(fast.get("bones") or [])
+        report["slots"] = len(fast.get("slots") or [])
+        anims = fast.get("animations") or {}
+        report["animations"] = len(anims)
+        report["skins"] = len(fast.get("skins") or {})
+        report["confidence"] = 0.8
+        report["decisions"] = [{"unit": k, "width": v[0]} for k, v in sorted(fast_dec.items())][:40]
+        return fast, report
+    report["pattern_error"] = fast_err
     tried = {i: set() for i in unks}
     forced: dict[int, tuple] = {}
     repair_state: dict = {}
@@ -727,6 +789,8 @@ SAFE_PATCHES = (
      'slot_name = slots[slot_idx]["name"] if 0 <= slot_idx < len(slots) else (slots[0]["name"] if slots else "")'),
     ('bone_name = bones[bone_idx]["name"]',
      'bone_name = bones[bone_idx]["name"] if 0 <= bone_idx < len(bones) else (bones[0]["name"] if bones else "root")'),
+    ("return self.strings[index - 1]",
+     "return self.strings[index - 1] if 0 < index <= len(self.strings) else \"\""),
     ('"slot": slots[slot_idx]["name"]',
      '"slot": slots[slot_idx]["name"] if 0 <= slot_idx < len(slots) else (slots[0]["name"] if slots else "")'),
 )
