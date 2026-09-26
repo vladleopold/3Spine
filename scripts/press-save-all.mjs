@@ -48,9 +48,10 @@ class CDP {
     return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
   }
 
-  async eval(expression, sessionId) {
-    const r = await this.send('Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true }, sessionId);
+  async eval(expression, sessionId, contextId) {
+    const params = { expression, returnByValue: true, awaitPromise: true };
+    if (contextId) params.contextId = contextId;
+    const r = await this.send('Runtime.evaluate', params, sessionId);
     if (r && r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
     return r && r.result ? r.result.value : undefined;
   }
@@ -104,29 +105,85 @@ async function main() {
   await Promise.race([Promise.all(pending), sleep(2000)]);
   log(`ресурсов собрано: ${bodies.size} (${since()})`);
 
-  // 3) панель Resources Saver в DevTools
-  let panel = null;
-  const until = Date.now() + Math.min(PANEL_TIMEOUT, Math.max(1000, left() - 10000));
-  while (Date.now() < until && !panel) {
-    const list = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json()).catch(() => []);
-    panel = list.find((t) => (t.url || '').includes('/content.html'));
-    if (!panel) await sleep(500);
+  // 3) панель Resources Saver живёт внутри окна DevTools и отдельной CDP-целью
+  //    не является — подключаемся к самому DevTools и ищем #up-save в его
+  //    контекстах (включая iframe панели)
+  await browser.send('Target.setDiscoverTargets', { discover: true });
+  const all = (await browser.send('Target.getTargets')).targetInfos;
+  const devtools = all.filter((t) => /devtools/i.test(t.url || '') || t.type === 'browser_ui');
+  log(`окон DevTools среди целей: ${devtools.length}`);
+  if (!devtools.length) throw new Error('не найдено ни одного окна DevTools');
+
+  let clicked = null;
+  for (const dt of devtools) {
+    let sid;
+    try {
+      ({ sessionId: sid } = await browser.send('Target.attachToTarget',
+        { targetId: dt.targetId, flatten: true }));
+    } catch { continue; }
+    const contexts = [];
+    browser.onEvent = (m) => {
+      if (m.sessionId !== sid) return;
+      if (m.method === 'Runtime.executionContextCreated') {
+        contexts.push(m.params.context);
+      }
+    };
+    try { await browser.send('Runtime.enable', {}, sid); } catch { continue; }
+    await sleep(700);
+    log(`   DevTools ${String(dt.url).slice(0, 60)}: контекстов ${contexts.length}`);
+
+    // ищем кнопку в каждом контексте
+    for (const cx of contexts) {
+      const has = await browser.eval('!!document.getElementById("up-save")', sid, cx.id)
+        .catch(() => false);
+      if (!has) continue;
+      const res = await browser.eval(`(() => {
+        const b = document.getElementById('up-save');
+        const t = (b.textContent || '').trim();
+        const dis = b.disabled;
+        b.click();
+        return 'НАЖАТА: "' + t + '" (disabled=' + dis + ')';
+      })()`, sid, cx.id).catch((e) => 'ошибка: ' + e.message);
+      clicked = res;
+      log(`   ${res}`);
+      break;
+    }
+    if (clicked) break;
+    // панель могла быть не выбрана — выберем её и попробуем ещё раз
+    if (!clicked) {
+      const opened = await browser.eval(`(() => {
+        const el = [...document.querySelectorAll('*')].find((e) => {
+          const a = (e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title'))) || '';
+          return /resources saver/i.test(a) || (e.textContent || '').trim() === 'Resources Saver';
+        });
+        if (!el) return 'вкладки не найдено';
+        el.click();
+        return 'вкладка нажата';
+      })()`, sid).catch(() => 'ошибка');
+      log(`   ${opened}`);
+      await sleep(1500);
+      contexts.length = 0;
+      await browser.send('Runtime.enable', {}, sid).catch(() => {});
+      await sleep(700);
+      for (const cx of contexts) {
+        const has = await browser.eval('!!document.getElementById("up-save")', sid, cx.id)
+          .catch(() => false);
+        if (!has) continue;
+        clicked = await browser.eval(`(() => {
+          const b = document.getElementById('up-save');
+          const t = (b.textContent || '').trim();
+          b.click();
+          return 'НАЖАТА: "' + t + '"';
+        })()`, sid, cx.id).catch((e) => 'ошибка: ' + e.message);
+        log(`   ${clicked}`);
+        break;
+      }
+      if (clicked) break;
+    }
   }
-  if (!panel) throw new Error(`панель Resources Saver не найдена (${since()})`);
-  log(`панель: ${panel.url} (${since()})`);
+  if (!clicked) throw new Error(`кнопка Save All Resources не найдена в DevTools (${since()})`);
 
-  // 4) нажимаем «Save All Resources»
-  const pc = await CDP.connect(panel.webSocketDebuggerUrl);
-  const clicked = await pc.eval(`(() => {
-    const b = document.getElementById('up-save');
-    if (!b) return 'кнопки #up-save нет';
-    const t = (b.textContent || '').trim();
-    b.click();
-    return 'нажата: ' + t;
-  })()`).catch((e) => 'ошибка: ' + e.message);
-  log(`кнопка: ${clicked} (${since()})`);
-
-  // 5) ждём ZIP в остатке лимита
+  // 4) ждём ZIP в остатке лимита
   const dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
   let zip = null;
   while (Date.now() < dl) {
@@ -134,11 +191,7 @@ async function main() {
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(1000);
   }
-  if (!zip) {
-    const state = await pc.eval('document.body.innerText').catch(() => '');
-    log(`состояние панели: ${String(state || '').replace(/\s+/g, ' ').slice(0, 200)}`);
-    throw new Error(`ZIP не появился за ${since()}`);
-  }
+  if (!zip) throw new Error(`ZIP не появился после нажатия кнопки (${since()})`);
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
   process.exit(0);
 }
