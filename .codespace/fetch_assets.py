@@ -1113,10 +1113,26 @@ def run_saver_only(args, diag, tmp) -> int:
             fp = os.path.join(out_dir, rel)
             if os.path.exists(fp):
                 z.write(fp, rel)
+        saver_diag = {}
+        dp = os.path.join(tmp, "saver-diagnosis.json")
+        if os.path.exists(dp):
+            try:
+                with open(dp, encoding="utf-8") as f:
+                    saver_diag = json.load(f)
+            except Exception:                             # noqa: BLE001
+                saver_diag = {}
+        if saver_diag:
+            log("диагностика Resources-Saver: страница=%s, запросов=%d, кадров=%d, хостов=%d"
+                % (saver_diag.get("page_loaded"), saver_diag.get("requests"),
+                   saver_diag.get("frames"), len(saver_diag.get("hosts", []))))
+            if saver_diag.get("captcha"):
+                log("на странице капTCHA/антибот: %s"
+                    % ", ".join(saver_diag["captcha"][:3]))
         z.writestr("fetch-report.json", json.dumps({
             "url": args.url, "mode": "resources-saver", "ok": bool(files),
             "files": len(files), "bytes": total,
             "http_status": diag["status"], "antibot": diag["antibot"],
+            "saver": saver_diag,
         }, ensure_ascii=False, indent=1))
     log("Resources-Saver: файлов %d, %.1f МБ" % (len(files), total / 1048576))
     if not files:

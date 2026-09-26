@@ -158,9 +158,21 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
                 return False
             return low.endswith(KEEP_EXT) or bool(HINT.search(low))
 
-        page.on("response", lambda r: urls.__setitem__(r.url, None) if keep(r.url) else None)
+        all_urls = []
+        frames_seen = set()
+
+        page.on("response", lambda r: (
+            all_urls.append(r.url),
+            urls.__setitem__(r.url, None) if keep(r.url) else None))
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        except Exception as e:                            # noqa: BLE001
+            print("resources-saver: goto не удался: %s" % str(e)[:60], flush=True)
+        for fr in page.frames:
+            frames_seen.add(fr.url)
+        html_text = ""
+        try:
+            html_text = await page.content()
         except Exception:                                 # noqa: BLE001
             pass
         end = asyncio.get_event_loop().time() + budget / 1000.0
@@ -305,6 +317,40 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
         game_files += 1
     print("resources-saver: игровых файлов %d + прочих от расширения %d → %s"
           % (game_files, len(collected), out_dir), flush=True)
+    if game_files == 0:
+        low = (html_text or "").lower()
+        captcha = [m for m in ("captcha", "hcaptcha", "recaptcha", "just a moment",
+                               "checking your browser", "cf-browser-verification")
+                   if m in low]
+        hosts = sorted({u.split("/")[2] for u in all_urls if "://" in u})
+        kinds = {}
+        for u in urls:
+            e = u.rsplit(".", 1)[-1].lower() if "." in u.rsplit("/", 1)[-1] else "?"
+            kinds[e] = kinds.get(e, 0) + 1
+        print("--- ДИАГНОСТИКА Resources-Saver ---", flush=True)
+        print("страница загружена: %s (%d Б)" % (bool(html_text), len(html_text or "")), flush=True)
+        print("кадров в браузере: %d | адресов всего: %d | хостов: %d"
+              % (len(frames_seen), len(all_urls), len(hosts)), flush=True)
+        print("кандидатов по фильтру: %d %s" % (len(urls), kinds), flush=True)
+        print("хосты: %s" % ", ".join(hosts[:8]), flush=True)
+        print("кадры: %s" % ", ".join(x[:70] for x in list(frames_seen)[:4]), flush=True)
+        if captcha:
+            print("ВЫВОД: на странице капTCHA/антибот (%s) — браузер без сессии не проходит"
+                  % ", ".join(captcha), flush=True)
+        elif not all_urls:
+            print("ВЫВОД: браузер не сделал ни одного запроса — сайт не отдал страницу", flush=True)
+        else:
+            print("ВЫВОД: страница открыта, но игровых Spine-ассетов в загрузке нет "
+                  "(игра грузится только после ручного входа/клика)", flush=True)
+        try:
+            import json as _j
+            with open(out_dir.parent / "saver-diagnosis.json", "w", encoding="utf-8") as _f:
+                _j.dump({"page_loaded": bool(html_text), "page_bytes": len(html_text or ""),
+                         "frames": len(frames_seen), "requests": len(all_urls),
+                         "hosts": hosts[:12], "candidates": len(urls), "kinds": kinds,
+                         "captcha": captcha}, _f, ensure_ascii=False, indent=1)
+        except Exception:                                 # noqa: BLE001
+            pass
     return game_files + len(collected)
 
 
