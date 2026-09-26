@@ -175,11 +175,77 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
             html_text = await page.content()
         except Exception:                                 # noqa: BLE001
             pass
+        # слаг игры из ссылки: по нему кликаем карточку, иначе игра не грузится
+        slug = ""
+        try:
+            from urllib.parse import urlsplit as _us
+            _q = _us(url).query
+            for part in _q.split("&"):
+                if part.lower().startswith(("game-term=", "game=", "gamename=", "slug=")):
+                    slug = part.split("=", 1)[1]
+            if not slug:
+                tail = [x for x in _us(url).path.split("/") if x]
+                slug = tail[-1] if tail else ""
+        except Exception:                                 # noqa: BLE001
+            slug = ""
+        if slug:
+            print("resources-saver: слаг игры %s" % slug, flush=True)
+
+        CLICK_SLUG = """
+        (function(){
+          var slug = %SLUG%;
+          if (!slug) return 0;
+          var nodes = document.querySelectorAll('a,button,[role=button],div,li,span');
+          var hit = null;
+          for (var i = 0; i < nodes.length && i < 9000; i++) {
+            var n = nodes[i];
+            var h = n.getAttribute ? (n.getAttribute('href') || '') : '';
+            var t = ((n.innerText || n.textContent) || '').trim();
+            if ((h && h.indexOf(slug) >= 0) || (t && t.length < 140 && t.indexOf(slug) >= 0)) {
+              if (!hit || (t && t.length < (hit.innerText || '').length)) hit = n;
+            }
+          }
+          if (!hit) return 0;
+          hit.scrollIntoView({block: 'center'});
+          var r = hit.getBoundingClientRect();
+          ['pointerdown','mousedown','mouseup','click'].forEach(function(t){
+            try { hit.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true,
+              clientX: r.left + 5, clientY: r.top + 5})); } catch(e){}
+          });
+          try { hit.click(); } catch(e){}
+          return 1;
+        })()
+        """
+        CLICK_CANVAS = """
+        (function(){
+          var el = document.querySelector('canvas');
+          if (!el) return 0;
+          var r = el.getBoundingClientRect();
+          var o = {bubbles:true, cancelable:true, clientX: r.left + r.width/2,
+                   clientY: r.top + r.height*0.6};
+          ['pointerdown','mousedown','mouseup','click'].forEach(function(t){
+            try { el.dispatchEvent(new MouseEvent(t, o)); } catch(e){}
+          });
+          return 1;
+        })()
+        """
+        import json as _json
+        click_js = CLICK_SLUG.replace("%SLUG%", _json.dumps(slug))
+
         end = asyncio.get_event_loop().time() + budget / 1000.0
+        last_click = 0.0
         while asyncio.get_event_loop().time() < end:
-            await asyncio.sleep(0.5)
-            # лёгкий «клик» по канвасу, чтобы подтолкнуть игру
-            for fr in page.frames:
+            await asyncio.sleep(0.6)
+            now = asyncio.get_event_loop().time()
+            if now - last_click < 2.0:
+                continue
+            last_click = now
+            for fr in list(page.frames):
+                for js in (click_js, CLICK_CANVAS):
+                    try:
+                        await fr.evaluate(js)
+                    except Exception:                     # noqa: BLE001
+                        pass
                 try:
                     loc = fr.locator("canvas").first
                     if await loc.count():
@@ -189,6 +255,7 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
                                                     box["y"] + box["height"] / 2)
                 except Exception:                         # noqa: BLE001
                     pass
+            frames_seen = {f.url for f in page.frames}
         # тела ресурсов забираем из сессии браузера (куки уже применены)
         bodies = {}
         # манифест лаунчера: логическое имя -> реальный URL (скачиваем сразу)

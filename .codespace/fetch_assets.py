@@ -742,6 +742,82 @@ def catalog_shells(origin: str, limit: int = 4) -> list:
     return out
 
 
+def api_bases(html: str, url: str) -> list:
+    """API-хосты площадки: из baseURL в бандлах, preconnect и ссылок в HTML."""
+    from urllib.parse import urlsplit as _us
+    out = []
+    for m in re.finditer(r'baseURL\s*:\s*["\'](https?://[^"\']+)["\']', html):
+        out.append(m.group(1).rstrip("/"))
+    for m in re.finditer(r'(?:preconnect|dns-prefetch)[^>]+href=["\'](https?://[^"\']+)["\']', html, re.I):
+        out.append(m.group(1).rstrip("/"))
+    host = _us(url).netloc
+    for h in ("api", "apiv2", "api2", "backend", "gw"):
+        out.append("%s://%s.%s" % (_us(url).scheme, h, host))
+    seen, res = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            res.append(x)
+    return res[:6]
+
+
+def resolve_launch_url(url: str, slug: str, page_html: str = "") -> str:
+    """Универсальный резолвер запускающего URL игры для SPA-казино.
+
+    Схема одинаковая у большинства площадок: игра лежит на отдельном
+    игровом домене, а его URL выдаёт API площадки по provider+term.
+    """
+    import json as _json
+    bases = api_bases(page_html or "", url)
+    if not bases:
+        return ""
+    catalogs = ("/games/providers/games", "/games/games", "/api/games")
+    provider_term = term = ""
+    for base in bases:
+        for cp in catalogs:
+            try:
+                data = _json.loads(fetch(base + cp, timeout=25).decode("utf-8", "replace"))
+            except Exception:                             # noqa: BLE001
+                continue
+            found = []
+
+            def walk(o):
+                if isinstance(o, dict):
+                    t = str(o.get("term", ""))
+                    if t and (t == slug or slug in t):
+                        found.append(o)
+                    for v in o.values():
+                        walk(v)
+                elif isinstance(o, list):
+                    for v in o:
+                        walk(v)
+            walk(data)
+            if found:
+                g = found[0]
+                provider_term = str(g.get("provider_term") or g.get("provider") or "")
+                term = str(g.get("term") or slug)
+                log("каталог %s: игра %s (id=%s, провайдер=%s)"
+                    % (base, g.get("name"), g.get("id"), provider_term))
+                break
+        if provider_term:
+            break
+    if not provider_term:
+        return ""
+    for q in ("provider=%s&term=%s" % (provider_term, term),
+              "provider=%s&slug=%s" % (provider_term, slug),
+              "provider=%s&id=%s" % (provider_term, term)):
+        for base in bases:
+            try:
+                data = _json.loads(fetch(base + "/games/demo?" + q, timeout=25)
+                                   .decode("utf-8", "replace"))
+            except Exception:                             # noqa: BLE001
+                continue
+            if data.get("status") and data.get("url"):
+                log("запускающий URL игры: %s" % str(data["url"])[:120])
+                return str(data["url"])
+    return ""
+
+
 def route_guesses(url: str, gid: str, limit: int = 3) -> list:
     """Чистые маршруты игры по идентификатору из ссылки.
 
@@ -1058,8 +1134,80 @@ def run_saver_only(args, diag, tmp) -> int:
     except Exception as e:                                 # noqa: BLE001
         log("Resources-Saver не отработал: %s" % str(e)[:60])
 
+    # сайт ничего не дал -> ищем запускающий URL игры через API площадки
+    def _game_files(root: str) -> int:
+        """Считаем только настоящие Spine-ассеты, а не файлы сайта."""
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from fetch_guard import check as _fcheck
+        except Exception:                                 # noqa: BLE001
+            _fcheck = None
+        n = 0
+        for _r, _d, fns in os.walk(root):
+            for fn in fns:
+                low = fn.lower()
+                if not low.endswith((".json", ".atlas", ".skel", ".scn")):
+                    continue
+                fp = os.path.join(_r, fn)
+                try:
+                    with open(fp, "rb") as f:
+                        head = f.read(70000)
+                except OSError:
+                    continue
+                if _fcheck is None:
+                    n += 1
+                    continue
+                ok, _why = _fcheck(fn, head)
+                if ok and low.endswith((".json", ".atlas", ".skel")):
+                    n += 1
+        return n
+
+    have_spine = _game_files(out_dir)
+    log("настоящих Spine-файлов после первого прохода: %d" % have_spine)
+    if have_spine == 0 and args.resolve:
+        try:
+            from urllib.parse import urlsplit as _us
+            slug = (_us(args.url).path.rstrip("/").split("/")[-1] or "")
+            for _r, _d, fns in os.walk(out_dir):
+                pass
+            html = ""
+            try:
+                html = fetch(args.url, timeout=30).decode("utf-8", "replace")
+            except Exception:                             # noqa: BLE001
+                html = ""
+            launch = resolve_launch_url(args.url, slug, html)
+            if launch:
+                log("сайт пустой — сохраняю через игровой шелл: %s" % launch[:110])
+                out2 = os.path.join(tmp, "saver2")
+                os.makedirs(out2, exist_ok=True)
+                try:
+                    subprocess.run([sys.executable, saver, launch, out2, str(budget)],
+                                   timeout=budget + 60, check=False)
+                except subprocess.TimeoutExpired:
+                    log("второй проход Resources-Saver не уложился")
+                for d2, _sub, fns2 in os.walk(out2):
+                    for fn in fns2:
+                        if fn == "mapping.json":
+                            continue
+                        fp = os.path.join(d2, fn)
+                        rel = os.path.relpath(fp, out2)
+                        dst = os.path.join(out_dir, rel)
+                        os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        shutil.copy2(fp, dst)
+                mm = os.path.join(tmp, "saver-manifest.json")
+                if os.path.exists(mm):
+                    shutil.copy2(mm, os.path.join(tmp, "saver-manifest-2.json"))
+            else:
+                log("запускающий URL игры через API площадки не найден")
+        except Exception as e:                             # noqa: BLE001
+            log("резолвер не отработал: %s" % str(e)[:60])
+
     # карта URL из расширения качаем прямой загрузкой (она рабочая)
     manifest_map = os.path.join(tmp, "saver-manifest.json")
+    if not os.path.exists(manifest_map):
+        alt = os.path.join(tmp, "saver-manifest-2.json")
+        if os.path.exists(alt):
+            manifest_map = alt
     if os.path.exists(manifest_map):
         try:
             import json as _json
@@ -1163,6 +1311,8 @@ def main() -> int:
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
     ap.add_argument("--only-saver", type=int, default=1,
                     help="1 — единственный путь: код расширения Resources-Saver")
+    ap.add_argument("--resolve", type=int, default=1,
+                    help="1 — искать игровой шелл через API площадки")
     ap.add_argument("--saver-seconds", type=int, default=40,
                     help="бюджет браузера внутри Resources-Saver")
     ap.add_argument("--saver", type=int, default=1,
