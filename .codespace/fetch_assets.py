@@ -196,6 +196,9 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
     if not chrome:
         return []
     prof = os.path.join(os.path.dirname(netlog), "chrome-%d" % (budget_ms % 100000))
+    ext = os.environ.get("SPINE_EXT_DIR", "").strip()
+    ext_flags = (["--load-extension=" + ext, "--disable-extensions-except=" + ext]
+                 if ext and os.path.isdir(ext) else [])
     cmd = [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
            "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
            "--disable-extensions", "--mute-audio", "--hide-scrollbars",
@@ -203,7 +206,7 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
            "--user-agent=" + NORMAL_UA, "--lang=en-US", "--window-size=1280,900",
            "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader",
            "--disable-features=IsolateOrigins,site-per-process",
-           "--user-data-dir=" + prof, "--log-net-log=" + netlog, url]
+           "--user-data-dir=" + prof] + ext_flags + ["--log-net-log=" + netlog, url]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:                                     # noqa: BLE001

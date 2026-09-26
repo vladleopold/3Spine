@@ -215,6 +215,11 @@ async def collect(url: str, bodies: bool = True) -> set:
 
     async with async_playwright() as p:
         launch_kw = {"headless": True}
+        ext = os.environ.get("SPINE_EXT_DIR", "").strip()
+        if ext and os.path.isdir(ext):
+            # Resources Saver и подобные расширения видят ресурсы всех фреймов
+            launch_kw["args"] = launch_kw.get("args", []) + [
+                "--load-extension=" + ext, "--disable-extensions-except=" + ext]
         if BROWSER and os.path.exists(BROWSER):
             launch_kw["executable_path"] = BROWSER
         browser = await p.chromium.launch(**launch_kw,

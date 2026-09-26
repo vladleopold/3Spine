@@ -30,6 +30,14 @@ jobs:
           URL=$(tr -d '\r\n' < fetch-url.txt)
           echo "ссылка на игру: $URL"
           python3 -m pip install --quiet playwright aiohttp brotli
+          # Resources Saver: кладём распакованное расширение рядом с браузером
+          EXT_DIR="${RUNNER_TEMP}/Resources-Saver/src"
+          if [ ! -d "$EXT_DIR" ]; then
+            git clone --depth 1 --quiet https://github.com/Alex313031/Resources-Saver.git \
+              "${RUNNER_TEMP}/Resources-Saver" || true
+          fi
+          echo "SPINE_EXT_DIR=$EXT_DIR" >> "$GITHUB_ENV"
+          [ -d "$EXT_DIR" ] && echo "расширение Resources-Saver: подключено" || echo "расширение: недоступно, работаем без него"
           # страховка от зависания: весь шаг обязан уложиться в 9 минут
           set +e
           # вывод в файл, а не в tee: убитый python может оставить браузер
