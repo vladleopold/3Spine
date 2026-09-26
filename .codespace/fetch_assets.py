@@ -37,6 +37,12 @@ NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 DEFAULT_KINDS = ("json", "atlas", "png")
 DEADLINE = [0.0]          # абсолютное время окончания всей выкачки
 INLINE_SEEN = set()
+# хосты, которые не отдают страницу напрямую с IP runner'а (403 гео/антибот):
+# для них запрашиваем через edge-прокси брокера
+PROXY = os.environ.get(
+    "SPINE_PROXY",
+    "https://spine-broker.leopolds2010.workers.dev/proxy?url=").strip()
+PROXY_HOSTS = set()
 REJECTED = []
 MANIFESTS = []
 REMOTE = {}
@@ -70,10 +76,48 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def _fetch_via_proxy(url: str, timeout: int = 60, quiet: bool = False) -> bytes:
+    """Второй выход: edge-адрес Cloudflare вместо IP дата-центра."""
+    from urllib.parse import quote as _q
+    if not PROXY:
+        return b""
+    try:
+        req = urllib.request.Request(PROXY + _q(url, safe=""),
+                                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0",
+                                              "Accept": "*/*"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read() if r.status == 200 else b""
+    except Exception:                                     # noqa: BLE001
+        if not quiet:
+            log("прокси не ответил: %s" % url[:90])
+        return b""
+
+
 def fetch(url: str, timeout: int = 60) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": UA,
-                                               "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    """Браузерные заголовки; при блокировке (403) — автоматически edge-прокси."""
+    from urllib.parse import urlsplit as _us
+    host = _us(url).netloc
+    if PROXY and host in PROXY_HOSTS:
+        data = _fetch_via_proxy(url, timeout, quiet=True)
+        if data:
+            return data
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=browser_headers()),
+                                    timeout=timeout) as r:
+            data = r.read()
+        if data:
+            return data
+    except urllib.error.HTTPError:
+        pass
+    except Exception:                                     # noqa: BLE001
+        pass
+    if PROXY:
+        data = _fetch_via_proxy(url, timeout, quiet=True)
+        if data:
+            PROXY_HOSTS.add(host)
+            return data
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}),
+                                timeout=timeout) as r:
         return r.read()
 
 
