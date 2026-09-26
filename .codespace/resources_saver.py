@@ -190,16 +190,19 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
             dst.write_bytes(data)
         await browser.close()
 
-    # запасной путь: если расширение ничего не отдало — пишем тела напрямую
-    if not collected:
-        for u, b in bodies.items():
-            rel = re.sub(r"[^A-Za-z0-9_./-]+", "_", unquote(urlsplit(u).path.lstrip("/")))
-            dst = out_dir / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(b)
-            collected.append((rel, None))
-    print("resources-saver: сохранено %d файлов в %s" % (len(collected), out_dir), flush=True)
-    return len(collected)
+    # игровые ассеты пишем всегда: наш фильтр строже расширения
+    game_files = 0
+    for u, b in bodies.items():
+        if not keep(u) or not b:
+            continue
+        rel = re.sub(r"[^A-Za-z0-9_./-]+", "_", unquote(urlsplit(u).path.lstrip("/")))
+        dst = out_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(b)
+        game_files += 1
+    print("resources-saver: игровых файлов %d + прочих от расширения %d → %s"
+          % (game_files, len(collected), out_dir), flush=True)
+    return game_files + len(collected)
 
 
 if __name__ == "__main__":
