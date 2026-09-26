@@ -142,6 +142,7 @@ CHROME_CANDIDATES = (
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
 )
 # маркеры движков: по ним решаем, есть ли вообще что извлекать
+GS2C_RE = re.compile(r"/gs2c/|demogamesfree|games-html5", re.I)
 ENGINE_MARKERS = {
     "unity": (".framework.js", ".loader.js", ".wasm", ".data", "build/unity"),
     "construct": ("constructjs", "c3runtime", "rkwebgl"),
@@ -579,7 +580,7 @@ def main() -> int:
     ap.add_argument("--kinds", default=",".join(DEFAULT_KINDS))
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--timeout", type=int, default=1200)
-    ap.add_argument("--budget-ms", type=int, default=26000, help="сколько ждём браузер на страницу")
+    ap.add_argument("--budget-ms", type=int, default=20000, help="реальное время ожидания браузера на страницу")
     ap.add_argument("--depth", type=int, default=2, help="глубина обхода HTML")
     ap.add_argument("--scan", type=int, default=1, help="1 — автономный скан ссылок и бандлов")
     ap.add_argument("--scan-texts", type=int, default=60, help="сколько текстовых файлов читать")
@@ -592,7 +593,7 @@ def main() -> int:
     ap.add_argument("--manifests", type=int, default=60, help="сколько манифестов качать")
     ap.add_argument("--grid", type=int, default=1, help="1 — зондировать сетку манифестов")
     ap.add_argument("--grid-dirs", type=int, default=20, help="сколько каталогов проверять")
-    ap.add_argument("--grid-count", type=int, default=40, help="сколько файлов в сетке на каталог")
+    ap.add_argument("--grid-count", type=int, default=30, help="сколько файлов в сетке на каталог")
     ap.add_argument("--grid-probe", type=int, default=900, help="потолок сетевых проб")
     ap.add_argument("--probe-workers", type=int, default=20, help="потоков для проб")
     args = ap.parse_args()
@@ -612,8 +613,12 @@ def main() -> int:
         len(picked["json"]), len(picked["atlas"]), len(picked["skel"]),
         len(picked.get("png", [])), len(picked["_other"])))
 
+    gs2c = bool(GS2C_RE.search(" ".join(sorted(urls)[:400])))
+    if gs2c:
+        log("движок gs2c/Pragmatic: скелеты лежат в манифестах, эскалация не нужна")
+
     # быстрый проход не дал полноты -> углубляемся автоматически
-    if args.escalate and not (picked["atlas"] and len(picked["json"]) >= args.min_json):
+    if args.escalate and not gs2c and not (picked["atlas"] and len(picked["json"]) >= args.min_json):
         deep = min(args.budget_ms * 3, 90000)
         log("быстрый проход неполный (%d json, %d atlas) -> углубляюсь до %d мс"
             % (len(picked["json"]), len(picked["atlas"]), deep))
@@ -685,11 +690,16 @@ def main() -> int:
         packed = [u for u in urls if u.lower().endswith(PACKED_EXT) and not looks_junk(u)][:12]
         log("скан: текстов %d, бинарных бандлов %d" % (len(texts), len(packed)))
         refs = set()
-        for u in texts:
+
+        def _refs(u: str) -> set:
             try:
-                refs |= text_refs(fetch(u, timeout=30))
+                return text_refs(fetch(u, timeout=25))
             except Exception:                             # noqa: BLE001
-                continue
+                return set()
+
+        with ThreadPoolExecutor(max_workers=min(16, max(1, len(texts)))) as pool:
+            for part in pool.map(_refs, texts):
+                refs |= part
         blob_refs = set()
         for u in packed:
             try:
