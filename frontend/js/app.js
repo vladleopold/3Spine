@@ -372,7 +372,7 @@
 
   async function waitStatus(job, t0, names) {
     const deadline = t0 + 12 * 60 * 1000;
-    const list = names || [];
+    const list = Array.isArray(names) ? names : [];
     let lastLog = 0;
     const started = [];
     for (const n of list) {
@@ -886,7 +886,9 @@
         log("> Задача: " + job, "dim");
         setStatus("конвертация…", "run");
       }
-      await waitStatus(job, t0, url ? 1 : skeletonNames().length);
+      const taskNames = url ? [] : skeletonNames();
+      if (url) log("… идёт выкачивание и конвертация, следим за логом задачи…", "dim");
+      await waitStatus(job, t0, taskNames);
       log("> Результат готов, скачиваем…", "dim");
       lastZip = await fetchResult(job);
       if (url) log("… ассеты игры скачаны и сконвертированы", "ok");
