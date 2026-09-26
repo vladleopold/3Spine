@@ -21,11 +21,11 @@ const EXT_WAIT = parseInt(process.env.EXT_WAIT_MS || '12000', 10);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
 const base = (extra = []) => [
-  '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
+  '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
   '--disable-blink-features=AutomationControlled', ...extra,
 ];
 const ctxOpts = (extra = []) => ({
-  headless: true,
+  headless: false,   // расширения не работают в --headless=old
   executablePath: CHROME || undefined,
   ignoreHTTPSErrors: true,
   acceptDownloads: true,

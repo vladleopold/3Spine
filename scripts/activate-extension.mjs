@@ -22,10 +22,10 @@ async function main() {
 
   fs.mkdirSync(PROFILE, { recursive: true });
   const ctx = await chromium.launchPersistentContext(PROFILE, {
-    headless: true,
+    headless: false,   // расширения не работают в --headless=old
     executablePath: CHROME || undefined,
     args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
+      '--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
       '--disable-features=DialMediaRouteProvider,OptimizationHints',
       `--disable-extensions-except=${EXT}`,
       `--load-extension=${EXT}`,
