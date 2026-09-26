@@ -108,7 +108,18 @@ jobs:
           WAIT_MS: ${{ inputs.spa_wait || '1200' }}
           INCLUDE: ${{ inputs.spa_include || '' }}
           EXCLUDE: ${{ inputs.spa_exclude || '' }}
-        run: node scripts/spa-websnap.mjs
+        run: |
+          node scripts/spa-websnap.mjs open "$URL" \
+            --output "$OUTPUT_DIR" \
+            --viewport 1400x900 \
+            --wait "$WAIT_MS" \
+            --depth "$DEPTH" \
+            --max-states "$MAX_STATES" \
+            ${INCLUDE:+--include "$INCLUDE"} \
+            ${EXCLUDE:+--exclude "$EXCLUDE"}
+          node scripts/spa-websnap.mjs auto
+          node scripts/spa-websnap.mjs tree
+          node scripts/spa-websnap.mjs done
 
 
       - uses: actions/cache@v4
