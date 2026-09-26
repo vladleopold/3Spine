@@ -117,7 +117,10 @@ jobs:
         run: |
           python3 -m pip install --quiet Pillow
           mkdir -p artifacts/sprites
-          python3 .codespace/unpack_atlases.py artifacts/anydownload \
+          # атласы ссылаются на логические имена (symbols.png), файлы хешованные —
+          # строим алиасы по манифесту из launcher.js
+          python3 .codespace/resolve_sprite_names.py artifacts/anydownload
+          UNPACK_LAYOUT=global python3 .codespace/unpack_atlases.py artifacts/anydownload \
             --output artifacts/sprites
           echo "распакованных спрайтов: $(find artifacts/sprites -type f | wc -l)"
 
