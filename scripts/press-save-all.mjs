@@ -375,35 +375,56 @@ async function main() {
 
   // 0) нажатие: сначала прямо во фронтенде DevTools, затем вводом X11
   let pressed = false;
+  let seenTargets = false;
   let why = 'нажатие не выполнено';
-  // окно DevTools как CDP-цель: в нём и живёт панель с кнопкой
+  // окно DevTools как CDP-цель: в нём и живёт панель с кнопкой.
+  // /json/list не показывает фронтенд DevTools — берём Target.getTargets
+  // у браузерной сессии и НЕ фильтруем по типу.
   const devtoolsTarget = async () => {
-    const list = await fetch(`http://127.0.0.1:${PORT}/json/list`).then((r) => r.json())
-      .catch(() => []);
-    return list.find((t) => (t.url || '').startsWith('devtools://')) || null;
+    await browser.send('Target.setDiscoverTargets', { discover: true });
+    const infos = (await browser.send('Target.getTargets')).targetInfos || [];
+    if (!seenTargets) {
+      log(`   всего целей: ${infos.length}`);
+      for (const t of infos) log(`      [${t.type}] ${String(t.url).slice(0, 90)}`);
+      seenTargets = true;
+    }
+    return infos.find((t) => /devtools/i.test(t.url || '')) || null;
   };
   let dt = null;
   for (let i = 0; i < 12 && !dt; i++) { dt = await devtoolsTarget(); if (!dt) await sleep(1000); }
   if (dt) {
     log(`   окно DevTools: ${dt.url.slice(0, 80)}`);
-    const dw = await CDP.connect(dt.webSocketDebuggerUrl);
+    // подключаемся к окну DevTools: своим ws либо через сессию браузера
+    let dw = null, dwSess = null;
+    if (dt.webSocketDebuggerUrl) dw = await CDP.connect(dt.webSocketDebuggerUrl).catch(() => null);
+    if (!dw) {
+      try {
+        ({ sessionId: dwSess } = await browser.send('Target.attachToTarget',
+          { targetId: dt.targetId, flatten: true }, undefined, 5000));
+      } catch (e) { log(`   attach окна DevTools: ${e.message}`); }
+    }
+    if (!dw && !dwSess) { log('   к окну DevTools не подключились'); }
+    const evalIn = (expr, ctxId) => (dw
+      ? dw.eval(expr, undefined, ctxId, 3000)
+      : browser.eval(expr, dwSess, ctxId, 3000));
+    const send2 = (m, pr) => (dw ? dw.send(m, pr, undefined, 4000) : browser.send(m, pr, dwSess, 4000));
     const contexts = [];
-    dw.onEvent = (m) => {
+    const onCtx = (m) => {
       if (m.method === 'Runtime.executionContextCreated') contexts.push(m.params.context);
     };
-    await dw.send('Runtime.enable', {}, undefined, 4000).catch((e) => log(`   Runtime.enable: ${e.message}`));
-    await sleep(1000);
+    if (dw) dw.onEvent = onCtx; else browser.onEvent = onCtx;
+    await send2('Runtime.enable', {}).catch((e) => log(`   Runtime.enable: ${e.message}`));
+    await sleep(1200);
     log(`   контекстов DevTools: ${contexts.length}`);
     for (const c of contexts) {
-      const has = await dw.eval('!!document.getElementById("up-save")', undefined, c.id, 2500)
-        .catch(() => false);
+      const has = await evalIn('!!document.getElementById("up-save")', c.id).catch(() => false);
       if (!has) continue;
-      why = await dw.eval(`(() => {
+      why = await evalIn(`(() => {
         const b = document.getElementById('up-save');
         const t = (b.textContent || '').trim();
         b.click();
         return 'НАЖАТА: "' + t + '"';
-      })()`, undefined, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
+      })()`, c.id).catch((e) => 'ошибка: ' + e.message);
       pressed = /НАЖАТА/.test(why);
       log(`   ${why}`);
       break;
