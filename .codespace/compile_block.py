@@ -31,11 +31,48 @@ def env_int(name: str, default: int) -> int:
 
 
 def parallel_limit(count: int) -> int:
-    return max(1, min(env_int("SPINE_WORKERS", 12), max(1, count)))
+    """По умолчанию — все ядра runner'а, но не больше числа файлов."""
+    raw = os.environ.get("SPINE_WORKERS", "").strip()
+    if not raw.isdigit() or int(raw) <= 0:
+        raw = str(max(2, (os.cpu_count() or 4)))
+    return max(1, min(int(raw), max(1, count)))
 
 
 def per_batch() -> int:
-    return env_int("SPINE_BATCH", 12)
+    """Размер пачки. По умолчанию — сразу всё (0 = без разбиения)."""
+    raw = env_int("SPINE_BATCH", 0)
+    if raw <= 0:
+        return 0
+    return raw
+
+
+def run_all(fn, items, workers, label):
+    """Все файлы одновременно; при падении — автоматически делим пополам.
+
+    Нужно, чтобы не терять результат из-за одного плохого файла.
+    """
+    if not items:
+        return []
+    size = per_batch()
+    if size and len(items) > size:
+        chunks = [items[i:i + size] for i in range(0, len(items), size)]
+        out = []
+        for bi, chunk in enumerate(chunks, 1):
+            say(f"compile-block: {label}, пачка {bi}/{len(chunks)}: {len(chunk)} файлов")
+            with ThreadPoolExecutor(max_workers=min(workers, len(chunk))) as pool:
+                out.extend(pool.map(fn, chunk))
+        return out
+    say(f"compile-block: {label}: {len(items)} файлов одним запуском, параллельно {workers}")
+    try:
+        with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
+            return list(pool.map(fn, items))
+    except Exception as e:                                  # noqa: BLE001
+        say(f"compile-block: {label} общий запуск не удался ({e}); делим пополам")
+        if len(items) == 1:
+            return [(items[0], False, f"FAIL: {items[0]}: {e}")]
+        mid = len(items) // 2
+        return run_all(fn, items[:mid], workers, label + " (1/2)") + \
+            run_all(fn, items[mid:], workers, label + " (2/2)")
 
 
 def main() -> None:
@@ -508,7 +545,7 @@ def main() -> None:
             if skels:
                 workers = parallel_limit(len(skels))
                 say(f"compile-block: ЭТАП 1 (skel→json): {len(skels)} файлов, "
-                    f"пачками по {per_batch()}, параллельно {workers}")
+                    f"все сразу, параллельно {workers}")
                 if license_code:
                     say("compile-block: активация лицензии (SPINE_LICENSE задан)")
 
@@ -526,11 +563,7 @@ def main() -> None:
                 results = []
                 results.append(skel_to_json(skels[0]))
                 rest = skels[1:]
-                batches = [rest[i:i + per_batch()] for i in range(0, len(rest), per_batch())] or []
-                for bi, batch in enumerate(batches, 1):
-                    say(f"compile-block: ЭТАП 1, пачка {bi}/{len(batches)}: {len(batch)} файлов")
-                    with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as pool:
-                        results.extend(pool.map(skel_to_json, batch))
+                results.extend(run_all(skel_to_json, rest, workers, "ЭТАП 1"))
                 ok1 = sum(1 for _r, ok, _m in results if ok)
                 for _r, ok, msg in results:
                     if not ok:
@@ -608,7 +641,7 @@ def main() -> None:
             if jobs:
                 workers = parallel_limit(len(jobs))
                 say(f"compile-block: ЭТАП 2 (json→spine): {len(jobs)} файлов, "
-                    f"пачками по {per_batch()}, параллельно {workers}, -Xmx{xmx}m")
+                    f"все сразу, параллельно {workers}, -Xmx{xmx}m")
 
                 def json_to_spine(job, fallback=False):
                     p, out_spine, ver, rel = job
@@ -703,11 +736,7 @@ def main() -> None:
 
                 results = [json_to_spine(jobs[0])]
                 rest = jobs[1:]
-                batches = [rest[i:i + per_batch()] for i in range(0, len(rest), per_batch())] or []
-                for bi, batch in enumerate(batches, 1):
-                    say(f"compile-block: ЭТАП 2, пачка {bi}/{len(batches)}: {len(batch)} файлов")
-                    with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as pool:
-                        results.extend(pool.map(lambda j: json_to_spine(j), batch))
+                results.extend(run_all(lambda j: json_to_spine(j), rest, workers, "ЭТАП 2"))
                 compiled = sum(1 for _r, ok, _m in results if ok)
                 for _r, ok, msg in results:
                     if ok:

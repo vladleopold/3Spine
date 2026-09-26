@@ -645,8 +645,8 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
         return 0, {}
 
     workers = int(os.environ.get('UNPACK_WORKERS', '0') or 0)
-    if workers <= 0:
-        workers = min(8, max(2, (os.cpu_count() or 2)))
+    if workers <= 0:                      # по умолчанию — все ядра
+        workers = max(2, (os.cpu_count() or 4))
     workers = max(1, min(workers, len(files)))
 
     def _one(f: str) -> Tuple[int, Optional[str]]:

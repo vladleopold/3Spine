@@ -41,7 +41,6 @@ jobs:
 
       - name: Unpack block → /images (atlases → subfolders, параллельно)
         env:
-          UNPACK_WORKERS: "8"
         run: |
           set -euo pipefail
           python3 -m pip install --quiet Pillow
@@ -176,8 +175,6 @@ jobs:
         env:
           SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
           SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
-          SPINE_WORKERS: "12"
-          SPINE_BATCH: "12"
           SPINE_XMX: "768"
         run: |
           set -euo pipefail
