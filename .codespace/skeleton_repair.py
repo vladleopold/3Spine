@@ -206,9 +206,11 @@ def parse_tolerant(units, decisions=None):
     return None, reader, err
 
 
-def _tail_is_clean(units, pos) -> bool:
-    """После разбора допустим только хвост из нулей/неизвестных байтов."""
+def _tail_is_clean(units, pos, allow_tail: float = 0.0) -> bool:
+    """После разбора допустим хвост из нулей/неизвестных байтов (или allow_tail доля)."""
     rest = units[pos:]
+    if rest and allow_tail and len(rest) <= allow_tail * len(units):
+        return True
     for u in rest:
         if isinstance(u, int) and u not in (0x00,):
             return False
@@ -253,7 +255,8 @@ def _forced_candidates(idx, tried, limit=24):
     return out
 
 
-def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=None):
+def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=None,
+         allow_tail: float = 0.0):
     """Лечит файл, подбирая значения потерянных байтов.
 
     Оракул — исключение парсера: IndexError означает «индекс вышел за границы»,
@@ -284,7 +287,9 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     tried = {i: set() for i in unks}
     forced: dict[int, tuple] = {}
     repair_state: dict = {}
-    for idx, w in (hints or {}).items():
+    merged = dict(cached_hints(data))
+    merged.update(hints or {})
+    for idx, w in merged.items():
         if idx in tried:
             forced[idx] = (int(w), 0x00)
             report["hints_applied"] = len(forced)
@@ -296,7 +301,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     while attempts < budget:
         parsed, reader, err = parse_tolerant(units, forced)
         attempts += 1
-        if parsed is not None and _plausible(parsed) and _tail_is_clean(units, reader.upos):
+        if parsed is not None and _plausible(parsed) and _tail_is_clean(units, reader.upos, allow_tail):
             break
         if reader is None or reader.last_unknown is None:
             report["error"] = err or "неизвестно, где сломалось"
@@ -316,6 +321,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
             for _depth in range(1, 4):
                 scored = []
                 for st in beam:
+                    extra = []
                     for j in pool:
                         if j in st:
                             continue
@@ -326,7 +332,28 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
                             t[j] = (w, 0x00)
                             p2, r2, _e2 = parse_once(units, t)
                             attempts += 1
-                            if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos):
+                            if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos, allow_tail):
+                                forced = t
+                                parsed, reader = p2, r2
+                                progressed = True
+                                break
+                            scored.append((r2.upos if r2 else -1, t))
+                        if progressed or attempts >= budget:
+                            break
+                    # рядом с концом файла часто стоит счётчик секции (например,
+                    # число анимаций) — пробуем его увеличить/уменьшить
+                    for idx in (reader.var_unknowns[-6:] if reader else []):
+                        if idx in st or idx in extra:
+                            continue
+                        for v in (1, 2, 3, 4, 5, 6):
+                            if attempts >= budget:
+                                break
+                            t = dict(st)
+                            t[idx] = (1, v)
+                            extra.append(idx)
+                            p2, r2, _e3 = parse_once(units, t)
+                            attempts += 1
+                            if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos, allow_tail):
                                 forced = t
                                 parsed, reader = p2, r2
                                 progressed = True
@@ -378,7 +405,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
             tried[idx].add(cand)
             p2, r2, e2 = parse_once(units, trial)
             attempts += 1
-            if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos):
+            if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos, allow_tail):
                 forced = trial
                 parsed, reader = p2, r2
                 progressed = True
@@ -391,6 +418,26 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
             stall = 0
             continue
         stall += 1
+        if stall == 1 and not repair_state.get("counts_done"):
+            # Фаза «счётчики»: перебираем увеличение/уменьшение значений всех
+            # структурных байтов — лечит случаи, когда разбор ушёл в конец файла
+            # из-за одного неверного количества (анимаций, таймлайнов, костей).
+            repair_state["counts_done"] = True
+            for idx in list(reader.var_unknowns if reader else []):
+                for v in list(range(0, 10)) + [16, 24, 32, 48, 64, 96, 128]:
+                    if attempts >= budget:
+                        break
+                    trial = dict(forced)
+                    trial[idx] = (1, v)
+                    p2, r2, _e2 = parse_once(units, trial)
+                    attempts += 1
+                    if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos, allow_tail):
+                        forced = trial
+                        parsed, reader = p2, r2
+                        progressed = True
+                        break
+                if progressed or attempts >= budget:
+                    break
         # подозрение на сбитое выравнивание: один U+FFFD мог скрыть 2..4 байта.
         # расширяем ближайшие неизвестные и берём тот, при котором разбор идёт дальше.
         base = reader.upos if reader else 0
@@ -410,7 +457,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
                 tried[j].add((w, 0x00))
                 p2, r2, _e2 = parse_tolerant(units, trial)
                 attempts += 1
-                if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos):
+                if p2 is not None and _plausible(p2) and _tail_is_clean(units, r2.upos, allow_tail):
                     forced = trial
                     parsed, reader = p2, r2
                     progressed = True
@@ -439,6 +486,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
         return None, report
 
     report["healed"] = True
+    learn_hints(data, forced)
     report["decisions"] = [{"unit": k, "width": w, "value": v}
                            for k, (w, v) in sorted(forced.items())]
     report["unknown_bytes_filled"] = reader.unknown_bytes
@@ -461,6 +509,46 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     report["structural_unknowns"] = structural
     report["width_fixes"] = widened
     return parsed, report
+
+
+HINTS_CACHE = os.path.join(HERE, "repair_hints.json")
+
+
+def load_hint_cache() -> dict:
+    try:
+        with open(HINTS_CACHE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_hint_cache(cache: dict) -> None:
+    try:
+        with open(HINTS_CACHE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=1, sort_keys=True)
+    except OSError:
+        pass
+
+
+def file_digest(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def cached_hints(data: bytes) -> dict:
+    """Сохранённые вручную правки ширин для этого файла (ключ — хеш)."""
+    entry = load_hint_cache().get(file_digest(data))
+    if not entry:
+        return {}
+    return {int(k): int(v) for k, v in entry.items()}
+
+
+def learn_hints(data: bytes, decisions: dict) -> None:
+    if not decisions:
+        return
+    cache = load_hint_cache()
+    cache[file_digest(data)] = {str(k): v[0] for k, v in decisions.items() if v[0] != 1}
+    save_hint_cache(cache)
 
 
 def diagnose(path: str) -> dict:
@@ -503,6 +591,8 @@ def main() -> int:
     ap.add_argument("--min-confidence", type=float, default=0.0,
                     help="не сохранять результат с уверенностью ниже порога")
     ap.add_argument("--dry-run", action="store_true", help="только диагностика, не лечить")
+    ap.add_argument("--allow-tail", type=float, default=0.0,
+                    help="допустимый непрочитанный хвост, доля файла (0.2 = 20%%)")
     ap.add_argument("--hints", default="",
                     help="принудительные ширины: '919=2,2476=4' (индексы юнитов из отчёта)")
     args = ap.parse_args()
@@ -539,7 +629,8 @@ def main() -> int:
             continue
         with open(path, "rb") as f:
             data = f.read()
-        parsed, rep = heal(data, budget=args.budget, hints=hints)
+        parsed, rep = heal(data, budget=args.budget, hints=hints,
+                             allow_tail=args.allow_tail)
         row["result"] = rep.get("error") or ""
         row["healed"] = rep["healed"]
         row["confidence"] = rep["confidence"]
