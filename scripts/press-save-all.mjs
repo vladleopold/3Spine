@@ -140,6 +140,42 @@ async function panelTarget(port, extId, timeoutMs = 20000) {
   return null;
 }
 
+// Пустой background.js => service worker не стартует сам. Запускаем его через
+// CDP-домен ServiceWorker, тогда расширение может само открыть свою панель.
+async function startExtensionWorker(port, extId) {
+  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const c = await RawCDP.connect(v.webSocketDebuggerUrl);
+  try {
+    await c.send('ServiceWorker.enable');
+    const r = await c.send('ServiceWorker.startWorker',
+      { scopeURL: `chrome-extension://${extId}/` });
+    log(`   ServiceWorker.startWorker: ${JSON.stringify(r).slice(0, 120)}`);
+  } catch (e) {
+    log(`   ServiceWorker.startWorker: ${e.message}`);
+  }
+  await sleep(1500);
+  const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const sw = ts.find((t) => t.type === 'service_worker'
+    && (t.url || '').startsWith(`chrome-extension://${extId}/`));
+  if (sw) log('   service worker запущен');
+  return sw ? sw.webSocketDebuggerUrl : '';
+}
+
+// Создание цели из браузера — обходит блокировку навигацииrenderer'а
+async function createTarget(port, extId) {
+  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const c = await RawCDP.connect(v.webSocketDebuggerUrl);
+  try {
+    const r = await c.send('Target.createTarget',
+      { url: `chrome-extension://${extId}/content.html`, newWindow: true });
+    log(`   Target.createTarget: ${JSON.stringify(r).slice(0, 120)}`);
+    return r.targetId || '';
+  } catch (e) {
+    log(`   Target.createTarget: ${e.message}`);
+    return '';
+  }
+}
+
 async function openPanelViaExtension(port, extId) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const sw = targets.find((t) => t.type === 'service_worker'
@@ -336,7 +372,16 @@ async function main() {
     const found = await openPanel(ctx, id, shimSrc);
     if (found) { panel = found.panel; break; }
     // расширение само открывает свою страницу — навигация извне заблокирована
-    const ok = await openPanelViaExtension(PORT, id);
+    // 1) поднимаем service worker расширения, 2) он сам открывает панель,
+    // 3) запасной путь — создать цель из браузера
+    await startExtensionWorker(PORT, id);
+    let ok = await openPanelViaExtension(PORT, id);
+    if (!ok) {
+      await createTarget(PORT, id);
+      const t0 = await panelTarget(PORT, id, 8000);
+      ok = !!t0;
+      if (ok) log('   панель создана через Target.createTarget');
+    }
     if (!ok) continue;
     const t = await panelTarget(PORT, id);
     if (!t) { log('   окно панели не появилось среди целей'); continue; }
