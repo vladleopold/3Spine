@@ -508,7 +508,7 @@ def heal(data: bytes, budget: int = 3000, min_unknown_pct: float = 0.0, hints=No
     report["confidence"] = round(max(0.0, min(1.0, conf)), 2)
     report["structural_unknowns"] = structural
     report["width_fixes"] = widened
-    return parsed, report
+    return sanitize(parsed), report
 
 
 HINTS_CACHE = os.path.join(HERE, "repair_hints.json")

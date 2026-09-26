@@ -132,14 +132,18 @@ jobs:
           restore-keys: |
             spine-linux-${{ runner.os }}-
 
-      # загруженные версии редактора (3.8.99 и т.д.) — чтобы не качать по 200 МБ каждый прогон
-      - name: Cache downloaded editor versions
-        uses: actions/cache@v4
-        with:
-          path: ~/.spine/updates
-          key: spine-versions-${{ runner.os }}-v1
-          restore-keys: |
-            spine-versions-${{ runner.os }}-
+      - name: Purge broken editor updates
+        run: |
+          set -euo pipefail
+          # кеш прошлых прогонов мог сохранить недоскачанный файл версии —
+          # редактор потом падает с "integrity check failed"
+          mkdir -p ~/.spine/updates
+          for f in ~/.spine/updates/*; do
+            [ -f "$f" ] || continue
+            sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
+            if [ "$sz" -lt 5000000 ]; then echo "удаляю битую версию: $f ($sz байт)"; rm -f "$f"; fi
+          done
+          ls -la ~/.spine/updates || true
 
       - name: Download licensed Spine Linux launcher
         env:
