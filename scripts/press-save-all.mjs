@@ -469,6 +469,47 @@ async function main() {
       }
       log(`   фреймов в DevTools: ${frames.length}`);
       for (const f of frames) log(`      ${'  '.repeat(f.d)}[${f.url.slice(0, 88)}]`);
+      // панель может быть отдельной целью (OOPIF) — ищем её среди целей
+      if (!frames.some((f) => /\/content\.html/.test(f.url))) {
+        await browser.send('Target.setDiscoverTargets', { discover: true });
+        const infos = (await browser.send('Target.getTargets')).targetInfos || [];
+        const oopif = infos.find((t) => /\/content\.html/.test(t.url || ''));
+        if (oopif) {
+          log(`   панель отдельной целью: [${oopif.type}] ${oopif.url.slice(0, 70)}`);
+          let ow = null, owSess = null;
+          if (oopif.webSocketDebuggerUrl) ow = await CDP.connect(oopif.webSocketDebuggerUrl).catch(() => null);
+          if (!ow) {
+            try {
+              ({ sessionId: owSess } = await browser.send('Target.attachToTarget',
+                { targetId: oopif.targetId, flatten: true }, undefined, 5000));
+            } catch (e) { log(`   attach OOPIF: ${e.message}`); }
+          }
+          const evalO = (expr, cid) => (ow ? ow.eval(expr, undefined, cid, 3000)
+            : browser.eval(expr, owSess, cid, 3000));
+          const sendO = (m, pr) => (ow ? ow.send(m, pr, undefined, 4000) : browser.send(m, pr, owSess, 4000));
+          const octx = [];
+          const onO = (m) => { if (m.method === 'Runtime.executionContextCreated') octx.push(m.params.context); };
+          if (ow) ow.onEvent = onO; else browser.onEvent = onO;
+          await sendO('Runtime.enable', {}).catch(() => {});
+          await sleep(1200);
+          log(`   контекстов панели-OOPIF: ${octx.length}`);
+          for (const c of octx) {
+            const has = await evalO('!!document.getElementById("up-save")', c.id).catch(() => false);
+            if (!has) continue;
+            why = await evalO(`(() => {
+              const b = document.getElementById('up-save');
+              const t = (b.textContent || '').trim();
+              b.click();
+              return 'НАЖАТА: "' + t + '"';
+            })()`, c.id).catch((e) => 'ошибка: ' + e.message);
+            pressed = /НАЖАТА/.test(why);
+            log(`   ${why}`);
+            return;
+          }
+        } else {
+          log('   панель не появилась ни фреймом, ни целью');
+        }
+      }
       const pf = frames.find((f) => /\/content\.html/.test(f.url));
       if (pf) {
         const w = await send2('Page.createIsolatedWorld',
