@@ -34,7 +34,7 @@ jobs:
           set +e
           # вывод в файл, а не в tee: убитый python может оставить браузер
           # держать stdout, и тогда пайп не закрывается и шаг висит вечно
-          timeout -k 30 540 python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 \
+          timeout -k 15 75 python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 --total-budget 55 \
             > fetch-log.txt 2>&1
           RC=$?
           pkill -f 'chrome|chromium' >/dev/null 2>&1 || true

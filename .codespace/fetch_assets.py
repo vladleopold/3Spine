@@ -35,6 +35,7 @@ SPINE_EXT = (".json", ".atlas", ".atlas.txt")
 NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 DEFAULT_KINDS = ("json", "atlas", "png")
+DEADLINE = [0.0]          # абсолютное время окончания всей выкачки
 REJECTED = []
 MANIFESTS = []
 REMOTE = {}
@@ -51,6 +52,13 @@ def _guard_state(url: str, data: bytes) -> str:
         return "ok"
     path = url.split("://", 1)[-1].split("/", 1)[-1]
     return classify_response(path, data)
+
+
+def left() -> float:
+    """Сколько секунд осталось до дедлайна выкачки."""
+    if not DEADLINE[0]:
+        return 999.0
+    return max(0.0, DEADLINE[0] - time.time())
 
 
 def log(msg: str) -> None:
@@ -703,7 +711,7 @@ def main() -> int:
     ap.add_argument("--kinds", default=",".join(DEFAULT_KINDS))
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--timeout", type=int, default=1200)
-    ap.add_argument("--budget-ms", type=int, default=20000, help="реальное время ожидания браузера на страницу")
+    ap.add_argument("--budget-ms", type=int, default=12000, help="реальное время ожидания браузера на страницу")
     ap.add_argument("--depth", type=int, default=2, help="глубина обхода HTML")
     ap.add_argument("--scan", type=int, default=1, help="1 — автономный скан ссылок и бандлов")
     ap.add_argument("--scan-texts", type=int, default=60, help="сколько текстовых файлов читать")
@@ -712,8 +720,10 @@ def main() -> int:
     ap.add_argument("--cdp", type=int, default=0, help="1 — лёгкий CDP-хук поверх netlog")
     ap.add_argument("--fail-fast", type=int, default=1,
                     help="1 — не тратить время, если страница под антиботом")
-    ap.add_argument("--pw", type=int, default=-1,
-                    help="-1 авто (если netlog тонкий), 1 всегда, 0 выкл")
+    ap.add_argument("--pw", type=int, default=0,
+                    help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
+    ap.add_argument("--total-budget", type=int, default=55,
+                    help="жёсткий лимит секунд на всю выкачку")
     ap.add_argument("--pw-min-urls", type=int, default=120,
                     help="ниже этого числа URL считаем netlog тонким")
     ap.add_argument("--escalate", type=int, default=1, help="1 — углублять обход при неполноте")
@@ -729,6 +739,8 @@ def main() -> int:
 
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
     started = time.time()
+    DEADLINE[0] = started + max(15, args.total_budget)
+    log("лимит выкачки: %d c" % args.total_budget)
     tmp = tempfile.mkdtemp(prefix="gfetch-")
     limit = args.max_mb * 1048576
     log("ссылка: %s" % args.url)
@@ -740,7 +752,8 @@ def main() -> int:
         log("страница закрывает доступ (HTTP %s). Пробую обход через браузер и статику."
             % diag["status"])
 
-    info = discover(args.url, tmp, args.budget_ms, args.depth, args.passes, args.cdp)
+    info = discover(args.url, tmp, int(min(args.budget_ms, left() * 1000)),
+                    args.depth, args.passes, args.cdp)
     urls = info["urls"]
     page_text = (diag.get("html") or "")[:400000]
     looks_game = bool(re.search(
@@ -759,7 +772,7 @@ def main() -> int:
 
     # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами
     thin = len(urls) < args.pw_min_urls or not (picked["json"] or picked["atlas"] or picked["skel"])
-    if hopeless:
+    if hopeless or left() < 20:
         thin = False
     if args.pw == 1 or (args.pw == -1 and thin):
         log("netlog без Spine-кандидатов (url=%d, json=%d, atlas=%d) -> Playwright с кликами"
@@ -789,8 +802,9 @@ def main() -> int:
         log("движок gs2c/Pragmatic: скелеты лежат в манифестах, эскалация не нужна")
 
     # быстрый проход не дал полноты -> углубляемся автоматически
-    if args.escalate and not gs2c and not (picked["atlas"] and len(picked["json"]) >= args.min_json):
-        deep = min(args.budget_ms * 3, 90000)
+    if args.escalate and not gs2c and left() > 25 \
+            and not (picked["atlas"] and len(picked["json"]) >= args.min_json):
+        deep = int(min(args.budget_ms * 3, left() * 1000 * 0.6))
         log("быстрый проход неполный (%d json, %d atlas) -> углубляюсь до %d мс"
             % (len(picked["json"]), len(picked["atlas"]), deep))
         info2 = discover(args.url, tmp, deep, args.depth, args.passes, args.cdp)
@@ -846,7 +860,12 @@ def main() -> int:
                 for i in range(args.grid_count):
                     grid.append(d + "/" + (t % i))
         log("зонд сетки манифестов: %d кандидатов" % len(grid))
-        alive = url_ok_many(grid[:args.grid_probe], args.probe_workers)
+        # ~60 проб в секунду при 20 потоках; в оставшееся время
+        probe_cap = int(min(args.grid_probe, max(0, left() - 6) * 60))
+        if probe_cap <= 0:
+            log("на зонд времени не осталось — пропускаю")
+            grid = []
+        alive = url_ok_many(grid[:probe_cap], args.probe_workers) if grid else []
         if alive:
             log("сетка дала манифестов: %d" % len(alive))
             urls |= set(alive)
@@ -858,10 +877,10 @@ def main() -> int:
     download_set(first, root, args.workers, args.timeout, "проход 1")
 
     # проход 1.5: автономный скан — ссылки из текстов и имён из бинарных бандлов
-    if args.scan:
+    if args.scan and left() > 12:
         texts = [u for u in urls
                  if u.lower().split("?")[0].endswith((".js", ".json", ".html", ".txt", ".xml", ".m3", ".manifest"))
-                 and not looks_junk(u)][:args.scan_texts]
+                 and not looks_junk(u)][:min(args.scan_texts, 25)]
         packed = [u for u in urls if u.lower().endswith(PACKED_EXT) and not looks_junk(u)][:12]
         log("скан: текстов %d, бинарных бандлов %d" % (len(texts), len(packed)))
         refs = set()
@@ -896,7 +915,7 @@ def main() -> int:
             picked = pick_assets(urls, kinds)
 
     # проход 1.55: ассеты, вшитые в манифесты движка (base64 внутри JSON)
-    if args.inline:
+    if args.inline and left() > 3:
         try:
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             from inline_assets import extract as extract_inline
@@ -1013,7 +1032,8 @@ def main() -> int:
             kinds[why] = kinds.get(why, 0) + 1
         log("отброшено мусорных ответов: %d (%s)" % (
             len(REJECTED), ", ".join("%s×%d" % (k, v) for k, v in sorted(kinds.items()))))
-    log("готово: %d файлов, %.1f МБ за %ss" % (len(files), total / 1048576, report["seconds"]))
+    log("готово: %d файлов, %.1f МБ за %ss (лимит %d c)"
+        % (len(files), total / 1048576, report["seconds"], args.total_budget))
     if total > limit:
         log("ВНИМАНИЕ: архив больше лимита %d МБ" % args.max_mb)
     if not files:
