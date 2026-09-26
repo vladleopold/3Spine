@@ -285,6 +285,24 @@ async function pressViaIframe(browser, extId, shimSrc) {
     walk(tree.frameTree);
   }
   log(`   фрейм панели: ${frameId || 'не найден'}`);
+
+  // панель может быть без отдельного фрейма и цели — тогда кнопка лежит
+  // в одном из контекстов страницы, который мы уже собрали
+  for (const c of contexts) {
+    const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id, 2000)
+      .catch(() => false);
+    log(`   контекст ${c.id}: кнопка ${has ? 'есть' : 'нет'}`);
+    if (!has) continue;
+    const res = await browser.eval(`(() => {
+      const b = document.getElementById('up-save');
+      const t = (b.textContent || '').trim();
+      b.click();
+      return 'НАЖАТА: "' + t + '"';
+    })()`, sessionId, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
+    log(`   ${res}`);
+    return res;
+  }
+
   if (!frameId) return 'фрейм панели не найден';
   const world = await browser.send('Page.createIsolatedWorld',
     { frameId, worldName: 'rs-world', grantUniveralAccess: true }, sessionId, 4000)
