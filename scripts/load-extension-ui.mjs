@@ -141,8 +141,19 @@ async function main() {
   })()`, sid, cx.id).catch((e) => null);
   if (devRect && !devRect.on) {
     log(`   включаю Developer mode в точке ${Math.round(devRect.x)},${Math.round(devRect.y)}`);
-    await realClick(browser, sid, devRect.x, devRect.y);
+    const ok = await browser.eval(`(() => {
+      const roots = ${WALK};
+      for (const r of roots) for (const el of r.querySelectorAll('*')) {
+        if (!/devMode/i.test(String(el.id || ''))) continue;
+        el.click();
+        return 'переключатель нажат';
+      }
+      return 'переключатель не найден';
+    })()`, sid, cx.id).catch((e) => 'ошибка: ' + e.message);
+    log(`   ${ok}`);
     await sleep(1500);
+    if (devRect.on !== true) await realClick(browser, sid, devRect.x, devRect.y);
+    await sleep(1200);
   } else if (devRect) {
     log('   Developer mode уже включён');
   } else {
@@ -162,6 +173,46 @@ async function main() {
     }
     return null;
   })()`, sid, cx.id).catch(() => null);
+  const synth = await browser.eval(`(() => {
+    const roots = ${WALK};
+    for (const r of roots) for (const el of r.querySelectorAll('*')) {
+      if (String(el.id || '') !== 'loadUnpacked') continue;
+      el.click();
+      return 'кнопка Load unpacked нажата';
+    }
+    return 'кнопка не найдена';
+  })()`, sid, cx.id).catch((e) => 'ошибка: ' + e.message);
+  log(`   ${synth}`);
+  if (/нажата/.test(String(synth))) {
+    await sleep(3000);
+    const win = xdo('search --onlyvisible --class "chrome|google-chrome" | tail -1');
+    if (win) xdo(`windowactivate --sync ${win}`);
+    await sleep(1000);
+    xdo('key --clearmodifiers ctrl+l');
+    await sleep(500);
+    xdo(`type --delay 40 ${JSON.stringify(EXT_DIR)}`);
+    await sleep(800);
+    xdo('key --clearmodifiers Return');
+    log(`   путь отправлен в диалог: ${EXT_DIR}`);
+    await sleep(4000);
+    const installedEarly = await browser.eval(`(() => {
+      const roots = ${WALK};
+      const items = [];
+      for (const r of roots) for (const el of r.querySelectorAll('*')) {
+        if (!/extensions-item/.test(String(el.tagName || ''))) continue;
+        items.push((el.id || '?') + (el.hasAttribute('disabled') ? ' ВЫКЛЮЧЕНО' : ' включено'));
+      }
+      return items.join(' , ') || 'ни одного';
+    })()`, sid, cx.id).catch((e) => 'ошибка: ' + e.message);
+    log(`   расширений на странице: ${installedEarly}`);
+    await browser.send('Target.closeTarget', { targetId }, undefined, 4000).catch(() => {});
+    const pg = ((await browser.send('Target.getTargets').catch(() => ({ targetInfos: [] }))).targetInfos || [])
+      .find((t) => t.type === 'page' && /^https?:/.test(t.url || ''));
+    if (pg) await browser.send('Target.activateTarget', { targetId: pg.targetId }, undefined, 4000).catch(() => {});
+    log(`   готово за ${((Date.now() - t0) / 1000).toFixed(1)}с`);
+    return;
+  }
+
   if (!loadRect) {
     log('   кнопка Load unpacked не найдена');
     log(await browser.eval(`(() => {
