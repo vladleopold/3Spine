@@ -175,10 +175,27 @@ def free_port(preferred: int = 9333) -> int:
         return sk.getsockname()[1]
 
 
+CACHE_SQL = ("(async()=>{try{const names=await caches.keys();const out=[];"
+            "for(const n of names){const c=await caches.open(n);"
+            "for(const r of await c.keys())out.push(r.url);}return out;}"
+            "catch(e){return []}})()")
+
+
+def enable_domains(cmd, sid=None):
+    """Один набор доменов для главной вкладки и каждого popup."""
+    for m in ("Page.enable", "Runtime.enable"):
+        cmd(m, {}, sid)
+    cmd("Network.enable", {"maxTotalBufferSize": 200000000,
+                           "maxResourceBufferSize": 80000000}, sid)
+    cmd("Network.setCacheDisabled", {"cacheDisabled": True}, sid)
+    cmd("Network.setBypassServiceWorker", {"bypass": True}, sid)
+
+
 class Crawler:
     """Гоняет игру в браузере и собирает все сетевые запросы."""
 
-    def __init__(self, budget_ms: int = 25000, port: int = 9333, click: bool = False):
+    def __init__(self, budget_ms: int = 25000, port: int = 9333, click: bool = False,
+                 grab: bool = False):
         self.budget_ms = max(int(budget_ms), 18000)
         self.click = click
         self.port = port
@@ -186,6 +203,12 @@ class Crawler:
         self.notes = []
         self.sessions = set()
         self.targets = {}
+        self.pending = {}
+        self.status = {}
+        self.mime = {}
+        self.kinds = {}
+        self.grab = grab
+        self.cached = set()
 
     def _http_json(self, path: str):
         with urllib.request.urlopen("http://127.0.0.1:%d%s" % (self.port, path), timeout=5) as r:
@@ -237,6 +260,11 @@ class Crawler:
                 proc.kill()
             shutil.rmtree(prof, ignore_errors=True)
 
+    @staticmethod
+    def _spineish(u: str) -> bool:
+        import re
+        return bool(re.search(r"\.(skel|json|atlas|scn|png|webp|ktx2?)(\?|$)", u, re.I))
+
     def _read_netlog(self) -> list:
         """Все запросы с момента старта браузера, включая popup и iframe."""
         path = getattr(self, "netlog", "")
@@ -279,8 +307,7 @@ class Crawler:
             ws.send(json.dumps(msg))
             return mid[0]
 
-        for m in ("Network.enable", "Page.enable", "Runtime.enable"):
-            cmd(m)
+        enable_domains(cmd)
         cmd("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False,
                                      "flatten": True})
         cmd("Page.addScriptToEvaluateOnNewDocument", {"source": HOOK_JS})
@@ -299,9 +326,8 @@ class Crawler:
             if sid and sid not in self.sessions:
                 self.sessions.add(sid)
                 self.targets[sid] = (msg.get("params", {}).get("targetInfo", {}) or {})
-                for m in ("Network.enable", "Runtime.enable", "Page.enable"):
-                    cmd(m, {}, sid)
                 try:
+                    enable_domains(cmd, sid)
                     cmd("Page.addScriptToEvaluateOnNewDocument", {"source": HOOK_JS}, sid)
                     cmd("Runtime.evaluate", {"expression":
                         "JSON.stringify(performance.getEntriesByType('resource')"
@@ -312,16 +338,35 @@ class Crawler:
                 try:
                     val = ((msg.get("result", {}).get("result") or {}).get("value"))
                     if isinstance(val, str) and val.startswith("["):
-                        for u in json.loads(val):
+                        got = json.loads(val)
+                        for u in got:
                             if isinstance(u, str) and u.startswith("http"):
-                                self.urls.add(u)
+                                if u not in self.urls and u not in self.cached:
+                                    self.cached.add(u)
+                                    self.urls.add(u)
                 except Exception:                          # noqa: BLE001
                     pass
             method = msg.get("method")
-            if method == "Network.requestWillBeSent":
-                u = (msg.get("params", {}).get("request", {}) or {}).get("url", "")
-                if u.startswith(("http://", "https://")):
-                    self.urls.add(u.split("#")[0])
+            if method == "Network.requestWillBeSent" and "params" in msg:
+                p_ = msg["params"]
+                r_ = p_.get("request", {}) or {}
+                u_ = r_.get("url", "")
+                if u_.startswith(("http://", "https://")):
+                    self.urls.add(u_.split("#")[0])
+                    self.pending[p_.get("requestId", "")] = (u_.split("#")[0],
+                                                              p_.get("type", ""))
+                    self.kinds.setdefault(p_.get("type", ""), 0)
+                    self.kinds[p_.get("type", "")] += 1
+            elif method == "Network.responseReceived" and "params" in msg:
+                p_ = msg["params"]
+                self.status[p_.get("requestId", "")] = p_.get("response", {}).get("status", 0)
+                self.mime[p_.get("response", {}).get("url", "")] = p_.get("response", {}).get("mimeType", "")
+            elif method == "Network.loadingFinished" and "params" in msg:
+                rid = msg["params"].get("requestId", "")
+                if rid in self.pending and self.grab:
+                    u_, _t = self.pending[rid]
+                    if self._spineish(u_):
+                        cmd("Network.getResponseBody", {"requestId": rid})
             elif method == "Runtime.consoleAPICalled":
                 txt = " ".join(str(a.get("value", "")) for a in
                                 msg.get("params", {}).get("args", []))
@@ -343,8 +388,12 @@ class Crawler:
                         cmd("Runtime.evaluate",
                             {"expression": "JSON.stringify((window.__g||[]).slice(0,3000))",
                              "returnByValue": True}, target)
+                        cmd("Runtime.evaluate",
+                            {"expression": CACHE_SQL, "awaitPromise": True,
+                             "returnByValue": True}, target)
                     except Exception:                      # noqa: BLE001
                         pass
         ws.close()
         return {"urls": sorted(self.urls), "notes": self.notes[:20],
+                "cached": len(self.cached), "kinds": dict(self.kinds),
                 "targets": [t.get("url", "") for t in self.targets.values() if t.get("url")]}
