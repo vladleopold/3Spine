@@ -132,20 +132,14 @@ async function main() {
   // 2) настоящий id вкладки: content.js берёт список сайтов через
   //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
   //    список был пуст и кнопка ничего не качала
-  const probe = await ctx.newPage();
-  await probe.goto(`chrome-extension://${extId}/manifest.json`, { waitUntil: 'domcontentloaded' })
-    .catch((e) => {
-      if (/ERR_BLOCKED_BY_CLIENT/.test(e.message)) {
-        throw new Error('расширение не загрузилось: Chrome блокирует страницу панели. '
-          + 'Нужен флаг --disable-features=DisableLoadExtensionCommandLineSwitch '
-          + 'и свежий Chrome из шага установки');
-      }
-      throw e;
-    });
-  const tabs = await probe.evaluate(() => new Promise((res) => {
-    chrome.tabs.query({}, (list) => res((list || []).map((t) => ({ id: t.id, url: t.url || '' }))));
-  })).catch(() => []);
-  await probe.close().catch(() => {});
+  const tabs = await ctx.newPage().then(async (pr) => {
+    await pr.goto(`chrome-extension://${extId}/popup.html`, { waitUntil: 'domcontentloaded' });
+    const t = await pr.evaluate(() => new Promise((res) => {
+      chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
+    })).catch(() => []);
+    await pr.close().catch(() => {});
+    return t;
+  });
   const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
   const gameTab = tabs.find((t) => t.url.startsWith(origin)) || tabs[0];
   const tabId = gameTab ? gameTab.id : 0;
