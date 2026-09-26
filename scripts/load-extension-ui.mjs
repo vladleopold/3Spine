@@ -113,14 +113,28 @@ async function main() {
   if (!cx) throw new Error('контекст chrome://extensions не появился');
   log(`   страница расширений открыта, контекстов: ${ctxs.length}`);
 
+  // у CR-BUTTON/CR-TOGGLE сам элемент имеет пустой rect — берём из shadow root
+  const BOX = `const box = (el) => {
+    const b = el.getBoundingClientRect();
+    if (b.width >= 4 && b.height >= 4) return b;
+    if (el.shadowRoot) {
+      for (const ch of el.shadowRoot.querySelectorAll('*')) {
+        const r = ch.getBoundingClientRect();
+        if (r.width >= 4 && r.height >= 4) return r;
+      }
+    }
+    return null;
+  };`;
+
   // 2) включаем Developer mode
   const devRect = await browser.eval(`(() => {
+    ${BOX}
     const roots = ${WALK};
     for (const r of roots) for (const el of r.querySelectorAll('*')) {
       const id = el.id || '';
       if (id !== 'devMode' && !/devMode/i.test(id)) continue;
-      const b = el.getBoundingClientRect();
-      if (b.width < 4 || b.height < 4) continue;
+      const b = box(el);
+      if (!b) continue;
       return { x: b.left + b.width / 2, y: b.top + b.height / 2, on: el.checked === true || el.getAttribute('aria-pressed') === 'true' };
     }
     return null;
@@ -137,18 +151,14 @@ async function main() {
 
   // 3) жмём Load unpacked
   const loadRect = await browser.eval(`(() => {
+    ${BOX}
     const roots = ${WALK};
     for (const r of roots) for (const el of r.querySelectorAll('*')) {
       const id = String(el.id || '');
-      const txt = (el.innerText || el.textContent || '').trim();
-      const isLoad = id === 'loadUnpacked' || /load unpacked|загрузить распакован/i.test(txt);
-      if (!isLoad) continue;
-      if (el.tagName === 'CR-BUTTON' || el.tagName === 'BUTTON' || el.tagName === 'CR-ICON-BUTTON' || /^(DIV|SPAN)$/.test(el.tagName)) {
-        const b = el.getBoundingClientRect();
-        if (b.width < 6 || b.height < 6) continue;
-        if (el.tagName !== 'CR-BUTTON' && el.tagName !== 'BUTTON' && !/^(DIV|SPAN)$/.test(el.tagName)) continue;
-        return { x: b.left + b.width / 2, y: b.top + b.height / 2, tag: el.tagName, id: id || '(без id)' };
-      }
+      if (id !== 'loadUnpacked') continue;
+      const b = box(el);
+      if (!b) continue;
+      return { x: b.left + b.width / 2, y: b.top + b.height / 2, tag: el.tagName, id };
     }
     return null;
   })()`, sid, cx.id).catch(() => null);
