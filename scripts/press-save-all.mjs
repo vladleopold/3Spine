@@ -18,15 +18,17 @@ function unpackedExtensionId(dir) {
 
 // подмена chrome.devtools для панели: панель сама получит ресурсы и соберёт ZIP
 const SHIM_SOURCE = `(() => {
+  const RESOURCES = __RESOURCES__;
+  const HAR = __HAR__;
   const noop = { addListener() {}, removeListener() {} };
   chrome.devtools = {
     inspectedWindow: {
       tabId: ${Number(process.env.TAB_ID || 0)},
-      getResources(cb) { cb([]); },
+      getResources(cb) { cb(RESOURCES.map((r) => ({ url: r.url, content: r.body, size: r.size }))); },
       onResourceAdded: noop,
       reload() {}, eval() {},
     },
-    network: { getHAR(cb) { cb({ log: { version: '1.2', entries: [] } }); }, onRequestFinished: noop },
+    network: { getHAR(cb) { cb({ log: { version: '1.2', entries: HAR } }); }, onRequestFinished: noop },
   };
 })();`;
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
@@ -170,11 +172,11 @@ async function pressInDevtoolsFrontend() {
 // web-ресурсы, поэтому Chrome их грузит. Внутри iframe кнопка #up-save
 // настоящая — жмём её через контекст этого фрейма.
 async function pressViaIframe(browser, extId, shimSrc) {
-  const ts = await browser.send('Target.getTargets');
-  const infos = ts.targetInfos.filter((t) => t.type === 'page');
-  const want = URL_ ? URL_.split('?')[0] : '';
-  const target = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
-  if (!target) return 'нет вкладки для iframe';
+  // отдельная пустая вкладка: игровую не трогаем, она тяжёлая
+  const made = await browser.send('Target.createTarget', { url: 'about:blank' });
+  const target = (await browser.send('Target.getTargets')).targetInfos
+    .find((t) => t.targetId === made.targetId);
+  if (!target) return 'не создалась вкладка для панели';
 
   const { sessionId } = await browser.send('Target.attachToTarget',
     { targetId: target.targetId, flatten: true });
@@ -191,7 +193,7 @@ async function pressViaIframe(browser, extId, shimSrc) {
 
   const mainCtx = contexts[0];
   if (!mainCtx) return 'нет контекста страницы';
-  const made = await browser.eval(`(() => {
+  const injected = await browser.eval(`(() => {
     const old = document.getElementById('rs-panel');
     if (old) old.remove();
     const f = document.createElement('iframe');
@@ -201,7 +203,7 @@ async function pressViaIframe(browser, extId, shimSrc) {
     document.body.appendChild(f);
     return 'iframe создан';
   })()`, sessionId, mainCtx.id).catch((e) => 'ошибка: ' + e.message);
-  log(`   ${made}`);
+  log(`   ${injected}`);
   await sleep(2500);
 
   // контекст фрейма панели
@@ -227,6 +229,43 @@ async function pressViaIframe(browser, extId, shimSrc) {
     b.click();
     return 'НАЖАТА: "' + t + '"';
   })()`, sessionId, panelCtx.id).catch((e) => 'ошибка: ' + e.message);
+}
+
+
+async function collectFromGame(browser) {
+  const ts = await browser.send('Target.getTargets');
+  const infos = ts.targetInfos.filter((t) => t.type === 'page');
+  const want = URL_ ? URL_.split('?')[0] : '';
+  const game = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
+  if (!game) return { sessionId: null, bodies: new Map() };
+  log(`   игра: ${game.url.slice(0, 80)}`);
+  let sessionId = null;
+  try {
+    ({ sessionId } = await browser.send('Target.attachToTarget',
+      { targetId: game.targetId, flatten: true }, undefined, 8000));
+  } catch (e) { log(`   attach не удался: ${e.message}`); }
+  if (!sessionId) return { sessionId: null, bodies: new Map() };
+  const bodies = new Map();
+  const pend = [];
+  browser.onEvent = (m) => {
+    if (m.sessionId !== sessionId || m.method !== 'Network.responseReceived') return;
+    const { requestId, response } = m.params;
+    if (!/^https?:/i.test(response.url)) return;
+    if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
+    pend.push(browser.send('Network.getResponseBody', { requestId }, sessionId, 4000)
+      .then((r) => {
+        const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+        bodies.set(response.url, { body, size: (body || '').length,
+          mimeType: response.mimeType || 'text/plain' });
+      }).catch(() => {}));
+  };
+  try { await browser.send('Network.enable', {}, sessionId, 4000); } catch (e) { log(`   Network.enable: ${e.message}`); }
+  try { await browser.send('Page.enable', {}, sessionId, 4000); } catch { /* не критично */ }
+  try { await browser.send('Page.reload', { ignoreCache: false }, sessionId, 6000); } catch { /* не критично */ }
+  await sleep(8000);
+  await Promise.race([Promise.all(pend), sleep(2000)]);
+  log(`   ресурсов собрано: ${bodies.size} (${since()})`);
+  return { sessionId, bodies };
 }
 
 async function main() {
@@ -312,7 +351,20 @@ async function main() {
   let pressed = false;
   let why = 'нажатие не выполнено';
   const extId = process.env.EXT_ID || unpackedExtensionId(EXT_DIR);
-  let clicked = extId ? await pressViaIframe(browser, extId, SHIM_SOURCE) : 'EXT_ID не задан';
+
+  // 1) реальные ресурсы страницы — их панель заберёт через подмену chrome.devtools
+  const collected = await collectFromGame(browser);
+  const resources = [...collected.bodies].map(([url, v]) => ({ url, body: v.body, size: v.size }));
+  const har = resources.map((r) => ({
+    request: { url: r.url, method: 'GET' },
+    response: { status: 200, content: { size: r.size, mimeType: 'text/plain' } },
+  }));
+  const shim = SHIM_SOURCE
+    .replace('__RESOURCES__', JSON.stringify(resources))
+    .replace('__HAR__', JSON.stringify(har));
+  log(`   в шэм пойдёт ресурсов: ${resources.length}`);
+
+  let clicked = extId ? await pressViaIframe(browser, extId, shim) : 'EXT_ID не задан';
   why = String(clicked);
   log(`   панель в iframe: ${why}`);
   if (/НАЖАТА/.test(why)) pressed = true; else why = why;
@@ -391,7 +443,8 @@ async function main() {
 
   // нажатия не было — это и есть результат шага
   if (!pressed) {
-    console.error(`кнопка Save All Resources НЕ НАЖАТА: ${why}`);
+    console.error('кнопка не нажата');
+    console.error(`причина: ${why}`);
     process.exit(1);
   }
   log(`кнопка нажата (${since()}) — архив собирает отдельный шаг`);

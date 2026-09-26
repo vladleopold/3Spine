@@ -94,7 +94,6 @@ jobs:
         run: bash scripts/open-devtools.sh
 
       - name: Нажать Save All Resources в Resources Saver
-        continue-on-error: true   # не нажалась — идём дальше, разбираемся на следующих шагах
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           OUTPUT_DIR: ./artifacts
