@@ -273,6 +273,24 @@ async function capturePage(ctx, url, outRoot, saved) {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   }).catch(() => {});
   page.on('response', (r) => saveResponse(r, outRoot, saved));
+  // ответы из web-worker / service-worker: page.on их не отдаёт, а там часто
+  // грузятся wasm и бинарные манифесты игр
+  ctx.on('response', (r) => saveResponse(r, outRoot, saved));
+
+  // настоящие скачивания (игра отдаёт .zip/.json файлом, а не запросом)
+  const dlDir = path.join(outRoot, '_downloads');
+  const onDl = async (dl) => {
+    try {
+      await fs.ensureDir(dlDir);
+      const name = (dl.suggestedFilename() || 'download.bin').replace(/[\\/:*?"<>|]/g, '_');
+      const to = path.join(dlDir, name);
+      await dl.saveAs(to);
+      log(`  ⤓ скачан файл: ${name}`);
+      saved.set('dl:' + name, to);
+    } catch (e) { log(`  ! не сохранил ${e.message.split('\n')[0]}`); }
+  };
+  page.on('download', onDl);
+  ctx.on('download', onDl);
 
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -291,7 +309,7 @@ async function capturePage(ctx, url, outRoot, saved) {
       'text=Открыть игру', 'button:has-text("Play")', 'button:has-text("Demo")',
       'button:has-text("Играть")', 'button:has-text("Демо")', 'a[href*="demo"]',
       '[class*="play"]', '[class*="demo"]', '[id*="play"]', '[id*="demo"]',
-      'canvas', 'body']],
+      'iframe canvas', 'canvas']],
   ];
   for (const [name, sels] of STEPS) {
     let done = false;
@@ -301,11 +319,9 @@ async function capturePage(ctx, url, outRoot, saved) {
         const el = page.locator(sel).first();
         if (!(await el.isVisible({ timeout: 1200 }))) continue;
         const box = await el.boundingBox().catch(() => null);
-        if (box) {                      // настоящий клик мышью по координатам
-          await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-        } else {
-          await el.click({ timeout: 2000 });
-        }
+        if (!box) continue;             // нечего кликать
+        if (box.width < 120 || box.height < 60) continue;  // мелкий элемент — не кнопка
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         log(`  → клик [${name}]: ${sel}`);
         await page.waitForTimeout(3500);
         done = true;
