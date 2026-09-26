@@ -15,9 +15,7 @@ import path from 'path';
 const URL_ = process.env.URL || '';
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
-const PROFILE = path.resolve(process.env.PROFILE || './.chrome-profile');
-const CHROME = process.env.CHROME_PATH
-  || (fs.existsSync('/usr/bin/google-chrome') ? '/usr/bin/google-chrome' : '');
+const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
 const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '240000', 10);
 
@@ -50,22 +48,22 @@ const SHIM = (payload) => `(() => {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  fs.mkdirSync(PROFILE, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
   const extId = unpackedExtensionId(EXT);
   log(`расширение: ${m.name} v${m.version}, id ${extId}`);
 
-  const ctx = await chromium.launchPersistentContext(PROFILE, {
-    headless: false,
-    executablePath: CHROME || undefined,
-    ignoreHTTPSErrors: true,
-    acceptDownloads: true,
-    args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run',
-      '--disable-blink-features=AutomationControlled',
-      `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    ],
-  });
+  // Chrome уже запущен предыдущим шагом (с расширением и ссылкой) — подключаемся к нему
+  let browser;
+  for (let i = 0; i * 500 < 20000; i++) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${PORT}/json/version`);
+      if (r.ok) break;
+    } catch { /* порт ещё не поднят */ }
+    await sleep(500);
+  }
+  browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
+  log('подключился к уже запущенному Chrome');
+  const ctx = browser.contexts()[0];
 
   // 1) собираем все ресурсы страницы через CDP
   const page = ctx.pages()[0] || await ctx.newPage();
@@ -88,8 +86,12 @@ async function main() {
     } catch { /* тело уже вытеснено из кеша */ }
   });
 
-  log(`открываю ${URL_}`);
-  await page.goto(URL_, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  if (URL_ && !page.url().startsWith(URL_.split('?')[0])) {
+    log(`открываю ${URL_}`);
+    await page.goto(URL_, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  }
+  // перезагрузка с включённой сетью — чтобы поймать всё, что игра грузит сама
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
   await sleep(Math.min(COLLECT_MS, 20000));
   log(`ресурсов собрано: ${bodies.size}`);
 
@@ -126,11 +128,11 @@ async function main() {
   if (!zip) {
     const state = (await panel.textContent('body').catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
     log(`состояние панели: ${state}`);
-    await ctx.close();
+    await browser.close().catch(() => {});
     throw new Error('ZIP не появился после нажатия Save All Resources');
   }
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ)`);
-  await ctx.close();
+  await browser.close().catch(() => {});
 }
 
 main().catch((e) => { console.error('ошибка:', e.message); process.exit(1); });
