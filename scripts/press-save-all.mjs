@@ -17,6 +17,11 @@ function unpackedExtensionId(dir) {
   return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
 }
 
+/** ID расширения для SHOW_PANEL (env или вычисленный по пути). */
+function extIdGuess() {
+  return process.env.EXT_ID || unpackedExtensionId(EXT_DIR);
+}
+
 // подмена chrome.devtools для панели: панель сама получит ресурсы и соберёт ZIP
 const SHIM_SOURCE = `(() => {
   const RESOURCES = __RESOURCES__;
@@ -214,12 +219,6 @@ async function pressViaIframe(browser, extId, shimSrc) {
     .catch(() => 'нет статуса');
   log(`   статус iframe: ${st}`);
   log(`   контексты: ${contexts.map((c) => c.origin).join(' | ')}`);
-  {
-    await browser.send('Target.setDiscoverTargets', { discover: true });
-    const now = (await browser.send('Target.getTargets')).targetInfos || [];
-    log(`   целей после iframe: ${now.length}`);
-    for (const t of now) log(`      [${t.type}] ${t.url}`);
-  }
 
   // панель — отдельная цель (OOPIF) с URL content.html: ищем её среди всех целей
   let panelTargetInfo = null;
@@ -286,23 +285,6 @@ async function pressViaIframe(browser, extId, shimSrc) {
     walk(tree.frameTree);
   }
   log(`   фрейм панели: ${frameId || 'не найден'}`);
-
-  // контексты уже есть: проверяем каждый — один из них должен быть панелью
-  for (const c of contexts) {
-    const has = await browser.eval('!!document.getElementById("up-save")', sessionId, c.id, 2000)
-      .catch(() => false);
-    log(`   контекст ${c.id}: кнопка ${has ? 'есть' : 'нет'}`);
-    if (!has) continue;
-    const res = await browser.eval(`(() => {
-      const b = document.getElementById('up-save');
-      const t = (b.textContent || '').trim();
-      b.click();
-      return 'НАЖАТА: "' + t + '"';
-    })()`, sessionId, c.id, 3000).catch((e) => 'ошибка: ' + e.message);
-    log(`   ${res}`);
-    return res;
-  }
-
   if (!frameId) return 'фрейм панели не найден';
   const world = await browser.send('Page.createIsolatedWorld',
     { frameId, worldName: 'rs-world', grantUniveralAccess: true }, sessionId, 4000)
@@ -402,35 +384,6 @@ const SHOW_PANEL = `(async () => {
   } catch (e) { return 'ошибка: ' + e.message; }
 })()`;
 
-// Клик мышью в область DevTools: окно браузера 1600x1000, DevTools пристыкован.
-function clickDevtoolsArea() {
-  const run = (cmd) => {
-    try {
-      return execSync(`xdotool ${cmd}`, {
-        env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
-      }).toString().trim();
-    } catch { return ''; }
-  };
-  const win = run('search --onlyvisible --class "google-chrome" | tail -1')
-    || run('search --onlyvisible --name "Chrome" | tail -1');
-  if (!win) return 'окно Chrome не найдено';
-  const geo = run(`getwindowgeometry --shell ${win}`);
-  const gw = parseInt((geo.match(/WIDTH=(\d+)/) || [])[1] || '1600', 10);
-  const ghh = parseInt((geo.match(/HEIGHT=(\d+)/) || [])[1] || '1000', 10);
-  run(`windowactivate --sync ${win}`);
-  // панель DevTools: низ окна (док снизу) — кнопка в шапке, слева
-  const spots = [
-    [150, Math.round(ghh * 0.63)],
-    [150, Math.round(ghh * 0.70)],
-    [150, Math.round(ghh * 0.55)],
-    [Math.round(gw * 0.05), Math.round(ghh * 0.63)],
-  ];
-  for (const [dx, dy] of spots) {
-    run(`mousemove --window ${win} ${dx} ${dy} click 1`);
-  }
-  return `окно ${gw}x${ghh}, клики: ${spots.map((s2) => s2.join(',')).join(' / ')}`;
-}
-
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -522,18 +475,15 @@ async function main() {
     const infos = (await browser.send('Target.getTargets')).targetInfos || [];
     if (!seenTargets) {
       log(`   всего целей: ${infos.length}`);
-      for (const t of infos) log(`      [${t.type}] ${t.url}`);
+      for (const t of infos) log(`      [${t.type}] ${String(t.url).slice(0, 90)}`);
       seenTargets = true;
     }
-    const dts = infos.filter((t) => /devtools/i.test(t.url || ''));
-    if (dts.length > 1) log(`   окон DevTools: ${dts.length}`);
-    for (const t of dts) log(`      devtools-цель: ${t.url}`);
-    return dts[0] || null;
+    return infos.find((t) => /devtools/i.test(t.url || '')) || null;
   };
   let dt = null;
   for (let i = 0; i < 12 && !dt; i++) { dt = await devtoolsTarget(); if (!dt) await sleep(1000); }
   if (dt) {
-    log(`   окно DevTools (полный URL): ${dt.url}`);
+    log(`   окно DevTools: ${dt.url.slice(0, 80)}`);
     // подключаемся к окну DevTools: своим ws либо через сессию браузера
     let dw = null, dwSess = null;
     if (dt.webSocketDebuggerUrl) dw = await CDP.connect(dt.webSocketDebuggerUrl).catch(() => null);
@@ -560,22 +510,14 @@ async function main() {
 
     // панели DevTools и открываем нужную без ввода с клавиатуры
     {
-      // фронтенд DevTools грузит модули не сразу — ждём появления globalThis.UI
-      let ready = false;
-      for (let i = 0; i < 20 && !ready; i++) {
-        ready = await evalIn('!!globalThis.UI').catch(() => false);
-        if (!ready) await sleep(500);
-      }
-      if (!ready) {
-        log('   UI во фронтенде DevTools не появился — панель откроем через контексты');
-      } else {
-        const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
-        log(`   панели DevTools: ${list}`);
-        const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', unpackedExtensionId(EXT_DIR)))
-          .catch((e) => 'ошибка: ' + e.message);
-        log(`   ${shown}`);
-        await sleep(2000);
-      }
+      // без contextId: контекст по умолчанию фронтенда DevTools
+      const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
+      log(`   панели DevTools: ${list}`);
+      const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', extIdGuess()))
+        .catch((e) => 'ошибка: ' + e.message);
+      log(`   ${shown}`);
+      await sleep(2000);
+      if (/панель открыта/.test(String(shown))) pressed = pressed || false;
     }
 
     // панель лежит во фрейме внутри окна DevTools — ищем его и жмём кнопку там
@@ -766,9 +708,6 @@ async function main() {
 
   // нажатия не было — это и есть результат шага
   if (!pressed) {
-    // последняя попытка: клик мышью в область DevTools
-    const how = clickDevtoolsArea();
-    log(`   попытка кликом в область DevTools: ${how}`);
     console.error('кнопка не нажата');
     console.error(`причина: ${why}`);
     process.exit(1);
