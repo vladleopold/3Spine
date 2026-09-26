@@ -192,7 +192,7 @@ jobs:
           printf '#!/bin/sh\nexec /tmp/spine/Spine/Spine.sh "$@"\n' > /tmp/spine-run.sh
           chmod +x /tmp/spine-run.sh
           xdpyinfo -display :99 | head -2 || true
-          echo "CPU: $(nproc) → 12 параллельных процессов Spine, пачками по 12"
+          echo "CPU: $(nproc) → все скелеты одним запуском, параллельно по числу ядер"
           python3 .codespace/compile_block.py work/output.zip work/output.zip
           unzip -l work/output.zip
 
