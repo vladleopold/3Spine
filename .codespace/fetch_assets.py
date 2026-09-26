@@ -50,6 +50,30 @@ PROXY_POOL = []          # пул рабочих прокси (минимум 7)
 PROXY_IDX = [0]
 
 
+EDGE_BROWSER = [None]      # локальный MITM-прокси через edge воркера
+
+
+def edge_browser_proxy() -> str:
+    """Поднимает наш собственный прокси 127.0.0.1 -> edge Cloudflare.
+
+    Свой, постоянный, не зависит от чужих списков. Возвращает '' или ''.
+    """
+    if os.environ.get("SPINE_EDGE_BROWSER", "1") != "1":
+        return ""
+    if EDGE_BROWSER[0] is not None:
+        return EDGE_BROWSER[0]
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from edge_proxy import serve
+        port = serve(8899)
+        EDGE_BROWSER[0] = "127.0.0.1:%d" % port
+        log("собственный edge-прокси для браузера: %s" % EDGE_BROWSER[0])
+    except Exception as e:                                 # noqa: BLE001
+        log("edge-прокси для браузера не поднялся: %s" % str(e)[:60])
+        EDGE_BROWSER[0] = ""
+    return EDGE_BROWSER[0] or ""
+
+
 def proxy_flags() -> list:
     """Флаги Chrome для прокси и безопасная строка для лога."""
     if not BROWSER_PROXY:
@@ -325,6 +349,13 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
     ext = os.environ.get("SPINE_EXT_DIR", "").strip()
     ext_flags = (["--load-extension=" + ext, "--disable-extensions-except=" + ext]
                  if ext and os.path.isdir(ext) else [])
+    local = edge_browser_proxy()
+    if local:
+        # весь трафик браузера идёт через наш edge: блокировки IP не мешают
+        net_flags = ["--proxy-server=" + local, "--ignore-certificate-errors",
+                     "--proxy-bypass-list=<-loopback>"]
+    else:
+        net_flags = proxy_flags()
     cmd = [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
            "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
            "--disable-extensions", "--mute-audio", "--hide-scrollbars",
@@ -332,7 +363,7 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
            "--user-agent=" + NORMAL_UA, "--lang=en-US", "--window-size=1280,900",
            "--enable-unsafe-swiftshader", "--use-gl=angle", "--use-angle=swiftshader",
            "--disable-features=IsolateOrigins,site-per-process",
-           "--user-data-dir=" + prof] + ext_flags + proxy_flags() + ["--log-net-log=" + netlog, url]
+           "--user-data-dir=" + prof] + ext_flags + net_flags + ["--log-net-log=" + netlog, url]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:                                     # noqa: BLE001
