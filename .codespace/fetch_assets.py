@@ -710,6 +710,8 @@ def main() -> int:
     ap.add_argument("--probe-limit", type=int, default=400, help="потолок сетевых проб")
     ap.add_argument("--passes", type=int, default=3, help="сколько страниц обходить браузером")
     ap.add_argument("--cdp", type=int, default=0, help="1 — лёгкий CDP-хук поверх netlog")
+    ap.add_argument("--fail-fast", type=int, default=1,
+                    help="1 — не тратить время, если страница под антиботом")
     ap.add_argument("--pw", type=int, default=-1,
                     help="-1 авто (если netlog тонкий), 1 всегда, 0 выкл")
     ap.add_argument("--pw-min-urls", type=int, default=120,
@@ -740,6 +742,13 @@ def main() -> int:
 
     info = discover(args.url, tmp, args.budget_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
+    page_text = (diag.get("html") or "")[:400000]
+    looks_game = bool(re.search(
+        r"(gs2c|openGame|gameSymbol|games-html5|unity|phaser|pixi|cocos|egret|"
+        r"construct|\.atlas|\.skel|spine|WebGL|canvas)", page_text, re.I))
+    hopeless = bool(diag["antibot"]) and not looks_game
+    if hopeless:
+        log("страница под антиботом и без признаков игры — не тратим время на обход")
     log("найдено адресов: %d (движок: %s)" % (len(urls), info["engine"]))
 
     gid = game_id_from_url(args.url)
@@ -750,6 +759,8 @@ def main() -> int:
 
     # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами
     thin = len(urls) < args.pw_min_urls or not (picked["json"] or picked["atlas"] or picked["skel"])
+    if hopeless:
+        thin = False
     if args.pw == 1 or (args.pw == -1 and thin):
         log("netlog без Spine-кандидатов (url=%d, json=%d, atlas=%d) -> Playwright с кликами"
             % (len(urls), len(picked["json"]), len(picked["atlas"])))
@@ -763,6 +774,15 @@ def main() -> int:
     log("кандидаты: json=%d atlas=%d skel=%d картинки=%d (прочее отброшено: %d)" % (
         len(picked["json"]), len(picked["atlas"]), len(picked["skel"]),
         len(picked.get("png", [])), len(picked["_other"])))
+
+    if hopeless and args.fail_fast and not (picked["json"] or picked["atlas"] or picked["skel"]):
+        log("--- СВОДКА ПОИСКА ---")
+        log("HTTP %s | антибот: %s | признаков игры в HTML нет"
+            % (diag["status"], ", ".join(diag["antibot"][:3])))
+        log("адресов в сети: %d | кандидатов Spine: 0" % len(urls))
+        log("ВЫВОД: площадка прячет игру за антиботом (капча/гео-блок). "
+            "Автоматическая выкачка невозможна с IP runner'а.")
+        return 3
 
     gs2c = bool(GS2C_RE.search(" ".join(sorted(urls)[:400])))
     if gs2c:
