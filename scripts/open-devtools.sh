@@ -32,17 +32,17 @@ xdotool windowactivate --sync "$win" 2>/dev/null || xdotool windowfocus "$win" |
 sleep 1
 # F12 — открыть/переключить DevTools
 xdotool key --window "$win" F12
-sleep 4
+sleep 2
 # на всякий случай второй раз, если окно ещё не в фокусе
 xdotool key --window "$win" F12 2>/dev/null || true
-sleep 3
+sleep 1
 # выбираем вкладку Resources Saver через командную палитру DevTools
 xdotool key --window "$win" --clearmodifiers ctrl+shift+p
-sleep 2
-xdotool type --window "$win" --delay 60 "Resources Saver"
-sleep 2
+sleep 1
+xdotool type --window "$win" --delay 30 "Resources Saver"
+sleep 1
 xdotool key --window "$win" Return
-sleep 4
+sleep 2
 log "вкладка Resources Saver выбрана через командную палитру"
 
 log "DevTools открыт (F12)"
