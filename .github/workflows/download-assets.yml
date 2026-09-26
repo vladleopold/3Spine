@@ -92,105 +92,25 @@ jobs:
           cache: 'npm'
 
       - run: npm ci
-      - name: Установить Google Chrome (Linux)
-        run: |
-          bash scripts/install-chrome-linux.sh
-          google-chrome --version
-          echo "CHROME_PATH=/usr/bin/google-chrome" >> "$GITHUB_ENV"
-
-      - name: Обойти состояния SPA (websnap-подобный обход)
-        env:
-          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          OUTPUT_DIR: ./artifacts/spa
-          CHROME_PATH: /usr/bin/google-chrome
-          DEPTH: ${{ inputs.spa_depth || '3' }}
-          MAX_STATES: ${{ inputs.spa_states || '40' }}
-          WAIT_MS: ${{ inputs.spa_wait || '1200' }}
-          INCLUDE: ${{ inputs.spa_include || '' }}
-          EXCLUDE: ${{ inputs.spa_exclude || '' }}
-        run: |
-          node scripts/spa-websnap.mjs open "$URL" \
-            --output "$OUTPUT_DIR" \
-            --viewport 1400x900 \
-            --wait "$WAIT_MS" \
-            --depth "$DEPTH" \
-            --max-states "$MAX_STATES" \
-            ${INCLUDE:+--include "$INCLUDE"} \
-            ${EXCLUDE:+--exclude "$EXCLUDE"}
-          node scripts/spa-websnap.mjs auto
-          node scripts/spa-websnap.mjs tree
-          node scripts/spa-websnap.mjs done
 
       - name: Скачать через AnyDownload (render)
-        continue-on-error: true
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+          WAIT_MS: ${{ inputs.spa_wait || '4000' }}
         run: |
           npm install -g anydownload@2.3.9
           mkdir -p artifacts/anydownload
-          printf 'n\n' | timeout 600 anydownload "$URL" \
+          printf 'n\n' | timeout 900 anydownload "$URL" \
             --mode render \
             --headless \
-            --wait "${{ inputs.spa_wait || '4000' }}" \
+            --wait "$WAIT_MS" \
             --preset page \
             -o artifacts/anydownload \
-            -v || echo "anydownload завершился с кодом $?"
-          find artifacts/anydownload -type f | wc -l
+            -v
+          echo "файлов AnyDownload: $(find artifacts/anydownload -type f | wc -l)"
 
-
-      - uses: actions/cache@v4
-        id: ext-cache
-        with:
-          path: .chrome-ext
-          key: ext-resources-saver-${{ github.run_id }}
-          restore-keys: |
-            ext-resources-saver-
-
-      - name: Установить расширение Resources-Saver
-        run: bash scripts/install-resources-saver.sh
-
-      - name: Запустить Chrome с расширением
-        continue-on-error: true
-        env:
-          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          EXT_DIR: .chrome-ext
-          PROFILE: ${{ github.workspace }}/.chrome-profile
-        run: bash scripts/start-chrome.sh
-
-      - name: Загрузить расширение через интерфейс chrome://extensions
-        continue-on-error: true
-        env:
-          EXT_DIR: .chrome-ext
-          PROFILE: ${{ github.workspace }}/.chrome-profile
-        run: node scripts/load-extension-ui.mjs
-
-      - name: Открыть DevTools
-        continue-on-error: true
-        run: bash scripts/open-devtools.sh
-
-      - name: Нажать Save All Resources в Resources Saver
-        continue-on-error: true
-        env:
-          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          OUTPUT_DIR: ./artifacts
-          EXT_DIR: .chrome-ext
-          PROFILE: ${{ github.workspace }}/.chrome-profile
-        run: node scripts/press-save-all.mjs
-
-      - name: Дождаться архива (отдельный шаг)
-        continue-on-error: true
-        env:
-          OUTPUT_DIR: ./artifacts
-          ARCHIVE_WAIT_MS: '120000'
-        run: node scripts/wait-archive.mjs
-
-      - name: Скачать все ресурсы игры
-        env:
-          OUTPUT_DIR: ./artifacts/saver
-          URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          WAIT_MS: ${{ inputs.wait_ms || '35000' }}
-          HEADLESS: 'true'
-        run: node scripts/download-resources.mjs
+      - name: Собрать spine-паки
+        run: node scripts/spine-pack.mjs artifacts/anydownload artifacts/spine
 
       - name: Отчёт по Spine
         if: always()
