@@ -1,0 +1,69 @@
+name: Download Game Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: 'Список URL через запятую'
+        required: true
+        type: string
+      game_url:
+        description: 'Игровой шелл (если уже найден) — через запятую'
+        required: false
+        type: string
+      wait_ms:
+        description: 'Доп. ожидание догрузки, мс'
+        required: false
+        default: '25000'
+        type: string
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Download resources
+        env:
+          URLS: ${{ github.event.inputs.urls }}
+          GAME_URL: ${{ github.event.inputs.game_url }}
+          WAIT_MS: ${{ github.event.inputs.wait_ms || '25000' }}
+          OUTPUT_DIR: ./artifacts
+          HEADLESS: 'true'
+        run: npm run download
+
+      - name: Отчёт по Spine-ассетам
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "Файлов: $(find artifacts -type f | wc -l)"
+          echo "atlas:  $(find artifacts -type f -name '*.atlas' | wc -l)"
+          echo "skel:   $(find artifacts -type f -name '*.skel'  | wc -l)"
+          echo "json:   $(find artifacts -type f -name '*.json'  | wc -l)"
+          echo "images: $(find artifacts -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.webp' -o -name '*.avif' \) | wc -l)"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-resources-${{ github.run_id }}
+          path: |
+            artifacts/*.zip
+            artifacts/**/*
+          retention-days: 14
+          if-no-files-found: warn

@@ -1126,8 +1126,12 @@ def run_saver_only(args, diag, tmp) -> int:
                          "resources_saver.py")
     budget = int(max(20, min(70, args.saver_seconds)))
     log("запускаю Resources-Saver, бюджет %d c" % budget)
+    profile = os.path.join(os.path.expanduser("~"), ".spine-session") \
+        if args.session else ""
+    if profile:
+        log("развёрнутая сессия: профиль %s" % profile)
     try:
-        subprocess.run([sys.executable, saver, args.url, out_dir, str(budget)],
+        subprocess.run([sys.executable, saver, args.url, out_dir, str(budget), profile],
                        timeout=budget + 60, check=False)
     except subprocess.TimeoutExpired:
         log("Resources-Saver не уложился — берём что успел")
@@ -1181,7 +1185,7 @@ def run_saver_only(args, diag, tmp) -> int:
                 out2 = os.path.join(tmp, "saver2")
                 os.makedirs(out2, exist_ok=True)
                 try:
-                    subprocess.run([sys.executable, saver, launch, out2, str(budget)],
+                    subprocess.run([sys.executable, saver, launch, out2, str(budget), profile],
                                    timeout=budget + 60, check=False)
                 except subprocess.TimeoutExpired:
                     log("второй проход Resources-Saver не уложился")
@@ -1311,6 +1315,8 @@ def main() -> int:
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
     ap.add_argument("--only-saver", type=int, default=1,
                     help="1 — единственный путь: код расширения Resources-Saver")
+    ap.add_argument("--session", type=int, default=1,
+                    help="1 — развёрнутая сессия: постоянный профиль браузера")
     ap.add_argument("--resolve", type=int, default=1,
                     help="1 — искать игровой шелл через API площадки")
     ap.add_argument("--saver-seconds", type=int, default=40,

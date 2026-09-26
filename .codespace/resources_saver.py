@@ -123,7 +123,8 @@ window.getResources = window.chrome.devtools.inspectedWindow.getResources;
 """
 
 
-async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
+async def save(url: str, out_dir: Path, budget: int = 30000,
+               profile: str = "") -> int:
     from playwright.async_api import async_playwright
 
     content_js, content_html = vendor_files()
@@ -137,18 +138,30 @@ async def save(url: str, out_dir: Path, budget: int = 30000) -> int:
         kw = {"headless": True}
         if CHROME and os.path.exists(CHROME):
             kw["executable_path"] = CHROME
-        browser = await p.chromium.launch(**kw, args=["--no-sandbox", "--disable-gpu",
-                                                      "--disable-dev-shm-usage"])
-        ctx = await browser.new_context(proxy=proxy_for_browser() or None,
-                                        ignore_https_errors=True,
-                                        extra_http_headers={
-                                            "Referer": url,
-                                            "Accept": "*/*",
-                                            "Accept-Language": "en-US,en;q=0.9",
-                                        },
-                                        user_agent="Mozilla/5.0 (X11; Linux x86_64) "
-                                                   "Chrome/131.0.0.0 Safari/537.36")
-        page = await ctx.new_page()
+        cargs = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+        if profile:
+            # развёрнутая сессия: профиль переживает прогоны (куки, localStorage,
+            # снятые блокировки) — сайт начинает доверять нас как обычному клиенту
+            os.makedirs(profile, exist_ok=True)
+            ctx = await p.chromium.launch_persistent_context(
+                profile, headless=True, args=cargs,
+                **({"executable_path": CHROME} if CHROME and os.path.exists(CHROME) else {}),
+                proxy=proxy_for_browser() or None, ignore_https_errors=True,
+                viewport={"width": 1280, "height": 900},
+                user_agent="Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0.0.0 Safari/537.36")
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        else:
+            browser = await p.chromium.launch(**kw, args=cargs)
+            ctx = await browser.new_context(proxy=proxy_for_browser() or None,
+                                            ignore_https_errors=True,
+                                            extra_http_headers={
+                                                "Referer": url,
+                                                "Accept": "*/*",
+                                                "Accept-Language": "en-US,en;q=0.9",
+                                            },
+                                            user_agent="Mozilla/5.0 (X11; Linux x86_64) "
+                                                       "Chrome/131.0.0.0 Safari/537.36")
+            page = await ctx.new_page()
 
         def keep(u: str) -> bool:
             low = u.lower().split("?")[0]
@@ -425,5 +438,6 @@ if __name__ == "__main__":
     target = sys.argv[1]
     out = Path(sys.argv[2] if len(sys.argv) > 2 else "rs_out")
     secs = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+    prof = sys.argv[4] if len(sys.argv) > 4 else ""
     out.mkdir(parents=True, exist_ok=True)
-    sys.exit(0 if asyncio.run(save(target, out, secs)) else 2)
+    sys.exit(0 if asyncio.run(save(target, out, secs, prof)) else 2)
