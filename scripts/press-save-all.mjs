@@ -526,8 +526,35 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       }
       if (n > bestN) { bestN = n; best = cx; }
     }
-    if (!best || bestN < 200) continue;      // это ещё не загруженный фронтенд
-    for (let i = 0; i < 6; i++) {
+    if (!best) continue;
+    // весь UI DevTools лежит в shadow root, а панели открываются через
+    // UI.InspectorView.instance() — именно он живой в загруженном фронтенде
+    const isFrontend = await browser.eval(
+      '!!(globalThis.UI && UI.InspectorView && UI.InspectorView.instance)',
+      sid, best.id, 3000).catch(() => false);
+    if (!isFrontend) continue;
+    for (let i = 0; i < 8; i++) {
+      const tabs = await browser.eval(`(() => {
+        try {
+          const view = UI.InspectorView.instance();
+          const ids = (view.tabbedPane.tabs || []).map((t) => (t.id || '') + '|' + (t.title || ''));
+          return 'вкладки: ' + ids.join(' ; ').slice(0, 220);
+        } catch (e) { return 'вкладки: ошибка ' + e.message; }
+      })()`, sid, best.id, 3000).catch((e) => 'вкладки: ошибка ' + e.message);
+      log(`   ${tabs}`);
+      const shown = await browser.eval(`(async () => {
+        try {
+          const view = UI.InspectorView.instance();
+          const tabs = view.tabbedPane.tabs || [];
+          for (const t of tabs) {
+            if (!/resource/i.test(String(t.id || '') + ' ' + String(t.title || ''))) continue;
+            await view.showPanel(t.id);
+            return 'панель открыта: ' + t.id;
+          }
+          return 'вкладка Resources Saver не найдена';
+        } catch (e) { return 'showPanel: ' + e.message; }
+      })()`, sid, best.id, 4000).catch((e) => 'showPanel: ' + e.message);
+      log(`   ${shown}`);
       const r = await browser.eval(`(() => {
         const walk = (root) => {
           const b = root.querySelector && root.querySelector('#up-save');
@@ -537,7 +564,7 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
           return null;
         };
         const b = walk(document);
-        if (!b) return 'в тенях кнопки нет | элементов=' + document.querySelectorAll('*').length;
+        if (!b) return 'в тенях кнопки нет';
         const t2 = (b.textContent || '').trim();
         b.click();
         return 'НАЖАТА: "' + t2 + '"';
