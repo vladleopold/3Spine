@@ -492,6 +492,56 @@ async function pressViaPanelTab(browser, extId, shimSrc) {
 }
 
 
+// Окон DevTools в целях несколько, и почти все — пустые шеллы без
+// фронтенда. Перебираем их и работаем в том, где приложение реально живёт.
+async function pressInAnyDevtoolsWindow(browser, devtools) {
+  for (const t of devtools) {
+    let sid = null;
+    try {
+      ({ sessionId: sid } = await browser.send('Target.attachToTarget',
+        { targetId: t.targetId, flatten: true }, undefined, 4000));
+    } catch { continue; }
+    const ctxs = [];
+    browser.onEvent = (m) => {
+      if (m.sessionId !== sid) return;
+      if (m.method === 'Runtime.executionContextCreated') ctxs.push(m.params.context);
+    };
+    try { await browser.send('Runtime.enable', {}, sid, 4000); } catch { continue; }
+    await sleep(1200);
+    let best = null; let bestN = 0;
+    for (const cx of ctxs) {
+      const n = await browser.eval('document.querySelectorAll("*").length', sid, cx.id, 2500)
+        .catch(() => 0);
+      const ttl = await browser.eval('String(document.title || "")', sid, cx.id, 2500)
+        .catch(() => '');
+      log(`   окно ${t.targetId.slice(0, 6)} контекст ${cx.id}: элементов=${n} title=${String(ttl).slice(0, 24)}`);
+      if (n > bestN) { bestN = n; best = cx; }
+    }
+    if (!best || bestN < 200) continue;      // это ещё не загруженный фронтенд
+    for (let i = 0; i < 6; i++) {
+      const r = await browser.eval(`(() => {
+        const walk = (root) => {
+          const b = root.querySelector && root.querySelector('#up-save');
+          if (b) return b;
+          const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+          for (const el of all) { if (el.shadowRoot) { const r2 = walk(el.shadowRoot); if (r2) return r2; } }
+          return null;
+        };
+        const b = walk(document);
+        if (!b) return 'в тенях кнопки нет | элементов=' + document.querySelectorAll('*').length;
+        const t2 = (b.textContent || '').trim();
+        b.click();
+        return 'НАЖАТА: "' + t2 + '"';
+      })()`, sid, best.id, 4000).catch((e) => 'ошибка: ' + e.message);
+      log(`   ${r}`);
+      if (/НАЖАТА/.test(String(r))) return r;
+      await sleep(700);
+    }
+  }
+  return 'ни в одном окне DevTools кнопки #up-save нет';
+}
+
+
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -757,6 +807,13 @@ async function main() {
     }
   } else {
     log('   окно DevTools среди целей не найдено');
+  }
+
+  // все окна DevTools подряд: нужное определяется по загруженному фронтенду
+  if (!pressed) {
+    const r = await pressInAnyDevtoolsWindow(browser, devtools);
+    log(`   окна DevTools: ${r}`);
+    if (/НАЖАТА/.test(String(r))) { pressed = true; why = String(r); }
   }
 
   const extId = process.env.EXT_ID || unpackedExtensionId(EXT_DIR);
