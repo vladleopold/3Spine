@@ -295,13 +295,44 @@ def choose_strategy(atlas_path: str, pages: List[Dict[str, Any]]) -> str:
         return 'auto'
 
 
+def open_image(path: str):
+    """Открывает картинку; AVIF/HEIF — через avifdec, если он есть в системе."""
+    try:
+        return Image.open(path).convert('RGBA')
+    except Exception:
+        pass
+    if os.path.splitext(path)[1].lower() in (".avif", ".heif") or True:
+        import shutil
+        import subprocess
+        import tempfile
+        exe = shutil.which("avifdec")
+        if exe:
+            fd, png = tempfile.mkstemp(suffix=".png")
+            os.close(fd)
+            try:
+                subprocess.run([exe, path, png], stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=60, check=True)
+                return Image.open(png).convert('RGBA')
+            except Exception:
+                pass
+            finally:
+                if os.path.exists(png):
+                    os.unlink(png)
+    return Image.open(path).convert('RGBA')      # повторно — чтобы выбросить понятную ошибку
+
+
 def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str, out_dir: str, dest_name: Optional[str] = None, trim: Optional[Dict[str, Any]] = None, page_images: Optional[List[str]] = None, rotate_mode: str = "90", image_renames: Optional[Dict[str, List[str]]] = None, extra_image_dirs: Optional[List[str]] = None) -> None:
     strategy = choose_strategy(atlas_path, pages)
     atlas_name = os.path.splitext(os.path.basename(atlas_path))[0]
-    if dest_name == "" or os.path.basename(out_dir).lower() == "images":
+    # images/<имя атласа>/ — всегда с подпапкой, чтобы структура была единой
+    if dest_name == "":
         dest_base = out_dir
     else:
         dest_base = os.path.join(out_dir, dest_name or atlas_name)
+    try:
+        os.makedirs(dest_base, exist_ok=True)
+    except OSError:
+        pass
     written = 0
     trim = trim or {}
     fallback_trim_horiz = bool(trim.get('horizontal_trim', False))
@@ -408,7 +439,12 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
             if os.path.exists(_png_path):
                 image_path = _png_path
 
-        img = Image.open(image_path).convert('RGBA')
+        try:
+            img = open_image(image_path)
+        except Exception as _ie:
+            print("  Warning: cannot identify image file %r (%s) (skipping page)"
+                  % (os.path.basename(image_path), str(_ie)[:60]))
+            continue
         try:
             img.load()
         except Exception:
@@ -660,9 +696,16 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
         if atlas_dir not in dirs_for_atlas:
             dirs_for_atlas.insert(0, atlas_dir)
 
+        # раскладываем регионы в images/ рядом с атласом, а не в общий корень
+        local_out = out if os.environ.get('UNPACK_LAYOUT') == 'global' \
+            else os.path.join(atlas_dir, 'images')
+        try:
+            os.makedirs(local_out, exist_ok=True)
+        except OSError:
+            local_out = out
         try:
             n = extract_regions(
-                f, pages, atlas_dir, out,
+                f, pages, atlas_dir, local_out,
                 dest_name=dest_name,
                 page_images=[os.path.join(atlas_dir, p.get('image')) for p in pages if p.get('image')],
                 rotate_mode=rotate_mode,

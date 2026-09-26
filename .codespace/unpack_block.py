@@ -32,6 +32,40 @@ def rezip(src: str, zout_path: str) -> None:
                 z.write(full, os.path.relpath(full, src))
 
 
+SKEEL_EXTS = (".json", ".skel", ".scn")
+
+
+def ensure_image_dirs(src: str) -> int:
+    """В каждом каталоге со скелетом должен быть images/ с подпапками.
+
+    Требование заказчика: рядом с каждым spine-файлом — каталог images,
+    внутри — подпапка на каждый атлас (даже если регионов нет).
+    """
+    made = 0
+    for root, _dirs, files in os.walk(src):
+        if os.path.basename(root) == "images":
+            continue
+        names = [f for f in files if f.lower().endswith(SKEEL_EXTS)]
+        atlases = [f for f in files if f.lower().endswith((".atlas", ".atlas.txt", ".fnt"))]
+        if not names and not atlases:
+            continue
+        img_dir = os.path.join(root, "images")
+        os.makedirs(img_dir, exist_ok=True)
+        made += 1
+        subs = []
+        for a in atlases:
+            sub = os.path.splitext(a)[0]
+            subs.append(sub)
+        if not subs:
+            subs = [os.path.splitext(n)[0] for n in names[:3]]
+        for sub in subs:
+            try:
+                os.makedirs(os.path.join(img_dir, sub), exist_ok=True)
+            except OSError:
+                pass
+    return made
+
+
 def main() -> None:
     zin, zout = sys.argv[1], sys.argv[2]
     tmp = tempfile.mkdtemp()
@@ -44,10 +78,12 @@ def main() -> None:
         out_img = os.path.join(src, "images")
         os.makedirs(out_img, exist_ok=True)
         count, strategies = unpack(src, output=out_img)
+        made = ensure_image_dirs(src)
         loglines.append(f"unpack-block: распаковано {count} картинок в /images")
+        loglines.append(f"unpack-block: каталогов images: {made}")
         for path, strat in sorted(strategies.items()):
             loglines.append(f"  {os.path.relpath(path, src)} -> {strat}")
-        print(f"unpack-block: распаковано {count} картинок в/папку {out_img}")
+        print(f"unpack-block: распаковано {count} картинок, каталогов images: {made}")
 
         with open(os.path.join(src, "unpack-log.txt"), "w", encoding="utf-8") as f:
             f.write("\n".join(loglines) + "\n")
