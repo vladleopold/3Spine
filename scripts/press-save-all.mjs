@@ -524,7 +524,7 @@ async function main() {
       // без contextId: контекст по умолчанию фронтенда DevTools
       const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
       log(`   панели DevTools: ${list}`);
-      const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', extIdGuess()))
+      const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', unpackedExtensionId(EXT_DIR)))
         .catch((e) => 'ошибка: ' + e.message);
       log(`   ${shown}`);
       await sleep(2000);
