@@ -140,15 +140,27 @@ function pressSaveWithKeyboard() {
 // в профиле. Через него мы попадаем в контексты панели Resources Saver
 // и жмём #up-save — окно DevTools среди целей CDP не видно.
 function devtoolsEndpoint(profileDir) {
-  const f = path.join(profileDir, 'DevToolsActivePort');
-  if (!fs.existsSync(f)) return '';
-  const l = fs.readFileSync(f, 'utf8').split('\n').map((x) => x.trim()).filter(Boolean);
-  return l.length >= 2 ? `ws://127.0.0.1:${l[0]}${l[1]}` : '';
+  const cands = [
+    path.join(profileDir, 'DevToolsActivePort'),
+    path.join(profileDir, 'Default', 'DevToolsActivePort'),
+  ];
+  for (const f of cands) {
+    if (!fs.existsSync(f)) continue;
+    const l = fs.readFileSync(f, 'utf8').split('\n').map((x) => x.trim()).filter(Boolean);
+    if (l.length >= 2) return `ws://127.0.0.1:${l[0]}${l[1]}`;
+  }
+  return '';
 }
 
 async function pressInDevtoolsFrontend() {
+  log(`   профиль: ${PROFILE_DIR}`);
+  try {
+    log(`   файлы профиля: ${fs.readdirSync(PROFILE_DIR).slice(0, 25).join(' ')}`);
+  } catch (e) { log(`   профиль не читается: ${e.message}`); }
   const ep = devtoolsEndpoint(PROFILE_DIR);
-  if (!ep) return 'нет DevToolsActivePort';
+  if (!ep) {
+    return 'DevToolsActivePort не найден — фронтенд DevTools недоступен, нажать кнопку нечем';
+  }
   log(`   фронтенд DevTools: ${ep}`);
   const fe = await CDP.connect(ep).catch((e) => null);
   if (!fe) return 'не подключились к фронтенду';
@@ -257,16 +269,17 @@ async function main() {
 
   // 0) нажатие: сначала прямо во фронтенде DevTools, затем вводом X11
   let pressed = false;
+  let why = 'нажатие не выполнено';
   let clicked = await pressInDevtoolsFrontend();
-  log(`   фронтенд: ${clicked}`);
-  if (/НАЖАТА/.test(String(clicked))) pressed = true;
+  why = String(clicked);
+  log(`   фронтенд: ${why}`);
+  if (/НАЖАТА/.test(why)) pressed = true; else why = why;
   if (!pressed) {
     try {
       const how = await pressSaveWithMouse();
       log(`   ${how}`);
       const kb = pressSaveWithKeyboard();
-      log(`   ${kb}`);
-      pressed = true;   // клик отправлен, дальше проверяем результат
+      log(`   ${kb} (это попытка, результат проверим по архиву)`);
     } catch (e) {
       log(`   ввод X11 не сработал: ${e.message}`);
     }
@@ -365,8 +378,7 @@ async function main() {
   }
 
   if (!zip && !pressed) {
-    // нажатия не было — архив и не мог начать собираться
-    throw new Error(`кнопка Save All Resources НЕ НАЖАТА (нажатие не выполнено, архив не создавался) за ${since()}`);
+    throw new Error(`кнопка Save All Resources НЕ НАЖАТА: ${why} — архив не создавался (${since()})`);
   }
 
   if (!zip) {
