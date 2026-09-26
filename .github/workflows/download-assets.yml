@@ -72,6 +72,20 @@ jobs:
           echo "CHROME_PATH=/usr/bin/google-chrome" >> "$GITHUB_ENV"
 
 
+      - uses: actions/cache@v4
+        id: ext-cache
+        with:
+          path: .chrome-ext
+          key: ext-resources-saver-${{ github.run_id }}
+          restore-keys: |
+            ext-resources-saver-
+
+      - name: Установить расширение Resources-Saver
+        run: bash scripts/install-resources-saver.sh
+
+      - name: Активировать расширение в Chrome
+        run: node scripts/activate-extension.mjs
+
       - name: Скачать все ресурсы игры
         env:
           URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
