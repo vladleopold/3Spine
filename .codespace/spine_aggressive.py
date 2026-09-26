@@ -41,6 +41,9 @@ BUDGET = {"pragmatic": 34, "playson": 16, "3oaks": 26, "generic": 30}
 CLICK_TEXTS = ("Play", "Start", "Continue", "OK", "Accept", "Spin", "Real Play", "Demo", "Запустить", "Играть")
 
 SPINE_EXT = re.compile(r"\.(skel|json|atlas|png|webp|ktx2?|basis|bin|scn)(\?|$)", re.I)
+SHELL_EXT = re.compile(
+    r"(openGame|html5Game|gameService|loadGame|playGame)\.do|/gs2c/|games-html5|"
+    r"openGame|gameSymbol=", re.I)
 HINT = re.compile(r"spine|skeleton|symbol|reel|bonus|collect|atlas|frame|clover|attachment|skin|bone", re.I)
 
 
@@ -205,6 +208,7 @@ async def collect(url: str) -> set:
     prov = provider(url)
     budget = BUDGET.get(prov, 16)
     found: set = set()
+    shells: set = set()
     early = 30 if prov == "pragmatic" else 80
 
     async with async_playwright() as p:
@@ -227,6 +231,8 @@ async def collect(url: str) -> set:
         async def on_response(resp):
             if is_spine(resp.url):
                 found.add(resp.url)
+            if SHELL_EXT.search(resp.url):
+                shells.add(resp.url)
             u = resp.url
             if u.lower().split("?")[0].endswith((".json", ".js", ".txt")) and \
                     re.search(r"(resources|manifest|config|settings|build|version|index|game)", u, re.I):
@@ -234,6 +240,14 @@ async def collect(url: str) -> set:
                     body = await resp.text()
                     if len(body) < 40_000_000:
                         await harvest_json_manifest(body, u.rsplit("/", 1)[0] + "/", found)
+                        for m in re.finditer(
+                                r"https?://[^\"'\\\s<>]{10,240}(?:openGame|html5Game|"
+                                r"gameService|loadGame)\.do[^\"'\\\s<>]{0,200}", body, re.I):
+                            shells.add(m.group(0).rstrip('",\\'))
+                        for m in re.finditer(
+                                r"https?://[^\"'\\\s<>]{10,240}/gs2c/[^\"'\\\s<>]{0,200}",
+                                body, re.I):
+                            shells.add(m.group(0).rstrip('",\\'))
                 except Exception:                         # noqa: BLE001
                     pass
 
@@ -399,6 +413,31 @@ async def collect(url: str) -> set:
                 break
             await asyncio.sleep(0.5)
 
+        # шелл найден в API-конфиге: открываем его верхней страницей — игра
+        # стартует вне модалки и грузит ассеты
+        for shell in list(shells)[:3]:
+            if len(found) >= early:
+                break
+            try:
+                await page.goto(shell, wait_until="domcontentloaded", timeout=12000)
+            except Exception:                             # noqa: BLE001
+                continue
+            t_end = time.time() + 12
+            while time.time() < t_end:
+                for pg in context.pages:
+                    try:
+                        for u in await pg.evaluate("() => (window.__g || []).slice(0, 3000)"):
+                            if is_spine(u):
+                                found.add(u)
+                    except Exception:                     # noqa: BLE001
+                        pass
+                for pg in list(context.pages):
+                    await poke(pg)
+                await asyncio.sleep(0.6)
+        if not found:
+            print("  диагностика: хостов=%d, шеллов=%d%s"
+                  % (len({x.split('/')[2] for x in []}), len(shells),
+                     (", " + ", ".join(list(shells)[:2])) if shells else ""), flush=True)
         await browser.close()
     return found
 
