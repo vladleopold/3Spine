@@ -30,6 +30,26 @@ function unpackedExtensionId(dir) {
 // id нашего расширения: в chrome://extensions-internals есть запись с путём,
 // по которому мы грузили расширение. Цели Chrome тут ненадёжны — среди них
 // бывают встроенные компонентные расширения без popup.html.
+async function dumpExtensions(ctx) {
+  const p = await ctx.newPage();
+  try {
+    await p.goto('chrome://extensions-internals/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const txt = (await p.textContent('body').catch(() => '')) || '';
+    let data = [];
+    try { data = JSON.parse(txt); } catch { /* не JSON */ }
+    log(`ВСЕ расширения в профиле: ${Array.isArray(data) ? data.length : 'не JSON'}`);
+    for (const e of (Array.isArray(data) ? data : [])) {
+      const nm = e.name || (e.manifest && e.manifest.name) || '?';
+      log(`   id=${e.id} имя="${nm}" путь=${e.path || e.manifest_path || '—'}`);
+    }
+    if (!Array.isArray(data)) log(`   сырой ответ: ${txt.slice(0, 300)}`);
+  } catch (e) {
+    log(`chrome://extensions-internals недоступна: ${e.message.split('\n')[0]}`);
+  } finally {
+    await p.close().catch(() => {});
+  }
+}
+
 async function extensionIdFromProfile(ctx, extDir) {
   const p = await ctx.newPage();
   let txt = '';
@@ -150,6 +170,7 @@ async function main() {
   // 2) перебираем известные id: из профиля, вычисленный по пути, из целей.
   //    Берём тот, у которого панель реально открывается — так не зависим от
   //    того, откуда взялся id (цели Chrome могут принадлежать чужим расширениям).
+  await dumpExtensions(ctx);
   const fromProfile = await extensionIdFromProfile(ctx, EXT);
   const fromTargets = await realExtensionId(ctx, PORT, EXT);
   const computed = unpackedExtensionId(EXT);
