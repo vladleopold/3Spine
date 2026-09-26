@@ -9,14 +9,23 @@ import re
 HTML_MARKERS = (b"<!DOCTYPE html", b"<!doctype html", b"<html", b"<HTML", b"<?xml", b"<head>",
                 b"<body", b"Access Denied", b"error code:", b"<title>")
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+# часть игр отдаёт текстуры в AVIF/JPEG/WebP, хотя расширение остаётся .png
+IMAGE_MAGICS = (b"\x89PNG\r\n\x1a\n", b"\x00\x00\x00\x1cftypavif", b"\xff\xd8\xff",
+                b"RIFF", b"\x00\x00\x00\x18ftypheic", b"\x00\x00\x00\x1cftypheic")
 JSONP_WS = re.compile(rb"^[\s]*[\[{]")
 SPINE38_RE = re.compile(rb"^.[0-9a-f]{6,64}[\x00-\x1f]?\d\.\d\.\d{2}")
 VERSION_RE = re.compile(rb"\d\.\d+(?:\.\d+)?")
 
 
 def looks_spine_json(data: bytes) -> bool:
-    if any(k in data[:65536] for k in (b'"bones"', b'"slots"', b'"animations"',
-                                       b'"skins"', b'"skeleton"')):
+    """Тот же принцип, что у skeleton_router: 4.x — по ключам, 3.8 — по версии,
+    перед которой стоит управляющий байт длины хэша (1..32)."""
+    head = data[:65536]
+    if any(k in head for k in (b'"bones"', b'"slots"', b'"animations"',
+                               b'"skins"', b'"skeleton"')):
+        return True
+    m = VERSION_RE.search(data[:1024])
+    if m and m.start() >= 1 and 1 <= data[m.start() - 1] <= 32:
         return True
     return bool(SPINE38_RE.match(data[:256]))
 
@@ -27,6 +36,24 @@ def is_html_or_error(data: bytes) -> bool:
         return True
     low = data[:2048].lower()
     return b"<html" in low or b"<!doctype" in low
+
+
+def classify_response(path: str, data: bytes) -> str:
+    """ok | manifest | reject — трехсостоянийная проверка.
+
+    manifest — валидный JSON движка, в нём сам скелетом не является, но из него
+    вытаскиваются вшитые ассеты, поэтому его сохраняем отдельно.
+    """
+    kind, _why = check(path, data)
+    if kind:
+        return "ok"
+    name = path.lower()
+    ext = name[name.rfind("."):] if "." in name else ""
+    if ext in (".json", ".js", ".txt", ".manifest") and not is_html_or_error(data) and len(data) > 256:
+        head = data[:4096].lstrip()
+        if head[:1] in (b"{", b"["):
+            return "manifest"
+    return "reject"
 
 
 def check(path: str, data: bytes) -> tuple:
@@ -63,8 +90,10 @@ def check(path: str, data: bytes) -> tuple:
             return False, "это JSON, не атлас"
         return False, "не похож на атлас"
 
-    if ext == ".png":
-        return (True, "") if data.startswith(PNG_MAGIC) else (False, "не PNG")
+    if ext in (".png", ".jpg", ".jpeg", ".webp"):
+        if data.startswith(IMAGE_MAGICS):
+            return True, ""
+        return False, "не изображение"
 
     if ext in (".skel", ".bin", ".data"):
         m = VERSION_RE.search(data[:512])

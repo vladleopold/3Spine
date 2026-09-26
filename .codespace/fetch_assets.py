@@ -36,17 +36,20 @@ NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 DEFAULT_KINDS = ("json", "atlas", "png")
 REJECTED = []
+MANIFESTS = []
+REMOTE = {}
+NAME2URL = {}
 
 
-def _guard(url: str, data: bytes) -> tuple:
-    """Мягкая проверка: режем soft-404 и HTML, которые CDN отдаёт с кодом 200."""
+def _guard_state(url: str, data: bytes) -> str:
+    """ok | manifest | reject — режем soft-404/HTML, манифесты кладём отдельно."""
     try:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from fetch_guard import check
+        from fetch_guard import classify_response
     except Exception:                                     # noqa: BLE001
-        return True, ""
+        return "ok"
     path = url.split("://", 1)[-1].split("/", 1)[-1]
-    return check(path, data)
+    return classify_response(path, data)
 
 
 def log(msg: str) -> None:
@@ -90,6 +93,26 @@ def parse_manifest(js: str):
             continue
         name = logical.split(":")[-1]           # game:res/spine/x/x.json → res/spine/x/x.json
         out.append((files, name))
+    return out
+
+
+def manifest_index(urls) -> dict:
+    """Логическое имя -> реальный URL, из бандла лаунчера (Cocos/Unity Web и т.п.)."""
+    out = {}
+    for u in urls:
+        low = u.lower()
+        if not low.endswith((".js", ".json")) or not re.search(r"(launcher|main|settings|bundle|config|index)", low):
+            continue
+        try:
+            body = fetch(u, timeout=40).decode("utf-8", "replace")
+        except Exception:                                 # noqa: BLE001
+            continue
+        if '"files"' not in body:
+            continue
+        base = u.rsplit("/", 1)[0] + "/"
+        for files, name in parse_manifest(body):
+            out.setdefault(name, base + files)
+            out.setdefault(name.rsplit("/", 1)[-1], base + files)
     return out
 
 
@@ -359,21 +382,47 @@ def bases_of(urls) -> list:
     return out
 
 
+SPINE_WORD = re.compile(r"spine|skeleton|skel|atlas|anim|bone|slot|skin|character|hero", re.I)
+REF_CAP = 400
+CAND_CAP = 700
+
+
 def resolve_refs(refs, bases) -> list:
-    """Пробует каждый найденный путь во всех известных каталогах и по разным расширениям."""
-    out = []
+    """Строим осмысленный список проб: только Spine-подобные имена, с приоритетом."""
+    scored = []
     for r in refs:
-        cands = [r]
+        low = r.lower()
+        score = 0
+        if SPINE_WORD.search(low):
+            score += 3
+        if low.endswith((".atlas", ".skel", ".scn")):
+            score += 2
+        if low.endswith(".json"):
+            score += 1
+        if score:
+            scored.append((score, r))
+    scored.sort(key=lambda x: -x[0])
+    scored = scored[:REF_CAP]
+    spine_bases = [b for b in bases if SPINE_WORD.search(b)]
+    ordered_bases = spine_bases + [b for b in bases if b not in spine_bases]
+    out, seen = [], set()
+    for _score, r in scored:
         stem = re.sub(r"\.(atlas|skel|scn|json|png|webp|ktx)(\.txt)?$", "", r, flags=re.I)
-        for b in bases:
-            cands.append(b + "/" + r)
-            if "/" in r:                      # путь уже содержит каталог — пробуем только имя
-                cands.append(b + "/" + r.rsplit("/", 1)[-1])
-            for ext in (".json", ".skel", ".atlas"):
+        tail = r.rsplit("/", 1)[-1]
+        cands = [r]
+        for b in ordered_bases:
+            if "/" in r:
+                cands.append(b + "/" + tail)
+            else:
+                cands.append(b + "/" + r)
+            for ext in (".json", ".atlas", ".skel"):
                 cands.append(b + "/" + stem + ext)
         for c in cands:
-            if c.lower().startswith(("http://", "https://")) and c not in out:
+            if c.lower().startswith(("http://", "https://")) and c not in seen:
+                seen.add(c)
                 out.append(c)
+                if len(out) >= CAND_CAP:
+                    return out
     return out
 
 
@@ -422,12 +471,20 @@ def download_set(urls, root: str, workers: int, timeout: int, log_prefix: str) -
             data = fetch(u, timeout=timeout)
         except Exception:                                # noqa: BLE001
             return 0
-        ok, why = _guard(u, data)
-        if not ok:
-            REJECTED.append((u, why))
+        state = _guard_state(u, data)
+        if state == "reject":
+            REJECTED.append((u, "мусор"))
+            return 0
+        if state == "manifest":
+            mdir = os.path.join(root, "_manifests", os.path.dirname(rel))
+            os.makedirs(mdir, exist_ok=True)
+            with open(os.path.join(mdir, os.path.basename(rel)), "wb") as f:
+                f.write(data)
+            MANIFESTS.append(u)
             return 0
         with open(dst, "wb") as f:
             f.write(data)
+        REMOTE[dst] = u
         done[0] += 1
         if done[0] % 25 == 0:
             log("%s скачано %d" % (log_prefix, done[0]))
@@ -491,6 +548,17 @@ def main() -> int:
             len(picked["json"]), len(picked["atlas"]), len(picked["skel"])))
 
     root = os.path.join(tmp, "assets")
+    # индекс манифеста лаунчера: логическое имя -> реальный URL
+    NAME2URL.update(manifest_index(urls))
+    if NAME2URL:
+        log("манифест лаунчера: %d записей" % len(NAME2URL))
+        extra = [u for name, u in NAME2URL.items()
+                 if re.search(r"\.(json|atlas|skel)$", name, re.I)
+                 and re.search(r"(spine|skel|atlas|anim|bone|skin)", name, re.I)]
+        if extra:
+            log("из манифеста добавлено кандидатов: %d" % len(extra))
+            picked["json"] = sorted(set(picked["json"]) | set(extra))
+
     # манифесты движков: могут не грузиться при старте, но в них бывают ассеты
     manifests = [u for u in urls
                  if u.lower().split("?")[0].endswith((".json", ".manifest", ".txt"))
@@ -554,7 +622,7 @@ def main() -> int:
                       if re.search(r"\.(atlas|skel|scn)\b|spine|skeleton", r, re.I)}
         probes = [u for u in resolve_refs(spine_refs, bases) if not looks_junk(u)]
         log("скан: пробую %d кандидатов" % len(probes))
-        alive = [u for u in probes[:args.probe_limit] if url_ok(u)]
+        alive = url_ok_many(probes[:args.probe_limit], args.probe_workers)
         log("скан: отвечает %d" % len(alive))
         if alive:
             log("скан: скачиваю найденное (%d)" % len(alive))
@@ -571,7 +639,8 @@ def main() -> int:
             extract_inline = None
         if extract_inline:
             added = 0
-            for dirpath, _dirs, fns in os.walk(root):
+            for base in (root, os.path.join(root, "_manifests")):
+              for dirpath, _dirs, fns in os.walk(base):
                 for fn in fns:
                     if not fn.lower().endswith((".json", ".js", ".txt", ".manifest")):
                         continue
@@ -606,7 +675,7 @@ def main() -> int:
             if c != u and c not in mates:
                 mates.append(c)
     mates = [m for m in mates if not looks_junk(m)]
-    got_mates = [m for m in mates if url_ok(m)]
+    got_mates = url_ok_many(mates, args.probe_workers)
     if got_mates:
         log("парные файлы Spine: +%d" % len(got_mates))
         download_set(got_mates, root, args.workers, args.timeout, "парные")
@@ -629,12 +698,25 @@ def main() -> int:
         except OSError:
             continue
         base = os.path.dirname(ap_)
+        remote = REMOTE.get(ap_, "")
+        rdir = remote.rsplit("/", 1)[0] + "/" if remote else ""
         for nm in names:
             if nm.lower() in have:
                 continue
             have.add(nm.lower())
+            by_name = NAME2URL.get(nm) or NAME2URL.get(nm.rsplit("/", 1)[-1])
+            if by_name:
+                need_urls.append(by_name)
+                continue
             cand = [u for u in urls if u.lower().endswith(nm.lower().split("?")[0])]
-            need_urls.append(cand[0] if cand else urljoin("file://" + base, nm))
+            if cand:
+                need_urls.append(cand[0])
+                continue
+            if rdir:                       # страница лежит рядом с атласом на сервере
+                need_urls.append(rdir + nm)
+            else:
+                for b_ in bases_of([base + "/x"])[:6]:
+                    need_urls.append(b_ + "/" + nm)
     if kinds & {"png"} and need_urls:
         log("проход 2: страницы атласов %d (из %d скачанных картинок)" % (len(need_urls), len(pages)))
         download_set(need_urls, root, args.workers, args.timeout, "проход 2")
@@ -658,6 +740,8 @@ def main() -> int:
         for rel, _sz in files:
             z.write(os.path.join(root, rel), rel)
         z.writestr("fetch-report.json", json.dumps(report, ensure_ascii=False, indent=1))
+    if MANIFESTS:
+        log("манифестов отдельно: %d" % len(MANIFESTS))
     if REJECTED:
         kinds = {}
         for _u, why in REJECTED:
