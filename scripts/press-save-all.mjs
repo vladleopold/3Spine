@@ -567,7 +567,8 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
             const t = (el.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 26);
             seen.push(cls.split(' ').slice(0, 2).join('.') + '=' + t);
           }
-          return [...new Set(seen)].slice(0, 46).join(' ; ');
+          const main = [...new Set(seen)].filter((x) => /tabbed-pane-header-tab=/.test(x));
+          return 'главные вкладки: ' + main.map((x) => x.split('=')[1]).filter(Boolean).join(' | ').slice(0, 400);
         })()`, sid, best.id, 4000).catch((e) => 'дамп: ошибка ' + e.message);
         log(`   классы вкладок: ${dump}`);
       }
