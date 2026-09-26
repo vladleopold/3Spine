@@ -420,33 +420,31 @@ async function main() {
   }
   if (!panel) throw new Error('ни один id не открыл панель Resources Saver');
 
-  // 3) настоящий id вкладки игры: content.js берёт список сайтов через
-  //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
-  //    список был пуст и кнопка ничего не качала
-  const tabs = await panel.evaluate(() => new Promise((res) => {
-    chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
-  })).catch(() => []);
-  const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
-  const gameTab = tabs.find((t) => t.url.startsWith(origin)) || tabs[0];
-  const tabId = gameTab ? gameTab.id : 0;
-  log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
-
-  // 4) подменяем панели chrome.devtools собранными ресурсами и жмём кнопку
-  if (panel && panel.raw) {
-    log('   кнопка уже нажата через прямой CDP');
-  } else if (panel === panel.page()) {
+  // 3-4) для панели, открытой напрямую по CDP, всё уже сделано при клике;
+  //      этот блок — только для панели Playwright (content.html вкладкой)
+  if (!panel.raw) {
+    const tabs = await panel.evaluate(() => new Promise((res) => {
+      chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
+    })).catch(() => []);
+    const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
+    const gameTab = (Array.isArray(tabs) ? tabs : []).find((t) => t.url.startsWith(origin))
+      || (Array.isArray(tabs) ? tabs[0] : null);
+    const tabId = gameTab ? gameTab.id : 0;
+    log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
     await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
-    await panel.reload({ waitUntil: 'domcontentloaded' });
+    if (panel === panel.page()) {
+      await panel.reload({ waitUntil: 'domcontentloaded' });
+    } else {
+      await panel.evaluate(() => location.reload()).catch(() => {});
+    }
+    const btn = panel.locator('#up-save');
+    await btn.waitFor({ state: 'visible', timeout: 20000 });
+    const label = (await btn.textContent().catch(() => '')) || '';
+    log(`нажимаю кнопку: "${label.trim()}"`);
+    await panel.evaluate(() => document.getElementById('up-save').click());
   } else {
-    // панель уже встроена: обновляем подмену и перезагружаем фрейм
-    await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
-    await panel.evaluate(() => location.reload()).catch(() => {});
+    log(`панель обработана напрямую: ${panel.clicked}`);
   }
-  const btn = panel.locator('#up-save');
-  await btn.waitFor({ state: 'visible', timeout: 20000 });
-  const label = (await btn.textContent().catch(() => '')) || '';
-  log(`нажимаю кнопку: "${label.trim()}"`);
-  await panel.evaluate(() => document.getElementById('up-save').click());
 
   // 5) ждём ZIP
   const deadline = Date.now() + ZIP_TIMEOUT;
