@@ -75,6 +75,10 @@ jobs:
             url: 'https://playson.com/game/clover-strike-hold-and-win'
           - name: 3oaks-superpower-diamonds
             url: 'https://3oaks.com/game/3_superpower_diamonds'
+          - name: xplatform-beez-turn-wild
+            url: 'https://xplatformwl-lrs.box-int-54f2g.com/launch?key=TEST1100000&partner=playsonsite-prod&wl=pl_gate&gameName=beez_turn_wild_mob&lang=en'
+          - name: slotcity-threeoaks-volcano
+            url: 'https://slotcity.ua/?modals=game&game-term=new-threeoaks-coin-up-volcano&demo=true'
           - name: slotor777-demo
             url: 'https://slotor777.ua/ru/game/view/56dab5f9954f459f919d800306e48b35?mode=demo'
           - name: beton-dog-house
@@ -97,7 +101,7 @@ jobs:
       - name: Обойти состояния SPA (websnap-подобный обход)
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          OUTPUT_DIR: ./artifacts
+          OUTPUT_DIR: ./artifacts/spa
           CHROME_PATH: /usr/bin/google-chrome
           DEPTH: ${{ inputs.spa_depth || '3' }}
           MAX_STATES: ${{ inputs.spa_states || '40' }}
@@ -155,8 +159,8 @@ jobs:
 
       - name: Скачать все ресурсы игры
         env:
+          OUTPUT_DIR: ./artifacts/saver
           URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          OUTPUT_DIR: ./artifacts
           WAIT_MS: ${{ inputs.wait_ms || '35000' }}
           HEADLESS: 'true'
         run: node scripts/download-resources.mjs
