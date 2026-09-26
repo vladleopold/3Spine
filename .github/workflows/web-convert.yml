@@ -12,7 +12,9 @@ jobs:
   convert:
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 (Python-путь) + 8 на Node-захват: setup-node+npm ci+Chromium ≤7м,
+    # сам сейвер урезан 300с, раскладка 120с
+    timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
 
@@ -20,8 +22,25 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin main --depth 1
-          git checkout origin/main -- .codespace backend
+          # package.json/package-lock.json/scripts нужны URL-режиму (Node-захват),
+          # иначе setup-node(cache:npm) и npm ci падают — на inbox их нет
+          git checkout origin/main -- .codespace backend package.json package-lock.json scripts
           git status --short
+
+      - name: Detect mode (ссылка или готовый input.zip)
+        id: mode
+        run: |
+          set -euo pipefail
+          if [ -f fetch-url.txt ]; then
+            URL=$(tr -d '\r\n' < fetch-url.txt)
+            echo "mode=url" >> "$GITHUB_OUTPUT"
+            echo "url=$URL" >> "$GITHUB_OUTPUT"
+            echo "SAVER_URL=$URL" >> "$GITHUB_ENV"
+            echo "ссылка на игру: $URL"
+          else
+            echo "mode=zip" >> "$GITHUB_OUTPUT"
+            echo "ссылки нет — берём input.zip, Node-захват пропускаем"
+          fi
 
       - name: Fetch game assets by URL (если пришла ссылка)
         env:
@@ -67,6 +86,139 @@ jobs:
           fi
           rm -f fetch-url.txt
           unzip -l input.zip | head -30
+
+      # ── Node-захват (URL-режим) ────────────────────────────────────────────
+      # Python-путь выше не трогаем: его бюджеты (55с/75с) — предел здоровья.
+      # Это запасной headless-сейвер, он только дополняет выборку и отчёт.
+      - name: Setup Node (URL-режим)
+        if: steps.mode.outputs.mode == 'url'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node deps + Playwright Chromium (URL-режим)
+        if: steps.mode.outputs.mode == 'url'
+        continue-on-error: true
+        env:
+          SPINE_PROXY_SERVER: ${{ secrets.SPINE_PROXY_SERVER }}
+        run: |
+          set -uo pipefail
+          # install не должен утащить весь job: 7 минут потолок на оба шага
+          timeout -k 10 420 bash -c 'npm ci --no-audit --no-fund && npx playwright install chromium --with-deps' \
+            > npm-install-log.txt 2>&1
+          RC=$?
+          tail -n 40 npm-install-log.txt
+          if [ "$RC" = "0" ]; then
+            echo "node_modules и Chromium готовы" >> "$GITHUB_ENV"
+          else
+            echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
+          fi
+          exit 0
+
+      - name: Headless saver → ZIP + saver-report.json (URL-режим)
+        if: steps.mode.outputs.mode == 'url'
+        continue-on-error: true
+        env:
+          URLS: ${{ steps.mode.outputs.url }}
+          GAME_URL: ${{ steps.mode.outputs.url }}
+          WAIT_MS: "35000"
+          OUTPUT_DIR: saver-out
+          HEADLESS: "true"
+          PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+        run: |
+          set -uo pipefail
+          if [ "${NODE_READY:-0}" != "1" ]; then
+            echo "::warning::Node/Chromium не установлены — пропускаю захват"
+            exit 0
+          fi
+          # потолок 5 минут на весь прогон (WAIT_MS=35с на прогон + доборка из манифестов)
+          set +e
+          timeout -k 10 300 node scripts/download-resources.mjs 2>&1 | tee saver-log.txt
+          RC=${PIPESTATUS[0]}
+          set -e
+          echo "сейвер завершился с кодом $RC"
+          if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then
+            echo "::warning::сейвер не уложился в 300 секунд — забираем то, что есть"
+          fi
+          ls -la saver-out || true
+          find saver-out -name 'saver-report.json' -exec cat {} \; || true
+          exit 0
+
+      - name: spine-pack.mjs → res/spine/ (если скрипт есть)
+        if: steps.mode.outputs.mode == 'url'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ ! -f scripts/spine-pack.mjs ]; then
+            echo "scripts/spine-pack.mjs нет в репозитории — раскладка пропущена"
+            exit 0
+          fi
+          ZIP=$(ls -t saver-out/*.zip 2>/dev/null | head -1 || true)
+          if [ -z "${ZIP:-}" ]; then
+            echo "ZIP сейвера не найден — раскладка не нужна"
+            exit 0
+          fi
+          # раскладывает содержимое сейвера в res/spine/ (atlas/skel/bin + текстуры)
+          timeout -k 10 120 node scripts/spine-pack.mjs "$ZIP" res || \
+            echo "::warning::spine-pack.mjs упал — раскладка частичная"
+          find res -type f 2>/dev/null | head -20 || true
+          exit 0
+
+      - name: Добираем Spine в input.zip (если Python-путь ничего не нашёл)
+        if: steps.mode.outputs.mode == 'url'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # Строго дополнение: если в input.zip уже есть atlas/skel — не трогаем его.
+          # Ветка спасения нужна ровно для случая "ссылка была, Python не добрал Spine".
+          python3 - <<'PY'
+          import os, sys, zipfile, glob
+          src = "input.zip"
+          if not os.path.exists(src):
+              sys.exit(0)
+          with zipfile.ZipFile(src) as z:
+              names = z.namelist()
+          have = any(n.lower().endswith((".atlas", ".skel")) for n in names)
+          if have:
+              print("в input.zip уже есть Spine — оставляем как есть")
+              sys.exit(0)
+          cands = []
+          if os.path.isdir("res"):
+              cands = ["res"]
+          else:
+              cands = [d for d in glob.glob("saver-out/*/") if os.path.isfile(os.path.join(d, "saver-report.json"))]
+          cands = [d for d in cands if any(f.endswith((".atlas", ".skel")) for _, _, fs in os.walk(d) for f in fs)]
+          if not cands:
+              print("ни Python, ни сейвер не нашли Spine — шаг пустой")
+              sys.exit(0)
+          added = 0
+          with zipfile.ZipFile(src, "a", zipfile.ZIP_DEFLATED) as z:
+              existing = set(names)
+              for d in cands:
+                  for root, _, files in os.walk(d):
+                      for f in files:
+                          full = os.path.join(root, f)
+                          arc = os.path.relpath(full, d).replace(os.sep, "/")
+                          if arc in existing:
+                              continue
+                          z.write(full, arc)
+                          added += 1
+          print("дописано из сейвера файлов: %d" % added)
+          PY
+          unzip -l input.zip | head -30
+          exit 0
+
+      - name: Отчёт сейвера в summary (URL-режим)
+        if: ${{ always() && steps.mode.outputs.mode == 'url' }}
+        run: |
+          set -uo pipefail
+          N=$(find saver-out -type f 2>/dev/null | wc -l || true)
+          A=$(find saver-out -type f -name '*.atlas' 2>/dev/null | wc -l || true)
+          K=$(find saver-out -type f -name '*.skel'  2>/dev/null | wc -l || true)
+          B=$(find saver-out -type f -name '*.bin'   2>/dev/null | wc -l || true)
+          printf '### Headless saver (URL-режим)\nфайлов: %s | atlas: %s | skel: %s | bin: %s\n\n' \
+            "$N" "$A" "$K" "$B" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hash analyzer → rename (hash→asset_name) if hashed
         run: |
@@ -128,6 +280,18 @@ jobs:
             job-id.txt
           if-no-files-found: error
 
+      - name: Upload saver artifacts (zip + saver-report.json)
+        if: ${{ always() && steps.mode.outputs.mode == 'url' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: saver-assets-${{ github.run_id }}
+          path: |
+            saver-out/**/*.zip
+            saver-out/**/saver-report.json
+            saver-log.txt
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Clean inbox branch (no loop on delete event)
         if: always()
         env:
@@ -139,7 +303,7 @@ jobs:
     needs: convert
     continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -228,8 +392,56 @@ jobs:
           chmod +x /tmp/spine-run.sh
           xdpyinfo -display :99 | head -2 || true
           echo "CPU: $(nproc) → все скелеты одним запуском, параллельно по числу ядер"
-          python3 .codespace/compile_block.py work/output.zip work/output.zip
-          unzip -l work/output.zip
+
+          # Компиляция Spine и распаковка спрайтов идут ОДНОВРЕМЕННО,
+          # каждая в своей копии архива; в конце быстро мержим в финальный zip.
+          cp work/output.zip work/compile.zip
+          rm -rf work/sprites-src work/sprites-out
+          mkdir -p work/sprites-src work/sprites-out
+          unzip -q work/output.zip -d work/sprites-src
+
+          python3 -m pip install --quiet Pillow
+
+          ( python3 .codespace/unpack_atlases.py work/sprites-src --output work/sprites-out \
+              > /tmp/sprites.log 2>&1; echo $? > /tmp/sprites.rc ) &
+          SPRITES_PID=$!
+          echo "распаковка спрайтов запущена в фоне (pid $SPRITES_PID)"
+
+          set +e
+          python3 .codespace/compile_block.py work/compile.zip work/compile.zip
+          COMPILE_RC=$?
+          set -e
+          echo "компиляция Spine завершилась с кодом $COMPILE_RC"
+
+          wait "$SPRITES_PID" || true
+          SPRITES_RC="$(cat /tmp/sprites.rc 2>/dev/null || echo 1)"
+          echo "распаковка спрайтов завершилась с кодом $SPRITES_RC, спрайтов: $(find work/sprites-out -type f 2>/dev/null | wc -l)"
+          [ "$SPRITES_RC" = "0" ] || tail -20 /tmp/sprites.log || true
+
+          COMPILE_RC SPRITES_RC WORK="$PWD/work" python3 - <<'PY'
+          import os, zipfile
+          work = os.environ["WORK"]
+          src = os.path.join(work, "compile.zip")
+          dst = os.path.join(work, "output.zip")
+          sprites = os.path.join(work, "sprites-out")
+          if os.environ.get("SPRITES_RC") != "0" or not os.path.isdir(sprites):
+              import shutil; shutil.copyfile(src, dst)
+              print("спрайты не добавлены: rc=%s" % os.environ.get("SPRITES_RC"))
+          else:
+              with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+                  for item in zin.infolist():
+                      zout.writestr(item, zin.read(item.filename))
+                  added = 0
+                  for root, _, files in os.walk(sprites):
+                      for name in files:
+                          full = os.path.join(root, name)
+                          rel = os.path.relpath(full, sprites).split(os.sep)
+                          arc = os.path.join("images", *rel) if not rel[0].startswith("images") else os.path.join(*rel)
+                          zout.write(full, arc)
+                          added += 1
+                  print("спрайтов добавлено в архив: %d" % added)
+          PY
+          unzip -l work/output.zip | tail -5
 
       - name: Logout Spine license
         if: always()
