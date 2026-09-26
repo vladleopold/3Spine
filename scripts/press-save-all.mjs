@@ -3,6 +3,7 @@
 // ожидание архива. Лимит шага — 30 секунд (TOTAL_LIMIT_MS).
 import fs from 'fs';
 import path from 'path';
+import { execSync } from 'child_process';
 
 const URL_ = process.env.URL || '';
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
@@ -64,6 +65,73 @@ class CDP {
     if (r && r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
     return r && r.result ? r.result.value : undefined;
   }
+}
+
+
+// Настоящее нажатие кнопки: окно DevTools не отдаётся в CDP, поэтому жмём
+// вводом X11 (как человек) — окно DevTools, кнопка вверху панели.
+function xdo(cmd) {
+  try {
+    return execSync(`xdotool ${cmd}`, {
+      env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99' },
+    }).toString().trim();
+  } catch { return ''; }
+}
+
+function geometry(win) {
+  const out = xdo(`getwindowgeometry --shell ${win}`);
+  const g = {};
+  for (const line of out.split('\n')) {
+    const [k, v] = line.split('=');
+    if (k && v !== undefined) g[k.trim().toLowerCase()] = v.trim();
+  }
+  return g;
+}
+
+async function pressSaveWithMouse() {
+  // 1) отдельное окно DevTools
+  const devWin = xdo('search --onlyvisible --name "DevTools" | tail -1');
+  if (devWin) {
+    xdo(`windowactivate --sync ${devWin}`);
+    const g = geometry(devWin);
+    log(`   окно DevTools: ${devWin} ${g.width}x${g.height}`);
+    // кнопка «Save All Resources» — в шапке панели, слева сверху
+    xdo(`mousemove --window ${devWin} 120 30 click 1`);
+    return 'клик мышью по кнопке в окне DevTools';
+  }
+  // 2) DevTools пристыкован — кликаем в области панели окна Chrome
+  const win = xdo('search --onlyvisible --class "google-chrome" | tail -1')
+    || xdo('search --onlyvisible --name "Chrome" | tail -1');
+  if (!win) return 'окно Chrome не найдено';
+  const g = geometry(win);
+  const w = parseInt(g.width || '1500', 10);
+  const h = parseInt(g.height || '950', 10);
+  xdo(`windowactivate --sync ${win}`);
+  // док внизу: панель начинается на ~35% снизу; док справа: панель в правой части
+  const spots = [
+    [Math.round(w * 0.08), Math.round(h * 0.62)],
+    [Math.round(w * 0.08), Math.round(h * 0.42)],
+    [Math.round(w * 0.86), Math.round(h * 0.42)],
+    [Math.round(w * 0.08), Math.round(h * 0.18)],
+  ];
+  for (const [dx, dy] of spots) {
+    xdo(`mousemove --window ${win} ${dx} ${dy} click 1`);
+    await sleep(700);
+  }
+  return `клики по панели в пристыкованном DevTools (окно ${w}x${h})`;
+}
+
+function pressSaveWithKeyboard() {
+  const win = xdo('search --onlyvisible --class "google-chrome" | tail -1')
+    || xdo('search --onlyvisible --name "Chrome" | tail -1');
+  if (!win) return 'окно Chrome не найдено';
+  xdo(`windowactivate --sync ${win}`);
+  // первый фокусируемый элемент панели — как раз кнопка сохранения
+  for (let i = 0; i < 3; i++) {
+    xdo(`key --window ${win} Tab`);
+    xdo(`key --window ${win} Return`);
+  }
+  return 'Tab+Enter в панели';
 }
 
 async function main() {
@@ -143,8 +211,18 @@ async function main() {
   log(`окон DevTools среди целей: ${devtools.length}`);
   if (!devtools.length) throw new Error('не найдено ни одного окна DevTools');
 
+  // 0) сначала настоящее нажатие вводом X11 — окно DevTools недоступно по CDP
   let clicked = null;
-  for (const dt of devtools) {
+  try {
+    const how = pressSaveWithMouse();
+    log(`   ${how}`);
+    const kb = pressSaveWithKeyboard();
+    log(`   ${kb}`);
+  } catch (e) {
+    log(`   ввод X11 не сработал: ${e.message}`);
+  }
+
+  for (const dt of (clicked ? [] : devtools)) {
     let sid;
     try {
       ({ sessionId: sid } = await browser.send('Target.attachToTarget',
