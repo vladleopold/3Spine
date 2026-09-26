@@ -576,25 +576,39 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       // панель расширения может быть не в строке вкладок, а в меню More tools
       const CLICK_TAB = `(() => {
         const roots = (${SHADOW_ROOTS})(document);
+        let best = null;
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
-          if (el.children.length) continue;
           const t = (el.innerText || el.textContent || '').trim();
-          if (t !== 'Resources Saver') continue;
-          el.click();
-          return 'вкладка Resources Saver нажата';
+          if (!/resources saver/i.test(t)) continue;
+          if (t.length > 40) continue;
+          if (!best || el.querySelectorAll('*').length < best.querySelectorAll('*').length) best = el;
         }
-        return 'вкладка Resources Saver в тенях не найдена';
+        if (!best) return 'вкладка Resources Saver в тенях не найдена';
+        (best.querySelector('*') || best).click();
+        return 'вкладка Resources Saver нажата: <' + best.tagName + ' class='
+          + String(best.className).slice(0, 40) + '> текст="' + (best.innerText || '').trim().slice(0, 24) + '"';
       })()`;
       const OPEN_MORE = `(() => {
         const roots = (${SHADOW_ROOTS})(document);
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
           const cls = String(el.className || '');
           if (!/drop-down/i.test(cls)) continue;
-          const b = el.querySelector('button') || el;
-          b.click();
+          (el.querySelector('button') || el).click();
           return 'меню More tools открыто: ' + cls.split(' ')[0];
         }
         return 'кнопка More tools не найдена';
+      })()`;
+      const DUMP_MENU = `(() => {
+        const roots = (${SHADOW_ROOTS})(document);
+        const out = [];
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          const cls = String(el.className || '');
+          if (!/menu|drop-down|context/i.test(cls)) continue;
+          const t = (el.innerText || '').trim().replace(/\\s+/g, ' ');
+          if (!t || t.length > 300) continue;
+          out.push(cls.split(' ').slice(0, 2).join('.') + '=[' + t.slice(0, 120) + ']');
+        }
+        return [...new Set(out)].slice(0, 12).join(' || ');
       })()`;
 
       let tabState = await browser.eval(CLICK_TAB, sid, best.id, 3000)
@@ -605,6 +619,9 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
           .catch((e) => 'меню: ошибка ' + e.message);
         log(`   ${dd}`);
         await sleep(800);
+        const menu = await browser.eval(DUMP_MENU, sid, best.id, 3000)
+          .catch((e) => 'дамп меню: ошибка ' + e.message);
+        log(`   ${menu}`);
         tabState = await browser.eval(CLICK_TAB, sid, best.id, 3000)
           .catch((e) => 'вкладка: ошибка ' + e.message);
         log(`   ${tabState}`);
