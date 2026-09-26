@@ -30,6 +30,33 @@ function unpackedExtensionId(dir) {
 // id нашего расширения: в chrome://extensions-internals есть запись с путём,
 // по которому мы грузили расширение. Цели Chrome тут ненадёжны — среди них
 // бывают встроенные компонентные расширения без popup.html.
+// Chrome 137+ не грузит расширение через --load-extension (ERR_BLOCKED_BY_CLIENT).
+// Поддерживаемый путь — CDP-домен Extensions.loadUnpacked; он же возвращает id.
+async function loadUnpacked(port, extPath) {
+  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
+  const ws = new WebSocket(v.webSocketDebuggerUrl);
+  await new Promise((res, rej) => {
+    ws.addEventListener('open', res, { once: true });
+    ws.addEventListener('error', () => rej(new Error('CDP браузера недоступен')), { once: true });
+  });
+  const answer = new Promise((res) => {
+    ws.addEventListener('message', (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.id === 1) res(m);
+    });
+  });
+  ws.send(JSON.stringify({
+    id: 1, method: 'Extensions.loadUnpacked', params: { path: extPath },
+  }));
+  const m = await Promise.race([
+    answer,
+    new Promise((res) => setTimeout(() => res({ error: { message: 'таймаут' } }), 20000)),
+  ]);
+  ws.close();
+  if (m.error) throw new Error(`Extensions.loadUnpacked: ${m.error.message}`);
+  return (m.result && m.result.id) || '';
+}
+
 async function dumpExtensions(ctx) {
   const p = await ctx.newPage();
   try {
@@ -170,11 +197,18 @@ async function main() {
   // 2) перебираем известные id: из профиля, вычисленный по пути, из целей.
   //    Берём тот, у которого панель реально открывается — так не зависим от
   //    того, откуда взялся id (цели Chrome могут принадлежать чужим расширениям).
-  await dumpExtensions(ctx);
+  // сначала пробуем официальную загрузку через CDP — она же даёт id
+  let loaded = '';
+  try {
+    loaded = await loadUnpacked(PORT, EXT);
+    log(`Extensions.loadUnpacked: ${loaded ? 'ok, id ' + loaded : 'без id'}`);
+  } catch (e) {
+    log(`Extensions.loadUnpacked не сработал: ${e.message}`);
+  }
   const fromProfile = await extensionIdFromProfile(ctx, EXT);
   const fromTargets = await realExtensionId(ctx, PORT, EXT);
   const computed = unpackedExtensionId(EXT);
-  const candidates = [...new Set([fromProfile, computed, fromTargets].filter(Boolean))];
+  const candidates = [...new Set([loaded, fromProfile, computed, fromTargets].filter(Boolean))];
   log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
 
   let extId = '';

@@ -31,6 +31,7 @@ DISPLAY=":$DISPLAY_NUM" "$CHROME_BIN" \
   --disable-blink-features=AutomationControlled \
   --window-size=1500,950 --window-position=0,0 \
   --disable-features=DisableLoadExtensionCommandLineSwitch \
+  --enable-unsafe-extension-debugging \
   --disable-features=Translate,OptimizationHints \
   --disable-extensions-except="$EXT_DIR" \
   --load-extension="$EXT_DIR" \
