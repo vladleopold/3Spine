@@ -355,20 +355,26 @@ async function capturePage(ctx, url, outRoot, saved) {
   return page;
 }
 
+// Spine-набор = пара «<имя>.atlas» + «<имя>.skel|.bin»
+// (просто min(atlas, skel) врёт: atlas и skel могут быть от разных игр)
 function countSpine(dir) {
-  let atlas = 0, skel = 0;
+  const atlases = new Set();
+  const skels = new Set();
   const walk = (d) => {
     let items = [];
     try { items = fsSync.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const it of items) {
       const p = path.join(d, it.name);
-      if (it.isDirectory()) walk(p);
-      else if (/\.atlas$/i.test(it.name)) atlas++;
-      else if (/\.(skel|bin)$/i.test(it.name)) skel++;
+      if (it.isDirectory()) { walk(p); continue; }
+      const key = p.replace(/\.(atlas|skel|bin)$/i, '');
+      if (/\.atlas$/i.test(it.name)) atlases.add(key);
+      else if (/\.(skel|bin)$/i.test(it.name)) skels.add(key);
     }
   };
   walk(dir);
-  return Math.min(atlas, skel);
+  let n = 0;
+  for (const k of atlases) if (skels.has(k)) n++;
+  return n;
 }
 
 // ---------------------------------------------------------------- ZIP
