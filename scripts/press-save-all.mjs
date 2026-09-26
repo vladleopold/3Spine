@@ -452,8 +452,46 @@ async function main() {
     };
     if (dw) dw.onEvent = onCtx; else browser.onEvent = onCtx;
     await send2('Runtime.enable', {}).catch((e) => log(`   Runtime.enable: ${e.message}`));
-    await sleep(1200);
+    await send2('Page.enable', {}).catch(() => {});
+    await sleep(1500);
     log(`   контекстов DevTools: ${contexts.length}`);
+
+    // панель лежит во фрейме внутри окна DevTools — ищем его и жмём кнопку там
+    try {
+      const tree = await send2('Page.getFrameTree', {}).catch(() => null);
+      const frames = [];
+      if (tree && tree.frameTree) {
+        const walk = (n, d) => {
+          frames.push({ id: n.frame.id, url: n.frame.url || '', d });
+          (n.childFrames || []).forEach((c) => walk(c, d + 1));
+        };
+        walk(tree.frameTree, 0);
+      }
+      log(`   фреймов в DevTools: ${frames.length}`);
+      for (const f of frames) log(`      ${'  '.repeat(f.d)}[${f.url.slice(0, 88)}]`);
+      const pf = frames.find((f) => /\/content\.html/.test(f.url));
+      if (pf) {
+        const w = await send2('Page.createIsolatedWorld',
+          { frameId: pf.id, worldName: 'rs', grantUniveralAccess: true }).catch(() => null);
+        if (w && w.executionContextId) {
+          log(`   контекст панели: ${w.executionContextId}`);
+          const has = await evalIn('!!document.getElementById("up-save")', w.executionContextId)
+            .catch(() => false);
+          if (has) {
+            why = await evalIn(`(() => {
+              const b = document.getElementById('up-save');
+              const t = (b.textContent || '').trim();
+              b.click();
+              return 'НАЖАТА: "' + t + '"';
+            })()`, w.executionContextId).catch((e) => 'ошибка: ' + e.message);
+            pressed = /НАЖАТА/.test(why);
+            log(`   ${why}`);
+            return;
+          }
+          log('   в панели кнопки #up-save нет');
+        }
+      }
+    } catch (e) { log(`   фреймы DevTools: ${e.message}`); }
     for (const c of contexts) {
       const has = await evalIn('!!document.getElementById("up-save")', c.id).catch(() => false);
       if (!has) continue;
