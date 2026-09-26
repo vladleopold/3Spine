@@ -486,15 +486,18 @@ async function main() {
     const infos = (await browser.send('Target.getTargets')).targetInfos || [];
     if (!seenTargets) {
       log(`   всего целей: ${infos.length}`);
-      for (const t of infos) log(`      [${t.type}] ${String(t.url).slice(0, 90)}`);
+      for (const t of infos) log(`      [${t.type}] ${t.url}`);
       seenTargets = true;
     }
-    return infos.find((t) => /devtools/i.test(t.url || '')) || null;
+    const dts = infos.filter((t) => /devtools/i.test(t.url || ''));
+    if (dts.length > 1) log(`   окон DevTools: ${dts.length}`);
+    for (const t of dts) log(`      devtools-цель: ${t.url}`);
+    return dts[0] || null;
   };
   let dt = null;
   for (let i = 0; i < 12 && !dt; i++) { dt = await devtoolsTarget(); if (!dt) await sleep(1000); }
   if (dt) {
-    log(`   окно DevTools: ${dt.url.slice(0, 80)}`);
+    log(`   окно DevTools (полный URL): ${dt.url}`);
     // подключаемся к окну DevTools: своим ws либо через сессию браузера
     let dw = null, dwSess = null;
     if (dt.webSocketDebuggerUrl) dw = await CDP.connect(dt.webSocketDebuggerUrl).catch(() => null);
