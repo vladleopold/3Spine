@@ -285,9 +285,40 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
     return sorted({u.split("?")[0] for u in out})
 
 
+SHELL_EXT = re.compile(
+    r"(openGame|html5Game|gameService|loadGame|playGame)\.do|/gs2c/|games-html5|"
+    r"gameSymbol=|demoUrl|launchUrl|gameUrl", re.I)
 SHELL_RE = re.compile(
     r"https?://[^\"'\s\\]{6,240}?(?:openGame|html5Game|gameService|game\.do|"
     r"play\.do|launch\.do|/game/|/play/|/launch/|/portal/)[^\"'\s\\]{0,200}", re.I)
+
+
+def page_scripts(html: str, base: str) -> list:
+    """ Адреса JS-бандлов самой страницы: там клиент API и шаблоны запуска игры."""
+    out = []
+    for m in re.finditer(r'<script[^>]+src=["\']([^"\']+)["\']', html, re.I):
+        src = m.group(1)
+        if src.startswith(("http://", "https://")):
+            out.append(src)
+        else:
+            out.append(urljoin(base, src))
+    return out[:12]
+
+
+def embedded_urls(html: str, limit: int = 60) -> list:
+    """URL из встроенных JSON-payload (Nuxt/Next/Redux) — часто там конфиг игры."""
+    out, seen = [], set()
+    for blob in re.findall(r"__(NUXT|INITIAL_STATE|APOLLO_STATE|PRELOADED_STATE)__"
+                           r"\s*=\s*(\{.*?\})\s*[;<]", html, re.S):
+        text = blob[1]
+        for m in re.finditer(r"https?://[^\"'\\\s<>]{10,240}", text):
+            u = m.group(0)
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def shell_candidates(url: str, urls) -> list:
@@ -309,11 +340,28 @@ def shell_candidates(url: str, urls) -> list:
         out.append(u)
 
     try:
-        html = fetch(url, timeout=30).decode("utf-8", "replace")
+        html = fetch(url, timeout=40).decode("utf-8", "replace")
     except Exception:                                     # noqa: BLE001
         html = ""
     for m in SHELL_RE.finditer(html):
         add(m.group(0))
+    # конфиг игры может быть встроен прямо в страницу
+    for u in embedded_urls(html):
+        if SHELL_EXT.search(u) or SHELL_RE.search(u):
+            add(u)
+    # бандры самой страницы: там клиент API и шаблоны ссылок на игру
+    for js in page_scripts(html, url):
+        try:
+            body = fetch(js, timeout=30).decode("utf-8", "replace")
+        except Exception:                                 # noqa: BLE001
+            continue
+        for m in SHELL_RE.finditer(body):
+            add(m.group(0))
+        for u in embedded_urls(body):
+            if SHELL_EXT.search(u) or SHELL_RE.search(u):
+                add(u)
+        if len(out) >= 6:
+            break
     for u in list(urls):
         if not u.lower().endswith((".js", ".html")):
             continue
@@ -462,6 +510,19 @@ def diagnose_page(url: str) -> dict:
         out["status"] = e.code
     except Exception:                                     # noqa: BLE001
         pass
+    if not text and not out["status"]:
+        try:                                    # повтор: на медленном runner'е
+            with urllib.request.urlopen(urllib.request.Request(url, headers=browser_headers()),
+                                        timeout=45) as r:
+                data = r.read(4 * 1024 * 1024)
+                out["status"] = r.status
+                out["final"] = r.geturl()
+                out["bytes"] = len(data)
+                text = data.decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            out["status"] = e.code
+        except Exception:                         # noqa: BLE001
+            pass
     if not text and PROXY:
         # прямой запрос не прошёл (403 гео/антибот) — пробуем edge-прокси
         data = _fetch_via_proxy(url, 30, quiet=True)
@@ -587,6 +648,10 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     seen_pages, queue, urls = set(), [(url, 0)], set(urls0 := [url])
     netlog = os.path.join(tmp, "netlog.json")
     got = netlog_urls(url, netlog, budget_ms)  # первый проход самый важный
+    if len(got) < 10 and budget_ms >= 8000:
+        log("браузер вернул %d адрес��в — повторяем с другим профилем" % len(got))
+        got += [u for u in netlog_urls(url, netlog + ".r",
+                                       int(budget_ms * 0.8)) if u not in got]
     urls |= set(got)
     # CDP-хук дополняет netlog: blob/object-URL и всё, что грузится позже
     if args_cdp:
