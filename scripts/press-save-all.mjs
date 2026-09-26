@@ -14,8 +14,8 @@ const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
-const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '90000', 10);
-const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '20000', 10);
+const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '30000', 10);
+const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '15000', 10);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
