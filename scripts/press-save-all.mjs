@@ -559,9 +559,17 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       await sleep(1500);
     }
 
-    // Панель расширения — отдельный документ (фрейм) внутри окна DevTools.
-    // В нём работает настоящий chrome.devtools, поэтому кнопку жмём прямо там.
+    // Панель расширения — отдельный документ: ищем её среди целей, фреймов
+    // и текста в тенях. В панели работает настоящий chrome.devtools.
     {
+      const CLICK = `(() => {
+        const b = document.getElementById('up-save');
+        if (!b) return 'кнопки #up-save нет';
+        const t = (b.textContent || '').trim();
+        b.click();
+        return 'НАЖАТА: "' + t + '"';
+      })()`;
+
       const tree = await browser.send('Page.getFrameTree', {}, sid, 5000).catch(() => null);
       const frames = [];
       if (tree && tree.frameTree) {
@@ -572,23 +580,52 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
         walk(tree.frameTree, 0);
       }
       log(`   фреймов после открытия панели: ${frames.length}`);
-      for (const f of frames) log(`      ${'  '.repeat(f.d)}[${String(f.url).slice(0, 90)}]`);
+      for (const f of frames) log(`      ${'  '.repeat(f.d)}[${String(f.url).slice(0, 88)}]`);
       for (const f of frames.slice(1)) {
         const w = await browser.send('Page.createIsolatedWorld',
           { frameId: f.id, worldName: 'panel', grantUniveralAccess: true }, sid, 5000).catch(() => null);
         if (!w || !w.executionContextId) { log(`   фрейм ${f.id.slice(0, 6)}: мир не создался`); continue; }
-        const has = await browser.eval('!!document.getElementById("up-save")', sid, w.executionContextId, 3000)
-          .catch(() => false);
-        log(`   фрейм ${f.id.slice(0, 6)}: кнопка ${has ? 'есть' : 'нет'}`);
-        if (!has) continue;
-        const res = await browser.eval(`(() => {
-          const b = document.getElementById('up-save');
-          const t = (b.textContent || '').trim();
-          b.click();
-          return 'НАЖАТА: "' + t + '"';
-        })()`, sid, w.executionContextId, 4000).catch((e) => 'ошибка: ' + e.message);
-        log(`   ${res}`);
+        const res = await browser.eval(CLICK, sid, w.executionContextId, 3500).catch((e) => 'ошибка: ' + e.message);
+        log(`   фрейм ${f.id.slice(0, 6)}: ${res}`);
         if (/НАЖАТА/.test(String(res))) return res;
+      }
+
+      // текст кнопки должен появиться в тенях окна DevTools, если панель открыта
+      const inShadows = await browser.eval(`(() => {
+        const roots = (${SHADOW_ROOTS})(document);
+        for (const r of roots) for (const el of r.querySelectorAll('*')) {
+          const t = (el.innerText || '').trim();
+          if (!/save all/i.test(t) || t.length > 60) continue;
+          return 'нашли: <' + el.tagName + ' id=' + (el.id || '-') + ' class='
+            + String(el.className).slice(0, 30) + '> текст="' + t.slice(0, 30) + '"';
+        }
+        return 'текста Save All в тенях нет (корней: ' + roots.length + ')';
+      })()`, sid, best.id, 4000).catch((e) => 'ошибка: ' + e.message);
+      log(`   ${inShadows}`);
+
+      // и среди целей: панель может быть отдельной страницей
+      const infos = (await browser.send('Target.getTargets', {}, undefined, 5000).catch(() => null) || {}).targetInfos || [];
+      log(`   целей сейчас: ${infos.length}`);
+      const panelTargets = infos.filter((t) => /content\.html|${extIdGuess()}/.test(String(t.url || '')));
+      for (const t of panelTargets) {
+        log(`   цель панели: [${t.type}] ${String(t.url).slice(0, 80)}`);
+        let psid = null;
+        try {
+          ({ sessionId: psid } = await browser.send('Target.attachToTarget',
+            { targetId: t.targetId, flatten: true }, undefined, 4000));
+        } catch { continue; }
+        const pctx = [];
+        browser.onEvent = (m) => {
+          if (m.sessionId !== psid) return;
+          if (m.method === 'Runtime.executionContextCreated') pctx.push(m.params.context);
+        };
+        try { await browser.send('Runtime.enable', {}, psid, 4000); } catch { continue; }
+        await sleep(900);
+        for (const c of pctx) {
+          const res = await browser.eval(CLICK, psid, c.id, 3500).catch((e) => 'ошибка: ' + e.message);
+          log(`   контекст ${c.id}: ${res}`);
+          if (/НАЖАТА/.test(String(res))) return res;
+        }
       }
     }
 
