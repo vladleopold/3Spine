@@ -109,16 +109,6 @@ async function main() {
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
   log('подключился к уже запущенному Chrome');
   const ctx = browser.contexts()[0];
-  let extId = await extensionIdFromProfile(ctx, EXT);
-  log(extId ? `id расширения (из профиля): ${extId}` : 'id в профиле не найден, ищем в целях Chrome');
-  if (!extId) extId = await realExtensionId(ctx, PORT, EXT);
-  const computed = unpackedExtensionId(EXT);
-  if (extId === computed) {
-    // id вычислен по пути — значит Chrome не показал ни одной цели расширения
-    log('ВНИМАНИЕ: Chrome не показал целей расширения — проверь флаг '
-      + '--disable-features=DisableLoadExtensionCommandLineSwitch');
-  }
-  log(`id расширения: ${extId}`);
 
   // 1) собираем все ресурсы страницы через CDP
   const page = ctx.pages()[0] || await ctx.newPage();
@@ -157,43 +147,53 @@ async function main() {
       response: { status: 200, content: { size: v.size, mimeType: v.mimeType } } };
   });
 
-  // 2) настоящий id вкладки: content.js берёт список сайтов через
+  // 2) перебираем известные id: из профиля, вычисленный по пути, из целей.
+  //    Берём тот, у которого панель реально открывается — так не зависим от
+  //    того, откуда взялся id (цели Chrome могут принадлежать чужим расширениям).
+  const fromProfile = await extensionIdFromProfile(ctx, EXT);
+  const fromTargets = await realExtensionId(ctx, PORT, EXT);
+  const computed = unpackedExtensionId(EXT);
+  const candidates = [...new Set([fromProfile, computed, fromTargets].filter(Boolean))];
+  log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
+
+  let extId = '';
+  let panel = null;
+  for (const id of candidates) {
+    const test = await ctx.newPage();
+    try {
+      await test.goto(`chrome-extension://${id}/content.html`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      extId = id;
+      panel = test;
+      log(`панель открылась с id ${id}`);
+      break;
+    } catch (e) {
+      log(`   id ${id}: ${e.message.split('\n')[0].slice(0, 90)}`);
+      await test.close().catch(() => {});
+    }
+  }
+  if (!extId) throw new Error('ни один id не открыл панель Resources Saver');
+
+  // 3) настоящий id вкладки игры: content.js берёт список сайтов через
   //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
   //    список был пуст и кнопка ничего не качала
-  const tabs = await ctx.newPage().then(async (pr) => {
-    await pr.goto(`chrome-extension://${extId}/popup.html`, { waitUntil: 'domcontentloaded' });
-    const t = await pr.evaluate(() => new Promise((res) => {
-      chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
-    })).catch(() => []);
-    await pr.close().catch(() => {});
-    return t;
-  });
+  const tabs = await panel.evaluate(() => new Promise((res) => {
+    chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
+  })).catch(() => []);
   const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
   const gameTab = tabs.find((t) => t.url.startsWith(origin)) || tabs[0];
   const tabId = gameTab ? gameTab.id : 0;
   log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
 
-  // 3) открываем панель Resources Saver и подменяем ей chrome.devtools
-  const panel = await ctx.newPage();
-  await panel.addInitScript(SHIM(JSON.stringify({
-    resources, har, tabId,
-  })));
-  const url = `chrome-extension://${extId}/content.html`;
-  await panel.goto(url, { waitUntil: 'domcontentloaded' }).catch((e) => {
-    if (/ERR_BLOCKED_BY_CLIENT/.test(e.message)) {
-      throw new Error('расширение не загрузилось в Chrome (страница панели заблокирована)');
-    }
-    throw e;
-  });
-  log(`панель Resources Saver открыта: ${url}`);
-
+  // 4) подменяем панели chrome.devtools собранными ресурсами и жмём кнопку
+  await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
+  await panel.reload({ waitUntil: 'domcontentloaded' });
   const btn = panel.locator('#up-save');
   await btn.waitFor({ state: 'visible', timeout: 20000 });
   const label = (await btn.textContent().catch(() => '')) || '';
   log(`нажимаю кнопку: "${label.trim()}"`);
   await panel.evaluate(() => document.getElementById('up-save').click());
 
-  // 4) ждём ZIP
+  // 5) ждём ZIP
   const deadline = Date.now() + ZIP_TIMEOUT;
   let zip = null;
   while (Date.now() < deadline) {
