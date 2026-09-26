@@ -527,6 +527,25 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       if (n > bestN) { bestN = n; best = cx; }
     }
     if (!best) continue;
+    // Настоящая мышь: DevTools реагирует на mousedown, синтетический click()
+    // игнорирует. Координаты берём из DOM, клик отправляем в окно DevTools.
+    const realClick = async (x, y) => {
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+        await browser.send('Input.dispatchMouseEvent', {
+          type, x: Math.round(x), y: Math.round(y),
+          button: 'left', buttons: type === 'mousePressed' ? 1 : 0,
+          clickCount: 1,
+        }, sid, 3000).catch(() => {});
+      }
+    };
+    const clickRect = async (js, label) => {
+      const rect = await browser.eval(`(() => { ${js} })()`, sid, best.id, 3500).catch(() => null);
+      if (!rect) { log(`   ${label}: не нашли`); return false; }
+      log(`   ${label}: точка ${Math.round(rect.x)},${Math.round(rect.y)}`);
+      await realClick(rect.x, rect.y);
+      return true;
+    };
+
     // весь UI DevTools лежит в shadow root, а приватные API (UI.InspectorView)
     // в сборке 153 недоступны — работаем через настоящий UI: вкладка и кнопка
     const isDevtoolsDoc = await browser.eval(
@@ -737,6 +756,33 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
 
       let tabState = await browser.eval(CLICK_TAB, sid, best.id, 3000)
         .catch((e) => 'вкладка: ошибка ' + e.message);
+      if (/не найдена/.test(String(tabState))) {
+        const moreRect = `const roots = (${SHADOW_ROOTS})(document);
+          for (const r of roots) for (const el of r.querySelectorAll('*')) {
+            const cls = String(el.className || '');
+            if (!/drop-down/i.test(cls)) continue;
+            const b = el.getBoundingClientRect();
+            if (b.width < 4 || b.height < 4) continue;
+            return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+          }
+          return null;`;
+        if (await clickRect(moreRect, 'кнопка More tools')) {
+          await sleep(900);
+          const itemRect = `const roots = (${SHADOW_ROOTS})(document);
+            for (const r of roots) for (const el of r.querySelectorAll('*')) {
+              const t = (el.innerText || '').trim();
+              if (t !== 'Resources Saver') continue;
+              const b = el.getBoundingClientRect();
+              if (b.width < 4 || b.height < 4) continue;
+              return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+            }
+            return null;`;
+          if (await clickRect(itemRect, 'пункт меню Resources Saver')) {
+            tabState = 'вкладка Resources Saver нажата настоящей мышью';
+            log(`   ${tabState}`);
+          }
+        }
+      }
       log(`   ${tabState}`);
       if (/не найдена/.test(String(tabState))) {
         const dd = await browser.eval(OPEN_MORE, sid, best.id, 3000)
