@@ -79,6 +79,48 @@ def convert_with_restore(sk: str, outjson: str) -> tuple:
         return False, str(e)
 
 
+def copy_images_tree(src: str, dst: str) -> tuple:
+    """Копирует все каталоги images/ (и их содержимое) из src в dst.
+
+    Возвращает (число каталогов, число файлов). Нужно, чтобы в каждом каталоге
+    со spine-файлом в выходном архиве был images/ с подпапками.
+    """
+    import shutil
+    dirs = files = 0
+    for root, subdirs, _fnames in os.walk(src):
+        for sub in list(subdirs):
+            if sub != "images":
+                continue
+            src_img = os.path.join(root, sub)
+            dst_img = os.path.join(dst, os.path.relpath(src_img, src))
+            try:
+                os.makedirs(dst_img, exist_ok=True)
+            except OSError:
+                continue
+            dirs += 1
+            for dirpath, _sub, fs in os.walk(src_img):
+                for f in fs:
+                    rel = os.path.relpath(os.path.join(dirpath, f), src_img)
+                    out = os.path.join(dst_img, rel)
+                    os.makedirs(os.path.dirname(out), exist_ok=True)
+                    try:
+                        shutil.copy2(os.path.join(dirpath, f), out)
+                        files += 1
+                    except OSError:
+                        pass
+            # пустые каталоги не переживают zip — оставляем маркер
+            for dirpath, _sub, fs in os.walk(dst_img):
+                if not fs and not os.listdir(dirpath):
+                    try:
+                        with open(os.path.join(dirpath, ".keep"), "w",
+                                  encoding="utf-8") as fh:
+                            fh.write("extracted image directory\n")
+                        files += 1
+                    except OSError:
+                        pass
+    return dirs, files
+
+
 def main():
     zin, zout = sys.argv[1], sys.argv[2]
     tmp = tempfile.mkdtemp()
@@ -362,6 +404,14 @@ def main():
             loglines.append(f"corrupt-list: {len(set(corrupt))} файлов помечены детектором как битые")
             with open(os.path.join(dst, "convert-log.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(loglines) + "\n")
+
+        # переносим каталоги images/ из шага распаковки: без этого они остаются
+        # во входном дереве и теряются в выданном архиве
+        copied = copy_images_tree(src, dst)
+        if copied:
+            line = f"images: перенесено каталогов {copied[0]}, файлов {copied[1]}"
+            print(line)
+            loglines.append(line)
 
         # переносим логи предыдущих блоков (prepare/unpack), чтобы причины
         # пропусков были видны в выданном архиве
