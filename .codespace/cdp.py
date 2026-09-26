@@ -154,11 +154,32 @@ class WS:
             pass
 
 
+def port_alive(port: int) -> bool:
+    sk = socket.socket()
+    sk.settimeout(1.5)
+    try:
+        sk.connect(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sk.close()
+
+
+def free_port(preferred: int = 9333) -> int:
+    """Если порт занут (старый Chrome) — берём свободный, чтобы не ловить 0 кандидатов."""
+    if not port_alive(preferred):
+        return preferred
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        return sk.getsockname()[1]
+
+
 class Crawler:
     """Гоняет игру в браузере и собирает все сетевые запросы."""
 
     def __init__(self, budget_ms: int = 25000, port: int = 9333, click: bool = False):
-        self.budget_ms = budget_ms
+        self.budget_ms = max(int(budget_ms), 18000)
         self.click = click
         self.port = port
         self.urls = set()
@@ -170,10 +191,13 @@ class Crawler:
         with urllib.request.urlopen("http://127.0.0.1:%d%s" % (self.port, path), timeout=5) as r:
             return json.loads(r.read().decode())
 
-    def run(self, url: str, lognet: str = "") -> dict:
+    def run(self, url: str, lognet: str = "", attempt: int = 0) -> dict:
         chrome = find_chrome()
         if not chrome:
             return {"urls": [], "notes": ["chrome не найден"]}
+        self.port = free_port(self.port)
+        if attempt:                      # повтор: даём больше времени
+            self.budget_ms = int(self.budget_ms * 1.6)
         if not lognet:
             lognet = "/tmp/cdp-net-%d.json" % os.getpid()
         self.netlog = lognet
@@ -190,12 +214,20 @@ class Crawler:
              "--virtual-time-budget=%d" % self.budget_ms,
              "--log-net-log=" + lognet, url],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # ждём, пока DevTools-порт действительно поднимется
+        t0 = time.time()
+        while time.time() - t0 < 15 and not port_alive(self.port):
+            time.sleep(0.3)
+        if not port_alive(self.port):
+            return {"urls": [], "notes": ["Chrome не слушает порт %d" % self.port]}
         try:
             res = self._drive()
             urls = set(res.get("urls", [])) | set(self._read_netlog())
             self.urls |= urls
             res["urls"] = sorted(urls)
-            res["netlog_only"] = len(urls) - len(res.get("urls", []))
+            if not urls and attempt == 0:
+                res2 = self.run(url, lognet, attempt=1)
+                return res2
             return res
         finally:
             proc.terminate()
