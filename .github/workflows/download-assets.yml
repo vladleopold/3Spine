@@ -90,6 +90,12 @@ jobs:
           PROFILE: ${{ github.workspace }}/.chrome-profile
         run: bash scripts/start-chrome.sh
 
+      - name: Загрузить расширение через интерфейс chrome://extensions
+        env:
+          EXT_DIR: .chrome-ext
+          PROFILE: ${{ github.workspace }}/.chrome-profile
+        run: node scripts/load-extension-ui.mjs
+
       - name: Открыть DevTools
         run: bash scripts/open-devtools.sh
 
