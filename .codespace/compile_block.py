@@ -561,8 +561,15 @@ def main() -> None:
                     return rel, False, f"compile-block: FAIL {rel} (skel→json): rc={rc}"
 
                 results = []
-                results.append(skel_to_json(skels[0]))
-                rest = skels[1:]
+                # Прогрев одного файла перед основным заходом — только если
+                # его явно попросили: по умолчанию все проекты стартуют
+                # одновременно (лицензия подаётся каждому процессу через stdin)
+                warmup = env_int("SPINE_WARMUP", 0)
+                if warmup > 0:
+                    results.extend(skel_to_json(sk) for sk in skels[:warmup])
+                    rest = skels[warmup:]
+                else:
+                    rest = skels
                 results.extend(run_all(skel_to_json, rest, workers, "ЭТАП 1"))
                 ok1 = sum(1 for _r, ok, _m in results if ok)
                 for _r, ok, msg in results:

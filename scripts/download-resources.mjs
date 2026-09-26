@@ -46,7 +46,12 @@ const PROFILE = process.env.PROFILE || '';          // развёрнутая с
 const PROXY = process.env.PROXY || '';              // http://user:pass@host:port
 const GAME_URL = process.env.GAME_URL || '';        // уже найденный игровой шелл
 const MANIFEST_DEPTH = parseInt(process.env.MANIFEST_DEPTH || '2', 10);
-const SPINE_EXT = /\.(atlas|skel|bin)$/i;
+// расширение берём из пути URL: query-строка ломала /\.(atlas|skel|bin)$/
+const extOf = (u) => { try { return path.extname(new URL(u).pathname).toLowerCase(); } catch { return ''; } };
+const SPINE_SET = new Set(['.atlas', '.skel', '.bin']);
+// мусор: антибот-челленджи, реклама, аналитика — это не ресурсы игры
+const NOISE = /cdn-cgi\/challenge|challenges\.cloudflare\.com|cloudflareinsights|googletagmanager|google-analytics|googleadservices|ipify|doubleclick|facebook\.(net|com)\/tr|tiktok|bing\.com|trafficjunky|criteo|360yield|adservice\.google|amplitude|hotjar|segment\.io|yandex\.metrika/i;
+let ignoredNoise = 0;
 
 const manifestUrls = new Set();                     // url -> из манифестов
 const spineUrls = new Set();                        // найденные Spine-ассеты
@@ -188,16 +193,24 @@ async function resolveGameUrl(ctx, page, pageUrl) {
 async function saveBytes(resUrl, buf, outRoot, saved) {
   if (!buf || buf.length === 0) return false;
   if (/^data:|^blob:|^chrome-extension:/.test(resUrl)) return false;
+  if (NOISE.test(resUrl)) { ignoredNoise++; return false; }
   if (saved.has(resUrl)) return false;
   const localPath = sanitizePath(resUrl, outRoot);
   await fs.ensureDir(path.dirname(localPath));
-  await fs.writeFile(localPath, buf);
+  try {
+    await fs.writeFile(localPath, buf);
+  } catch (e) {
+    log(`  ! не записал ${localPath.slice(-60)}: ${e.message.split('\n')[0]}`);
+    return false;
+  }
   saved.set(resUrl, localPath);
   try { seenHosts.add(new URL(resUrl).hostname); } catch { /* не URL */ }
   const kb = (buf.length / 1024).toFixed(1);
-  const tag = SPINE_EXT.test(resUrl) ? '★SPINE' : '     ';
-  log(`  ✓ ${tag} ${kb.padStart(8)} KB  ${resUrl.slice(0, 110)}`);
-  if (SPINE_EXT.test(resUrl)) spineUrls.add(resUrl);
+  const isSpine = SPINE_SET.has(extOf(resUrl));
+  // Spine-файлы логируем полностью: по обрезке не понять, что это
+  log(`  ✓ ${isSpine ? '★SPINE' : '      '} ${kb.padStart(8)} KB  `
+    + `${isSpine ? resUrl : resUrl.slice(0, 110)}`);
+  if (isSpine) spineUrls.add(resUrl);
   return true;
 }
 
@@ -300,17 +313,31 @@ async function capturePage(ctx, url, outRoot, saved) {
   }
 
   // проход по двум барьерам: age-gate (18+) и кнопка запуска игры
+  // кнопки запуска: сначала специфичные для площадки, потом общие
+  let host = '';
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch { /* не URL */ }
+  const SITE = {
+    'first.ua': ['text=Демо', '[class*="launch"]', 'text=Играти'],
+    'slotcity.ua': ['.modal button', 'text=Играти', 'text=Грати', '[class*="modal"] button'],
+    'cosmolot.ua': ['text=Демо', 'text=Играти', '[class*="play-btn"]'],
+    'slotor777.ua': ['text=Демо', '[class*="game-btn"]', 'text=Играти'],
+    'beton.ua': ['text=Демо', 'text=Грати', '[class*="btn-play"]'],
+    '3oaks.com': ['text=Play', 'text=Play Demo'],
+    'playson.com': ['text=Play', 'text=Demo'],
+  };
+  const COMMON_PLAY = ['text=Play', 'text=Demo', 'text=Играть', 'text=Демо', 'text=Start',
+    'text=PLAY DEMO', 'text=Play Demo', 'text=Грати', 'text=Играти', 'text=Запустить',
+    'text=Открыть игру', 'button:has-text("Play")', 'button:has-text("Demo")',
+    'button:has-text("Играть")', 'button:has-text("Демо")', 'a[href*="demo"]',
+    '[class*="play"]', '[class*="demo"]', '[id*="play"]', '[id*="demo"]',
+    'iframe canvas', 'canvas'];
   const STEPS = [
     ['age-gate', ['text=Yes', 'text=Так', 'text=I am 18', 'text=Мне есть 18',
       'text=Enter', 'text=Войти', 'button:has-text("18")', 'button:has-text("Yes")',
       'button:has-text("Так")', '[class*="age"] button', '[id*="age"] button']],
-    ['play/demo', ['text=Play', 'text=Demo', 'text=Играть', 'text=Демо', 'text=Start',
-      'text=PLAY DEMO', 'text=Play Demo', 'text=Грати', 'text=Запустить',
-      'text=Открыть игру', 'button:has-text("Play")', 'button:has-text("Demo")',
-      'button:has-text("Играть")', 'button:has-text("Демо")', 'a[href*="demo"]',
-      '[class*="play"]', '[class*="demo"]', '[id*="play"]', '[id*="demo"]',
-      'iframe canvas', 'canvas']],
+    ['play/demo', [...(SITE[host] || []), ...COMMON_PLAY]],
   ];
+  let clicked = 0;
   for (const [name, sels] of STEPS) {
     let done = false;
     for (const sel of sels) {
@@ -324,7 +351,7 @@ async function capturePage(ctx, url, outRoot, saved) {
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         log(`  → клик [${name}]: ${sel}`);
         await page.waitForTimeout(3500);
-        done = true;
+        done = true; clicked++;
       } catch { /* нет такого — идём дальше */ }
     }
   }
@@ -333,6 +360,7 @@ async function capturePage(ctx, url, outRoot, saved) {
     await page.waitForSelector('iframe', { timeout: 10000 });
     log('  → iframe с игрой обнаружен');
   } catch { }
+  if (!clicked) log('  ⚠ ни одной кнопки не нажал — вероятно антибот или нестандартный вход');
   await page.mouse.move(600, 400).catch(() => {});
   await page.mouse.move(900, 600).catch(() => {});
   await page.evaluate(() => window.scrollBy(0, 300)).catch(() => {});
@@ -371,6 +399,15 @@ async function capturePage(ctx, url, outRoot, saved) {
   return page;
 }
 
+// sanitizePath дописывает -<10 символов> за query-параметры; у atlas и skel
+// одной игры query разный, поэтому суффикс снимаем, иначе пары не сойдутся
+export function stripQuerySuffix(name) {
+  const ext = path.extname(name);
+  const base = ext ? name.slice(0, -ext.length) : name;
+  const m = base.match(/^(.*)-[A-Za-z0-9_-]{6,12}$/);
+  return (m ? m[1] : base) + ext;
+}
+
 // Spine-набор = пара «<имя>.atlas» + «<имя>.skel|.bin»
 // (просто min(atlas, skel) врёт: atlas и skel могут быть от разных игр)
 function countSpine(dir) {
@@ -382,7 +419,8 @@ function countSpine(dir) {
     for (const it of items) {
       const p = path.join(d, it.name);
       if (it.isDirectory()) { walk(p); continue; }
-      const key = p.replace(/\.(atlas|skel|bin)$/i, '');
+      const key = path.join(path.dirname(p), stripQuerySuffix(it.name)).replace(
+        /\.(atlas|skel|bin)$/i, '');
       if (/\.atlas$/i.test(it.name)) atlases.add(key);
       else if (/\.(skel|bin)$/i.test(it.name)) skels.add(key);
     }
@@ -480,4 +518,4 @@ if (isDirectRun) {
   main().catch((e) => { console.error(e); process.exit(1); });
 }
 
-export { sanitizePath, harvest, countSpine, resolveGameUrl, openCtx, closeCtx, capturePage };
+export { sanitizePath, harvest, countSpine, extOf, resolveGameUrl, openCtx, closeCtx, capturePage };

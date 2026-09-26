@@ -370,11 +370,14 @@ jobs:
           tar xf /tmp/linux -C /tmp/spine
           ls /tmp/spine
 
-      - name: "Compile block → .spine (Spine Linux: 1 warm-up + пачки по 12)"
+      - name: "Compile block → .spine (все проекты одновременно)"
         env:
           SPINE_EDITOR: /tmp/spine/Spine/Spine.sh
           SPINE_LICENSE: ${{ secrets.SPINE_LICENSE }}
           SPINE_XMX: "768"
+          # все Spine-проекты стартуют одновременно: без пачек и без прогона
+          SPINE_BATCH: "0"
+          SPINE_WARMUP: "0"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }
