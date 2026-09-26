@@ -24,7 +24,13 @@ async function listTargets() {
 }
 
 class CDP {
-  constructor(ws) { this.ws = ws; this.id = 0; this.waiting = new Map(); }
+  constructor(ws) {
+    this.ws = ws; this.id = 0; this.waiting = new Map();
+    this.sessions = new Map();          // sessionId -> { url, type }
+    this.listeners = [];                // обработчики событий
+  }
+
+  onEvent(fn) { this.listeners.push(fn); }
 
   static async connect(wsUrl) {
     const ws = new WebSocket(wsUrl);
@@ -36,6 +42,15 @@ class CDP {
     ws.addEventListener('message', (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.method) {
+        // авто-подключение к фреймам: запоминаем, где панель расширения
+        if (m.method === 'Target.attachedToTarget') {
+          const si = m.params.sessionId;
+          c.sessions.set(si, { url: m.params.targetInfo.url, type: m.params.targetInfo.type });
+        }
+        for (const fn of c.listeners) fn(m);
+        return;
+      }
       const w = c.waiting.get(m.id);
       if (!w) return;
       c.waiting.delete(m.id);
@@ -44,15 +59,17 @@ class CDP {
     return c;
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     const id = ++this.id;
-    this.ws.send(JSON.stringify({ id, method, params }));
+    const msg = { id, method, params };
+    if (sessionId) msg.sessionId = sessionId;
+    this.ws.send(JSON.stringify(msg));
     return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
   }
 
-  async eval(expression) {
+  async eval(expression, sessionId) {
     const r = await this.send('Runtime.evaluate',
-      { expression, awaitPromise: true, returnByValue: true });
+      { expression, awaitPromise: true, returnByValue: true }, sessionId);
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
     return r.result ? r.result.value : undefined;
   }
@@ -93,20 +110,29 @@ async function main() {
   } else {
     log(`окно DevTools: ${devtools.url.slice(0, 90)}`);
     const dt = await CDP.connect(devtools.webSocketDebuggerUrl);
+    // панель расширения — фрейм внутри окна DevTools, подхватываем его авто-attach'ем
+    await dt.send('Target.setAutoAttach',
+      { autoAttach: true, waitForDebuggerOnStart: false, flatten: true });
     log(await dt.eval(CLICK_TAB));
 
-    // ждём, пока панель расширения появится отдельной целью
     const deadline = Date.now() + PANEL_TIMEOUT;
-    let panel = null;
-    while (Date.now() < deadline && !panel) {
-      const ts = await listTargets();
-      panel = ts.find((t) => t.url.startsWith('chrome-extension://') && t.url.includes('content.html'));
-      if (!panel) await sleep(1500);
+    let panelSession = null;
+    while (Date.now() < deadline && !panelSession) {
+      for (const [sid, info] of dt.sessions) {
+        if (info.url && info.url.startsWith('chrome-extension://') && info.url.includes('content.html')) {
+          panelSession = sid;
+          log(`панель в DevTools: ${info.url}`);
+          break;
+        }
+      }
+      if (!panelSession) {
+        // вкладка могла не открыться с первого раза — жмём ещё раз
+        await dt.eval(CLICK_TAB).catch(() => {});
+        await sleep(1500);
+      }
     }
-    if (!panel) throw new Error('панель content.html не появилась после открытия вкладки');
-    log(`панель: ${panel.url}`);
-    const pc = await CDP.connect(panel.webSocketDebuggerUrl);
-    log(await pc.eval(CLICK_SAVE));
+    if (!panelSession) throw new Error('фрейм панели Resources Saver не появился в DevTools');
+    log(await dt.eval(CLICK_SAVE, panelSession));
   }
 
   const zipDeadline = Date.now() + ZIP_TIMEOUT;
