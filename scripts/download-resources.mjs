@@ -10,13 +10,24 @@ import { createWriteStream } from 'fs';
 import archiver from 'archiver';
 import { URL } from 'url';
 
+const DEFAULT_URLS = [
+  'https://first.ua/ua/igrovie-avtomaty/kendoo/4-gold-carts',
+  'https://slotcity.ua/?modals=game&game-term=spinjoy-meduzas-fortune&demo=true',
+  'https://cosmolot.ua/ua/game/demonic-dolls',
+  'https://playson.com/game/clover-strike-hold-and-win',
+  'https://3oaks.com/game/3_superpower_diamonds',
+  'https://slotor777.ua/ru/game/view/56dab5f9954f459f919d800306e48b35?mode=demo',
+  'https://beton.ua/game/pragmaticplay-direct-the-dog-house-megaways-1000?isDemo=true',
+];
+
 const URLS = (process.env.URLS || '')
   .split(',')
   .map((u) => u.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .concat(process.env.URLS ? [] : DEFAULT_URLS);
 
 const OUTPUT_DIR = process.env.OUTPUT_DIR || './downloaded';
-const WAIT_AFTER_LOAD = parseInt(process.env.WAIT_MS || '25000', 10);
+const WAIT_AFTER_LOAD = parseInt(process.env.WAIT_MS || '35000', 10);
 const HEADLESS = process.env.HEADLESS !== 'false';
 const PROFILE = process.env.PROFILE || '';          // развёрнутая сессия
 const PROXY = process.env.PROXY || '';              // http://user:pass@host:port
@@ -121,6 +132,7 @@ async function capturePage(browser, url, outRoot, saved) {
       '--disable-gpu', '--disable-web-security',
       '--disable-features=IsolateOrigins,site-per-process',
       '--allow-running-insecure-content', '--autoplay-policy=no-user-gesture-required',
+      '--disable-blink-features=AutomationControlled',
     ],
   };
   let ctx, browser2 = null;
@@ -131,6 +143,8 @@ async function capturePage(browser, url, outRoot, saved) {
       proxy: PROXY ? { server: PROXY } : undefined,
       ignoreHTTPSErrors: true,
       viewport: { width: 1920, height: 1080 },
+      locale: 'uk-UA',
+      extraHTTPHeaders: { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' },
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         + '(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
     });
@@ -141,6 +155,8 @@ async function capturePage(browser, url, outRoot, saved) {
       viewport: { width: 1920, height: 1080 },
       ignoreHTTPSErrors: true,
       javaScriptEnabled: true,
+      locale: 'uk-UA',
+      extraHTTPHeaders: { 'Accept-Language': 'uk-UA,uk;q=0.9,en;q=0.8' },
       permissions: ['clipboard-read', 'clipboard-write'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
         + '(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
@@ -148,6 +164,10 @@ async function capturePage(browser, url, outRoot, saved) {
   }
 
   const page = ctx.pages()[0] || await ctx.newPage();
+  // снимаем признак автоматизации (Cloudflare / fingerprint-чеки)
+  await ctx.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  }).catch(() => {});
   page.on('response', (r) => saveResponse(r, outRoot, saved));
 
   try {
@@ -157,30 +177,45 @@ async function capturePage(browser, url, outRoot, saved) {
     log(`  ! goto: ${e.message.split('\n')[0]}`);
   }
 
-  // типовые кнопки демо — триггерят догрузку ассетов
-  const clicks = ['text=Play', 'text=Demo', 'text=Играть', 'text=Демо', 'text=Start',
-    'text=Play Free', 'text=Запустить', 'text=Открыть игру',
-    '[class*="play"]', '[class*="demo"]', '[id*="play"]', '[id*="demo"]',
-    'canvas', 'body'];
-  for (const sel of clicks) {
-    try {
-      const el = page.locator(sel).first();
-      if (await el.isVisible({ timeout: 1200 })) {
+  // проход по двум барьерам: age-gate (18+) и кнопка запуска игры
+  const STEPS = [
+    ['age-gate', ['text=Yes', 'text=Так', 'text=I am 18', 'text=Мне есть 18',
+      'text=Enter', 'text=Войти', 'button:has-text("18")', 'button:has-text("Yes")',
+      'button:has-text("Так")', '[class*="age"] button', '[id*="age"] button']],
+    ['play/demo', ['text=Play', 'text=Demo', 'text=Играть', 'text=Демо', 'text=Start',
+      'text=PLAY DEMO', 'text=Play Demo', 'text=Грати', 'text=Запустить',
+      'text=Открыть игру', 'button:has-text("Play")', 'button:has-text("Demo")',
+      'button:has-text("Играть")', 'button:has-text("Демо")', 'a[href*="demo"]',
+      '[class*="play"]', '[class*="demo"]', '[id*="play"]', '[id*="demo"]',
+      'canvas', 'body']],
+  ];
+  for (const [name, sels] of STEPS) {
+    let done = false;
+    for (const sel of sels) {
+      if (done) break;
+      try {
+        const el = page.locator(sel).first();
+        if (!(await el.isVisible({ timeout: 1200 }))) continue;
         const box = await el.boundingBox().catch(() => null);
-        if (box) {                      // реальный клик мышью
+        if (box) {                      // настоящий клик мышью по координатам
           await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-          log(`  → клик: ${sel}`);
         } else {
           await el.click({ timeout: 2000 });
-          log(`  → клик: ${sel}`);
         }
+        log(`  → клик [${name}]: ${sel}`);
         await page.waitForTimeout(3500);
-        break;
-      }
-    } catch { /* нет такого — идём дальше */ }
+        done = true;
+      } catch { /* нет такого — идём дальше */ }
+    }
   }
-  await page.mouse.move(400, 300).catch(() => {});
-  await page.mouse.move(900, 560).catch(() => {});
+  // игра живёт в iframe — дожидаемся появления и шевелим мышью/скроллим
+  try {
+    await page.waitForSelector('iframe', { timeout: 10000 });
+    log('  → iframe с игрой обнаружен');
+  } catch { }
+  await page.mouse.move(600, 400).catch(() => {});
+  await page.mouse.move(900, 600).catch(() => {});
+  await page.evaluate(() => window.scrollBy(0, 300)).catch(() => {});
 
   // догрузка: короткими циклами, без долгого ожидания
   const deadline = Date.now() + WAIT_AFTER_LOAD;
@@ -274,7 +309,6 @@ async function main() {
       log(`  → добрано ${n}`);
     }
 
-    const spine = all.size ? 0 : 0;
     const cnt = all.size;
     log(`\n  Итого по ${safe}: ${cnt} файлов (Spine: ${spineUrls.size})`);
     if (cnt > 0) {

@@ -1,11 +1,11 @@
-name: Download Game Resources
+name: Download Slot Resources
 
 on:
   workflow_dispatch:
     inputs:
       urls:
-        description: 'Список URL через запятую'
-        required: true
+        description: 'URL через запятую (пусто = дефолтный список из 7 игр)'
+        required: false
         type: string
       game_url:
         description: 'Игровой шелл (если уже найден) — через запятую'
@@ -14,13 +14,13 @@ on:
       wait_ms:
         description: 'Доп. ожидание догрузки, мс'
         required: false
-        default: '25000'
+        default: '35000'
         type: string
 
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
       contents: read
 
@@ -41,9 +41,9 @@ jobs:
 
       - name: Download resources
         env:
-          URLS: ${{ github.event.inputs.urls }}
+          URLS: ${{ github.event.inputs.urls || '' }}
           GAME_URL: ${{ github.event.inputs.game_url }}
-          WAIT_MS: ${{ github.event.inputs.wait_ms || '25000' }}
+          WAIT_MS: ${{ github.event.inputs.wait_ms || '35000' }}
           OUTPUT_DIR: ./artifacts
           HEADLESS: 'true'
         run: npm run download
@@ -61,9 +61,9 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: game-resources-${{ github.run_id }}
+          name: slot-resources-${{ github.run_id }}
           path: |
             artifacts/*.zip
-            artifacts/**/*
+            artifacts/**
           retention-days: 14
           if-no-files-found: warn
