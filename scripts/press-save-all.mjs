@@ -7,6 +7,7 @@ import { execSync } from 'child_process';
 
 const URL_ = process.env.URL || '';
 const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
+const PROFILE_DIR = path.resolve(process.env.PROFILE || './.chrome-profile');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
@@ -134,6 +135,47 @@ function pressSaveWithKeyboard() {
   return 'Tab+Enter в панели';
 }
 
+
+// Прямой доступ к фронтенду DevTools: Chrome пишет его порт в DevToolsActivePort
+// в профиле. Через него мы попадаем в контексты панели Resources Saver
+// и жмём #up-save — окно DevTools среди целей CDP не видно.
+function devtoolsEndpoint(profileDir) {
+  const f = path.join(profileDir, 'DevToolsActivePort');
+  if (!fs.existsSync(f)) return '';
+  const l = fs.readFileSync(f, 'utf8').split('\n').map((x) => x.trim()).filter(Boolean);
+  return l.length >= 2 ? `ws://127.0.0.1:${l[0]}${l[1]}` : '';
+}
+
+async function pressInDevtoolsFrontend() {
+  const ep = devtoolsEndpoint(PROFILE_DIR);
+  if (!ep) return 'нет DevToolsActivePort';
+  log(`   фронтенд DevTools: ${ep}`);
+  const fe = await CDP.connect(ep).catch((e) => null);
+  if (!fe) return 'не подключились к фронтенду';
+  const contexts = [];
+  fe.onEvent = (m) => {
+    if (m.method === 'Runtime.executionContextCreated') contexts.push(m.params.context);
+  };
+  try { await fe.send('Runtime.enable', {}, undefined, 5000); } catch (e) {
+    return `Runtime.enable: ${e.message}`;
+  }
+  await sleep(800);
+  log(`   контекстов: ${contexts.length}`);
+  for (const cx of contexts) {
+    const has = await fe.eval('!!document.getElementById("up-save")', undefined, cx.id)
+      .catch(() => false);
+    if (!has) continue;
+    return await fe.eval(`(() => {
+      const b = document.getElementById('up-save');
+      const t = (b.textContent || '').trim();
+      const dis = b.disabled;
+      b.click();
+      return 'НАЖАТА: "' + t + '" (disabled=' + dis + ')';
+    })()`, undefined, cx.id).catch((e) => 'ошибка: ' + e.message);
+  }
+  return 'кнопка #up-save не найдена во фронтенде';
+}
+
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -213,15 +255,21 @@ async function main() {
 
   let pc = null;   // панель по CDP недоступна, используется только X11
 
-  // 0) сначала настоящее нажатие вводом X11 — окно DevTools недоступно по CDP
-  let clicked = null;
-  try {
-    const how = pressSaveWithMouse();
-    log(`   ${how}`);
-    const kb = pressSaveWithKeyboard();
-    log(`   ${kb}`);
-  } catch (e) {
-    log(`   ввод X11 не сработал: ${e.message}`);
+  // 0) нажатие: сначала прямо во фронтенде DevTools, затем вводом X11
+  let pressed = false;
+  let clicked = await pressInDevtoolsFrontend();
+  log(`   фронтенд: ${clicked}`);
+  if (/НАЖАТА/.test(String(clicked))) pressed = true;
+  if (!pressed) {
+    try {
+      const how = await pressSaveWithMouse();
+      log(`   ${how}`);
+      const kb = pressSaveWithKeyboard();
+      log(`   ${kb}`);
+      pressed = true;   // клик отправлен, дальше проверяем результат
+    } catch (e) {
+      log(`   ввод X11 не сработал: ${e.message}`);
+    }
   }
 
   const skipCdp = true;   // окно DevTools не отдаётся в CDP — жмём только вводом X11
@@ -316,9 +364,14 @@ async function main() {
     }
   }
 
+  if (!zip && !pressed) {
+    // нажатия не было — архив и не мог начать собираться
+    throw new Error(`кнопка Save All Resources НЕ НАЖАТА (нажатие не выполнено, архив не создавался) за ${since()}`);
+  }
+
   if (!zip) {
-    // запасной путь: собираем ресурсы сами и повторяем нажатие
-    log('нажатие не дало архива, пробую запасной путь: сбор ресурсов и повторное нажатие');
+    // нажатие было, но архива нет — пробуем запасной путь
+    log('нажатие было, но архива нет — пробую запасной путь');
     await collectResources();
     if (!pc) { log('   панель недоступна по CDP, повторное нажатие только вводом X11'); }
     const again = pc ? await pc.eval(`(() => {
