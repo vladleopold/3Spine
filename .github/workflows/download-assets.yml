@@ -121,6 +121,22 @@ jobs:
           node scripts/spa-websnap.mjs tree
           node scripts/spa-websnap.mjs done
 
+      - name: Скачать через AnyDownload (render)
+        continue-on-error: true
+        env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+        run: |
+          npm install -g anydownload@2.3.9
+          mkdir -p artifacts/anydownload
+          printf 'n\n' | timeout 600 anydownload "$URL" \
+            --mode render \
+            --headless \
+            --wait "${{ inputs.spa_wait || '4000' }}" \
+            --preset page \
+            -o artifacts/anydownload \
+            -v || echo "anydownload завершился с кодом $?"
+          find artifacts/anydownload -type f | wc -l
+
 
       - uses: actions/cache@v4
         id: ext-cache
