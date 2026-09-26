@@ -521,14 +521,22 @@ async function main() {
 
     // панели DevTools и открываем нужную без ввода с клавиатуры
     {
-      // без contextId: контекст по умолчанию фронтенда DevTools
-      const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
-      log(`   панели DevTools: ${list}`);
-      const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', unpackedExtensionId(EXT_DIR)))
-        .catch((e) => 'ошибка: ' + e.message);
-      log(`   ${shown}`);
-      await sleep(2000);
-      if (/панель открыта/.test(String(shown))) pressed = pressed || false;
+      // фронтенд DevTools грузит модули не сразу — ждём появления globalThis.UI
+      let ready = false;
+      for (let i = 0; i < 20 && !ready; i++) {
+        ready = await evalIn('!!globalThis.UI').catch(() => false);
+        if (!ready) await sleep(500);
+      }
+      if (!ready) {
+        log('   UI во фронтенде DevTools не появился — панель откроем через контексты');
+      } else {
+        const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
+        log(`   панели DevTools: ${list}`);
+        const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', unpackedExtensionId(EXT_DIR)))
+          .catch((e) => 'ошибка: ' + e.message);
+        log(`   ${shown}`);
+        await sleep(2000);
+      }
     }
 
     // панель лежит во фрейме внутри окна DevTools — ищем его и жмём кнопку там
