@@ -867,8 +867,10 @@
       }
       const convertText = await extractLog("convert-log.txt");
       if (convertText) {
-        logFromText(convertText, /^OK|^KEEP|^FAIL|^done/, (line) =>
-          /^FAIL/.test(line) ? "err" : /^OK/.test(line) ? "ok" : /^done/.test(line) ? "info" : "dim");
+        logFromText(convertText, /^OK|^KEEP|^FAIL|^done|^repair/, (line) =>
+          /^FAIL/.test(line) ? "err"
+            : /лечение/.test(line) ? "ok"
+            : /^OK/.test(line) ? "ok" : /^done|^repair/.test(line) ? "info" : "dim");
       }
       const compileText = await extractLog("compile-log.txt");
       if (compileText) {

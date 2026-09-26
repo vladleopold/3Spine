@@ -39,6 +39,11 @@ jobs:
       - name: Convert input.zip (native Linux converter, параллельно)
         env:
           CONVERT_WORKERS: "8"
+          # лечение битых скелетов (U+FFFD): SPINE_REPAIR=1 включает
+          SPINE_REPAIR: "1"
+          SPINE_REPAIR_BUDGET: "1200"
+          SPINE_REPAIR_MIN_CONFIDENCE: "0.5"
+          SPINE_REPAIR_MAX_FILES: "60"
         run: |
           set -euo pipefail
           test -f input.zip || { echo "input.zip не найден на ветке inbox"; exit 1; }

@@ -663,6 +663,20 @@ def main() -> None:
             except Exception as e:
                 print(f"compile-block: индекс превью не записан: {e}")
 
+        # отчёт: добавляем сведения о лечении
+        repair_note = ""
+        rep_path = os.path.join(src, "repair-report.json")
+        if os.path.exists(rep_path):
+            try:
+                with open(rep_path, encoding="utf-8") as f:
+                    rr = json.load(f)
+                healed = rr.get("healed") or []
+                if healed:
+                    repair_note = ("\nВосстановлено лечением повреждённых скелетов: %d "
+                                   "(см. repair-report.json)" % len(healed))
+            except Exception:
+                repair_note = ""
+
         # человекочитаемый отчёт по прогону
         try:
             spine_n = sum(1 for r, _d, fs2 in os.walk(src) for f2 in fs2 if f2.endswith(".spine"))
@@ -680,6 +694,9 @@ def main() -> None:
                 f"Картинок после распаковки атласов:   {img_n}",
                 "",
             ]
+            if repair_note:
+                report.append(repair_note.strip())
+                report.append("")
             if known_corrupt:
                 report.append(f"БИТЫЕ ФАЙЛЫ ({len(known_corrupt)}) — перезаписаны текстовым режимом,")
                 report.append("исходные байты утеряны, конвертация невозможна. Нужен чистый архив:")
