@@ -203,4 +203,6 @@ async function main() {
   log(`   готово за ${((Date.now() - t0) / 1000).toFixed(1)}с`);
 }
 
-main().catch((e) => { console.error('ошибка загрузки расширения:', e.message); process.exit(1); });
+main()
+  .then(() => { process.exit(0); })          // WebSocket держит цикл событий — выходим явно
+  .catch((e) => { console.error('ошибка загрузки расширения:', e.message); process.exit(1); });
