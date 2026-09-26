@@ -57,6 +57,38 @@ async function loadUnpacked(port, extPath) {
   return (m.result && m.result.id) || '';
 }
 
+
+// Chrome не даёт открыть content.html вкладкой (ERR_BLOCKED_BY_CLIENT).
+// Открываем страницу расширения и встраиваем панель iframe'ом на том же origin —
+// свои ресурсы расширение в свои страницы грузит разрешает.
+async function openPanel(ctx, extId, shimSrc) {
+  for (const f of ['content.html', 'popup.html', 'devtools.html']) {
+    const p = await ctx.newPage();
+    try {
+      await p.goto(`chrome-extension://${extId}/${f}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      log(`   страница расширения открыта: ${f}`);
+      if (f === 'content.html') return { host: p, panel: p };
+      await p.addInitScript(shimSrc);
+      await p.evaluate((src) => new Promise((res) => {
+        const fr = document.createElement('iframe');
+        fr.style.cssText = 'width:1200px;height:800px;border:0';
+        fr.src = src;
+        fr.onload = () => res(true);
+        document.body.appendChild(fr);
+      }), `chrome-extension://${extId}/content.html`);
+      for (let i = 0; i < 20; i++) {
+        const fr = p.frames().find((x) => x.url().includes('content.html'));
+        if (fr) { log('   панель встроена как iframe'); return { host: p, panel: fr }; }
+        await sleep(500);
+      }
+    } catch (e) {
+      log(`   ${f}: ${e.message.split('\n')[0].slice(0, 90)}`);
+    }
+    await p.close().catch(() => {});
+  }
+  return null;
+}
+
 async function dumpExtensions(ctx) {
   const p = await ctx.newPage();
   try {
@@ -211,22 +243,14 @@ async function main() {
   const candidates = [...new Set([loaded, fromProfile, computed, fromTargets].filter(Boolean))];
   log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
 
-  let extId = '';
   let panel = null;
+  const shimSrc = SHIM(JSON.stringify({ resources, har, tabId: 0 }));
   for (const id of candidates) {
-    const test = await ctx.newPage();
-    try {
-      await test.goto(`chrome-extension://${id}/content.html`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      extId = id;
-      panel = test;
-      log(`панель открылась с id ${id}`);
-      break;
-    } catch (e) {
-      log(`   id ${id}: ${e.message.split('\n')[0].slice(0, 90)}`);
-      await test.close().catch(() => {});
-    }
+    log(`   пробуем id ${id}`);
+    const found = await openPanel(ctx, id, shimSrc);
+    if (found) { panel = found.panel; break; }
   }
-  if (!extId) throw new Error('ни один id не открыл панель Resources Saver');
+  if (!panel) throw new Error('ни один id не открыл панель Resources Saver');
 
   // 3) настоящий id вкладки игры: content.js берёт список сайтов через
   //    chrome.tabs.get(chrome.devtools.inspectedWindow.tabId) — с фиктивным id
@@ -240,8 +264,14 @@ async function main() {
   log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
 
   // 4) подменяем панели chrome.devtools собранными ресурсами и жмём кнопку
-  await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
-  await panel.reload({ waitUntil: 'domcontentloaded' });
+  if (panel === panel.page()) {
+    await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
+    await panel.reload({ waitUntil: 'domcontentloaded' });
+  } else {
+    // панель уже встроена: обновляем подмену и перезагружаем фрейм
+    await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
+    await panel.evaluate(() => location.reload()).catch(() => {});
+  }
   const btn = panel.locator('#up-save');
   await btn.waitFor({ state: 'visible', timeout: 20000 });
   const label = (await btn.textContent().catch(() => '')) || '';
