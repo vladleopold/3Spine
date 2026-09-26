@@ -435,6 +435,26 @@ def report_diagnosis(d: dict) -> None:
     log("отпечаток движка по HTML: %s" % d["engine"])
 
 
+def collect_bodies(url: str, budget_ms: int = 30000) -> tuple:
+    """Собрать тела ресурсов из браузерной сессии (подход Resources Saver).
+
+    Возвращает (словарь url->bytes, отчёт). Куки и clearance применяются самим
+    браузером, поэтому повторные запросы с нашего IP не нужны.
+    """
+    import asyncio
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        from spine_aggressive import BODY_STORE, collect
+    except Exception as e:                                 # noqa: BLE001
+        return {}, {"error": str(e)}
+    BODY_STORE.clear()
+    try:
+        asyncio.run(collect(url, bodies=True))
+    except Exception as e:                                 # noqa: BLE001
+        return dict(BODY_STORE), {"error": str(e)}
+    return dict(BODY_STORE), {"count": len(BODY_STORE)}
+
+
 def game_id_from_url(url: str) -> str:
     """Идентификатор игры из query-параметров (game-term, game, gameName, symbol)."""
     from urllib.parse import parse_qs, urlsplit
@@ -741,6 +761,8 @@ def main() -> int:
                     help="1 — не тратить время, если страница под антиботом")
     ap.add_argument("--pw", type=int, default=0,
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
+    ap.add_argument("--bodies", type=int, default=1,
+                    help="1 — добирать тела из сессии браузера (подход Resources Saver)")
     ap.add_argument("--total-budget", type=int, default=55,
                     help="жёсткий лимит секунд на всю выкачку")
     ap.add_argument("--pw-min-urls", type=int, default=120,
@@ -1066,6 +1088,33 @@ def main() -> int:
         % (len(files), total / 1048576, report["seconds"], args.total_budget))
     if total > limit:
         log("ВНИМАНИЕ: архив больше лимита %d МБ" % args.max_mb)
+    if not files and args.bodies:
+        log("по URL ничего нет — забираю тела ресурсов из сессии браузера")
+        bodies, rep = collect_bodies(args.url, int(min(30000, max(8000, left() * 1000))))
+        log("тел получено: %d%s" % (len(bodies), (" (%s)" % rep["error"]) if rep.get("error") else ""))
+        good = 0
+        for u, data in bodies.items():
+            path = URL2NAME.get(u) or u.split("://", 1)[-1].split("/", 1)[-1] or "index"
+            path = re.sub(r"[\\:*?\"<>|]", "_", path)
+            state = _guard_state(u, data)
+            dst_dir = os.path.join(root, os.path.dirname(path))
+            if state == "reject":
+                continue
+            if state == "manifest":
+                dst_dir = os.path.join(root, "_manifests", os.path.dirname(path))
+            os.makedirs(dst_dir, exist_ok=True)
+            with open(os.path.join(dst_dir, os.path.basename(path)), "wb") as f:
+                f.write(data)
+            good += 1
+        if good:
+            log("из тел браузера сохранено файлов: %d" % good)
+            files, total = [], 0
+            for dirpath, _dirs, fns in os.walk(root):
+                for fn in fns:
+                    fp = os.path.join(dirpath, fn)
+                    files.append((os.path.relpath(fp, root), os.path.getsize(fp)))
+                    total += os.path.getsize(fp)
+
     if not files:
         log("--- СВОДКА ПОИСКА ---")
         log("HTTP %s, антибот: %s" % (diag["status"], ", ".join(diag["antibot"][:3]) or "нет"))

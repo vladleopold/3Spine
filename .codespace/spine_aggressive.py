@@ -37,6 +37,7 @@ try:
 except ImportError:
     ACCEPT = "gzip, deflate"
 
+BODY_STORE: dict = {}
 BUDGET = {"pragmatic": 34, "playson": 16, "3oaks": 26, "generic": 30}
 CLICK_TEXTS = ("Play", "Start", "Continue", "OK", "Accept", "Spin", "Real Play", "Demo", "Запустить", "Играть")
 
@@ -204,11 +205,12 @@ async def harvest_json_manifest(text: str, base: str, found: set) -> None:
     walk(data)
 
 
-async def collect(url: str) -> set:
+async def collect(url: str, bodies: bool = True) -> set:
     prov = provider(url)
     budget = BUDGET.get(prov, 16)
     found: set = set()
     shells: set = set()
+    bodies_enabled = bodies
     early = 30 if prov == "pragmatic" else 80
 
     async with async_playwright() as p:
@@ -228,9 +230,32 @@ async def collect(url: str) -> set:
             if is_spine(req.url):
                 found.add(req.url)
 
+        bodies: dict = {}
+        MAX_BODY = 24 * 1024 * 1024
+
+        async def grab_body(resp):
+            """Тело ответа из браузерной сессии: куки/clearance уже применены,
+            второй HTTP-запрос не нужен — значит нет и 403/soft-404."""
+            if not is_spine(resp.url):
+                return
+            try:
+                if resp.status != 200:
+                    return
+                ct = (resp.headers.get("content-type") or "").lower()
+                data = await resp.body()
+            except Exception:                             # noqa: BLE001
+                return
+            if not data or len(data) < 64 or len(data) > MAX_BODY:
+                return
+            if "html" in ct and not resp.url.lower().endswith((".html", ".htm")):
+                return
+            bodies[resp.url] = data
+
         async def on_response(resp):
             if is_spine(resp.url):
                 found.add(resp.url)
+            if bodies_enabled:
+                asyncio.ensure_future(grab_body(resp))
             if SHELL_EXT.search(resp.url):
                 shells.add(resp.url)
             u = resp.url
@@ -438,6 +463,8 @@ async def collect(url: str) -> set:
             print("  диагностика: шеллов=%d%s" % (
                 len(shells), (", " + ", ".join(list(shells)[:2])) if shells else ""), flush=True)
         await browser.close()
+    if bodies_enabled and bodies:
+        BODY_STORE.update(bodies)
     return found
 
 
