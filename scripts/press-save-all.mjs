@@ -7,6 +7,7 @@ import { execSync } from 'child_process';
 
 const URL_ = process.env.URL || '';
 const PROFILE_DIR = path.resolve(process.env.PROFILE || './.chrome-profile');
+const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');   // нужен для папки загрузок
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const TOTAL_LIMIT = parseInt(process.env.TOTAL_LIMIT_MS || '30000', 10);   // лимит шага
