@@ -485,11 +485,11 @@ async function main() {
     log(`   контекстов DevTools: ${contexts.length}`);
 
     // панели DevTools и открываем нужную без ввода с клавиатуры
-    if (contexts.length) {
-      const dc = contexts[0];
-      const list = await evalIn(LIST_PANELS, dc).catch((e) => 'ошибка: ' + e.message);
+    {
+      // без contextId: контекст по умолчанию фронтенда DevTools
+      const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
       log(`   панели DevTools: ${list}`);
-      const shown = await evalIn(SHOW_PANEL, dc).catch((e) => 'ошибка: ' + e.message);
+      const shown = await evalIn(SHOW_PANEL).catch((e) => 'ошибка: ' + e.message);
       log(`   ${shown}`);
       await sleep(2000);
       if (/панель открыта/.test(String(shown))) pressed = pressed || false;

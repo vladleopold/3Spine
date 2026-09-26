@@ -59,8 +59,8 @@ gx="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^X=/{print $2}')"
 gy="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^Y=/{print $2}')"
 log "геометрия окна: ${gw}x${gh} в (${gx},${gy})"
 # док по умолчанию снизу — кликаем в нижней трети, это DevTools
-for frac in 0.75 0.9 0.6; do
-  xdotool mousemove --window "$win" $((gw / 2)) $((gh * frac / 1)) click 1
+for pct in 75 90 60; do
+  xdotool mousemove --window "$win" $((gw / 2)) $((gh * pct / 100)) click 1
   sleep 1
 done
 # если DevTools пристыкован справа — кликаем в правой части
