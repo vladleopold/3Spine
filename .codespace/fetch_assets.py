@@ -836,12 +836,16 @@ def main() -> int:
 
     # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами
     thin = len(urls) < args.pw_min_urls or not (picked["json"] or picked["atlas"] or picked["skel"])
+    # SPA-заказ без явных игровых маркеров: netlog не дотягивается, нужен клик
+    need_pw = (bool(diag["antibot"]) or not looks_game) and not blocked
     if hopeless or left() < 20:
         thin = False
+    if need_pw and left() > 18:
+        thin = True
     if args.pw == 1 or (args.pw == -1 and thin):
         log("netlog без Spine-кандидатов (url=%d, json=%d, atlas=%d) -> Playwright с кликами"
             % (len(urls), len(picked["json"]), len(picked["atlas"])))
-        extra = pw_collect(args.url, max(args.budget_ms, 30000))
+        extra = pw_collect(args.url, int(min(34000, max(14000, left() * 1000))))
         if extra:
             add = len(set(extra) - urls)
             log("Playwright добавил адресов: %d (всего %d)" % (add, len(urls) + add))
