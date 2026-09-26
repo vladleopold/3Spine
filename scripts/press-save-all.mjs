@@ -338,11 +338,16 @@ async function collectFromGame(browser) {
 const LIST_PANELS = `(() => {
   try {
     const iv = (globalThis.UI && UI.inspectorView) || null;
-    const pane = iv && (iv._tabbedPane || iv.tabbedPane);
-    if (pane && pane.tabs) {
-      return JSON.stringify(pane.tabs.map((t) => String(t.id || t.name || '')));
+    if (!iv) return 'нет UI.inspectorView';
+    const keys = Object.keys(iv).filter((k) => /panel|tab/i.test(k));
+    let extra = '';
+    for (const k of ['panels', 'tabbedPane', '_tabbedPane', 'view']) {
+      const v = iv[k];
+      if (v && Array.isArray(v.tabs)) {
+        extra += ' ' + k + '=[' + v.tabs.map((t) => t.id || t.name).join(',') + ']';
+      }
     }
-    return 'нет tabbedPane';
+    return 'ключи: ' + keys.join(',') + ' |' + extra;
   } catch (e) { return 'ошибка: ' + e.message; }
 })()`;
 
@@ -350,13 +355,26 @@ const SHOW_PANEL = `(async () => {
   try {
     const iv = (globalThis.UI && UI.inspectorView) || null;
     if (!iv) return 'нет UI.inspectorView';
-    const pane = iv._tabbedPane || iv.tabbedPane;
-    if (!pane || !pane.tabs) return 'нет панелей';
-    const ids = pane.tabs.map((t) => String(t.id || t.name || ''));
-    const want = ids.find((id) => /resource/i.test(id)) || null;
-    if (!want) return 'панель Resources Saver не найдена среди: ' + ids.join(', ');
-    await iv.showPanel(want);
-    return 'панель открыта: ' + want;
+    const ids = ${JSON.stringify([])};
+    // 1) id панели = id расширения
+    for (const want of ids.concat(['__EXT_ID__'])) {
+      if (!want) continue;
+      try { await iv.showPanel(want); return 'панель открыта по id: ' + want; }
+      catch (e) { /* пробуем следующий */ }
+    }
+    // 2) любой доступный список панелей
+    for (const k of ['_tabbedPane', 'tabbedPane', 'panels']) {
+      const v = iv[k];
+      if (v && Array.isArray(v.tabs)) {
+        for (const t of v.tabs) {
+          const id = String(t.id || t.name || '');
+          if (!/resource/i.test(id)) continue;
+          await iv.showPanel(id);
+          return 'панель открыта: ' + id;
+        }
+      }
+    }
+    return 'панель не найдена';
   } catch (e) { return 'ошибка: ' + e.message; }
 })()`;
 
@@ -489,7 +507,8 @@ async function main() {
       // без contextId: контекст по умолчанию фронтенда DevTools
       const list = await evalIn(LIST_PANELS).catch((e) => 'ошибка: ' + e.message);
       log(`   панели DevTools: ${list}`);
-      const shown = await evalIn(SHOW_PANEL).catch((e) => 'ошибка: ' + e.message);
+      const shown = await evalIn(SHOW_PANEL.replace('__EXT_ID__', extIdGuess()))
+        .catch((e) => 'ошибка: ' + e.message);
       log(`   ${shown}`);
       await sleep(2000);
       if (/панель открыта/.test(String(shown))) pressed = pressed || false;
