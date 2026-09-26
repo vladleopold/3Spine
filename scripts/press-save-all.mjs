@@ -157,7 +157,11 @@ async function pressInDevtoolsFrontend() {
   try {
     log(`   файлы профиля: ${fs.readdirSync(PROFILE_DIR).slice(0, 25).join(' ')}`);
   } catch (e) { log(`   профиль не читается: ${e.message}`); }
-  const ep = devtoolsEndpoint(PROFILE_DIR);
+  let ep = '';
+  for (let i = 0; i < 10 && !ep; i++) {         // файл может появиться не сразу
+    ep = devtoolsEndpoint(PROFILE_DIR);
+    if (!ep) await sleep(500);
+  }
   if (!ep) {
     return 'DevToolsActivePort не найден — фронтенд DevTools недоступен, нажать кнопку нечем';
   }
@@ -354,7 +358,12 @@ async function main() {
   }
   if (!clicked) log('   кнопка нажата вводом X11 (CDP-путь недоступен)');
 
-  // 4) ждём ZIP в остатке лимита (после нажатия X11 архив собирается ~15 с)
+  // нажатия не было — архив и не мог начать собираться, ждать его бессмысленно
+  if (!pressed) {
+    throw new Error(`кнопка Save All Resources НЕ НАЖАТА: ${why} — архив не создавался (${since()})`);
+  }
+
+  // 4) ждём ZIP в остатке лимита (после нажатия архив собирается ~15 с)
   let dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
   let zip = null;
   while (Date.now() < dl) {
@@ -362,25 +371,6 @@ async function main() {
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(1000);
   }
-  if (!zip && left() > 4000) {
-    // ещё одно нажатие X11 — панель могла быть не в фокусе
-    log('   ZIP пока нет, повторяю нажатие');
-    try {
-      log(`   ${await pressSaveWithMouse()}`);
-      log(`   ${pressSaveWithKeyboard()}`);
-    } catch (e) { log(`   повтор не сработал: ${e.message}`); }
-    dl = Date.now() + Math.max(2000, left());
-    while (Date.now() < dl) {
-      const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
-      if (z.length) { zip = z[z.length - 1]; break; }
-      await sleep(1000);
-    }
-  }
-
-  if (!zip && !pressed) {
-    throw new Error(`кнопка Save All Resources НЕ НАЖАТА: ${why} — архив не создавался (${since()})`);
-  }
-
   if (!zip) {
     // нажатие было, но архива нет — пробуем запасной путь
     log('нажатие было, но архива нет — пробую запасной путь');
