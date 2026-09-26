@@ -648,6 +648,10 @@ def main() -> int:
         all_dirs = bases_of(urls)
         game_dirs = [d for d in all_dirs
                      if re.search(r"(game|asset|res|data|bundle|content|media|cdn)", d, re.I)]
+        if gs2c:
+            # у gs2c манифесты лежат в .../desktop/game/ и .../desktop/client/
+            near = [d for d in all_dirs if d.endswith("/game") or d.endswith("/client")]
+            game_dirs = near + [d for d in game_dirs if d not in near]
         dirs = []
         for d in sorted(game_dirs, key=lambda x: -x.count("/")) + sorted(all_dirs, key=lambda x: -x.count("/")):
             if d not in dirs:
