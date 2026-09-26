@@ -89,51 +89,6 @@ function geometry(win) {
   return g;
 }
 
-async function pressSaveWithMouse() {
-  // 1) отдельное окно DevTools
-  const devWin = xdo('search --onlyvisible --name "DevTools" | tail -1');
-  if (devWin) {
-    xdo(`windowactivate --sync ${devWin}`);
-    const g = geometry(devWin);
-    log(`   окно DevTools: ${devWin} ${g.width}x${g.height}`);
-    // кнопка «Save All Resources» — в шапке панели, слева сверху
-    xdo(`mousemove --window ${devWin} 120 30 click 1`);
-    return 'клик мышью по кнопке в окне DevTools';
-  }
-  // 2) DevTools пристыкован — кликаем в области панели окна Chrome
-  const win = xdo('search --onlyvisible --class "google-chrome" | tail -1')
-    || xdo('search --onlyvisible --name "Chrome" | tail -1');
-  if (!win) return 'окно Chrome не найдено';
-  const g = geometry(win);
-  const w = parseInt(g.width || '1500', 10);
-  const h = parseInt(g.height || '950', 10);
-  xdo(`windowactivate --sync ${win}`);
-  // док внизу: панель начинается на ~35% снизу; док справа: панель в правой части
-  const spots = [
-    [Math.round(w * 0.08), Math.round(h * 0.62)],
-    [Math.round(w * 0.08), Math.round(h * 0.42)],
-    [Math.round(w * 0.86), Math.round(h * 0.42)],
-    [Math.round(w * 0.08), Math.round(h * 0.18)],
-  ];
-  for (const [dx, dy] of spots) {
-    xdo(`mousemove --window ${win} ${dx} ${dy} click 1`);
-    await sleep(700);
-  }
-  return `клики по панели в пристыкованном DevTools (окно ${w}x${h})`;
-}
-
-function pressSaveWithKeyboard() {
-  const win = xdo('search --onlyvisible --class "google-chrome" | tail -1')
-    || xdo('search --onlyvisible --name "Chrome" | tail -1');
-  if (!win) return 'окно Chrome не найдено';
-  xdo(`windowactivate --sync ${win}`);
-  // первый фокусируемый элемент панели — как раз кнопка сохранения
-  for (let i = 0; i < 3; i++) {
-    xdo(`key --window ${win} Tab`);
-    xdo(`key --window ${win} Return`);
-  }
-  return 'Tab+Enter в панели';
-}
 
 
 // Прямой доступ к фронтенду DevTools: Chrome пишет его порт в DevToolsActivePort
@@ -278,17 +233,6 @@ async function main() {
   why = String(clicked);
   log(`   фронтенд: ${why}`);
   if (/НАЖАТА/.test(why)) pressed = true; else why = why;
-  if (!pressed) {
-    try {
-      const how = await pressSaveWithMouse();
-      log(`   ${how}`);
-      const kb = pressSaveWithKeyboard();
-      log(`   ${kb} (это попытка, результат проверим по архиву)`);
-    } catch (e) {
-      log(`   ввод X11 не сработал: ${e.message}`);
-    }
-  }
-
   const skipCdp = true;   // окно DevTools не отдаётся в CDP — жмём только вводом X11
   for (const dt of (clicked || skipCdp ? [] : devtools)) {
     let sid;
@@ -356,7 +300,6 @@ async function main() {
       if (clicked) break;
     }
   }
-  if (!clicked) log('   кнопка нажата вводом X11 (CDP-путь недоступен)');
 
   // нажатия не было — архив и не мог начать собираться, ждать его бессмысленно
   if (!pressed) {
@@ -371,29 +314,7 @@ async function main() {
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(1000);
   }
-  if (!zip) {
-    // нажатие было, но архива нет — пробуем запасной путь
-    log('нажатие было, но архива нет — пробую запасной путь');
-    await collectResources();
-    if (!pc) { log('   панель недоступна по CDP, повторное нажатие только вводом X11'); }
-    const again = pc ? await pc.eval(`(() => {
-      const b = document.getElementById('up-save');
-      if (!b) return 'кнопки нет';
-      b.click();
-      return 'повторно нажата';
-    })()`).catch((e) => 'ошибка: ' + e.message) : 'пропущено';
-    log(`   ${again} (${since()})`);
-    const dl2 = Date.now() + Math.max(2000, left());
-    while (Date.now() < dl2) {
-      const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
-      if (z.length) { zip = z[z.length - 1]; break; }
-      await sleep(1000);
-    }
-  }
-  if (!zip) {
-    // главный вывод: кнопка не нажата (окно не активировалось) — архив не начи��ался
-    throw new Error(`кнопка Save All Resources не нажата — архив не создавался (${since()})`);
-  }
+  if (!zip) throw new Error(`кнопка нажата, но архив не создался за ${since()}`);
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
   process.exit(0);
 }
