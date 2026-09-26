@@ -51,12 +51,28 @@ else
   devtools_open && log "DevTools открыт со второй попытки" || log "DevTools всё ещё не открыт"
 fi
 
-# 3) только теперь выбираем вкладку Resources Saver через командную палитру
-xdotool key --window "$win" --clearmodifiers ctrl+shift+p
+# 3) отдаём фокус самому DevTools: кликаем внутри его области,
+#    иначе ctrl+shift+p уходит в страницу и палитра не открывается
+gw="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^WIDTH=/{print $2}')"
+gh="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^HEIGHT=/{print $2}')"
+gx="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^X=/{print $2}')"
+gy="$(xdotool getwindowgeometry --shell "$win" | awk -F= '/^Y=/{print $2}')"
+log "геометрия окна: ${gw}x${gh} в (${gx},${gy})"
+# док по умолчанию снизу — кликаем в нижней трети, это DevTools
+for frac in 0.75 0.9 0.6; do
+  xdotool mousemove --window "$win" $((gw / 2)) $((gh * frac / 1)) click 1
+  sleep 1
+done
+# если DevTools пристыкован справа — кликаем в правой части
+xdotool mousemove --window "$win" $((gw * 85 / 100)) $((gh / 2)) click 1
+sleep 1
+
+# 4) только теперь выбираем вкладку Resources Saver через командную палитру
+xdotool key --clearmodifiers ctrl+shift+p
 sleep 2
-xdotool type --window "$win" --delay 60 "Resources Saver"
+xdotool type --delay 60 "Resources Saver"
 sleep 2
-xdotool key --window "$win" Return
+xdotool key Return
 sleep 4
 log "вкладка Resources Saver выбрана через командную палитру"
 
