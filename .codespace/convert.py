@@ -212,6 +212,7 @@ def main():
         repair_min_conf = float(os.environ.get("SPINE_REPAIR_MIN_CONFIDENCE", "0.5"))
         repair_max_files = int(os.environ.get("SPINE_REPAIR_MAX_FILES", "60"))
         repair_time_limit = float(os.environ.get("SPINE_REPAIR_TIME_LIMIT", "30"))
+        repair_allow_tail = float(os.environ.get("SPINE_REPAIR_ALLOW_TAIL", "0"))
         repair_deadline = time.monotonic() + repair_time_limit
         repair_state = {"on": repair_on, "left": repair_max_files, "done": [], "fail": []}
         repair_tool = None
@@ -222,7 +223,9 @@ def main():
                 repair_tool = skeleton_repair
                 loglines.append("repair: лечение битых скелетов включено "
                                 f"(бюджет {repair_budget}, мин. уверенность {repair_min_conf}, "
-                                f"макс. файлов {repair_max_files})")
+                                f"макс. файлов {repair_max_files}, "
+                                f"лимит времени {repair_time_limit:.0f} c, "
+                                f"хвост до {repair_allow_tail:.0%})")
             except Exception as e:
                 repair_tool = None
                 loglines.append(f"repair: модуль лечения недоступен: {e}")
@@ -250,7 +253,8 @@ def main():
             budget_here = max(200, int(repair_budget * scale))
             try:
                 parsed, rep = repair_tool.heal(data, budget=budget_here,
-                                                min_unknown_pct=0.0)
+                                                min_unknown_pct=0.0,
+                                                allow_tail=repair_allow_tail)
             except Exception as e:
                 repair_state["fail"].append({"file": rel, "error": f"{type(e).__name__}: {e}"})
                 return ""
