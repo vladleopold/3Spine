@@ -92,6 +92,54 @@ async function openPanel(ctx, extId, shimSrc) {
 
 // Chrome блокирует навигацию на chrome-extension://<id>/* (ERR_BLOCKED_BY_CLIENT).
 // Но расширение само открывает свои страницы: просим его service worker сделать это.
+// Прямая работа с CDP-целью: без Playwright (окно расширения в его списке не появляется)
+class RawCDP {
+  constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); }
+
+  static async connect(wsUrl) {
+    const ws = new WebSocket(wsUrl);
+    await new Promise((res, rej) => {
+      ws.addEventListener('open', res, { once: true });
+      ws.addEventListener('error', () => rej(new Error('WS не подключился')), { once: true });
+    });
+    const c = new RawCDP(ws);
+    ws.addEventListener('message', (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      const w = c.waiting.get(m.id);
+      if (!w) return;
+      c.waiting.delete(m.id);
+      m.error ? w.rej(new Error(m.error.message)) : w.res(m.result);
+    });
+    return c;
+  }
+
+  send(method, params = {}) {
+    const id = ++this.n;
+    this.ws.send(JSON.stringify({ id, method, params }));
+    return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
+  }
+
+  async eval(expression) {
+    const r = await this.send('Runtime.evaluate',
+      { expression, returnByValue: true, awaitPromise: true });
+    return r && r.result ? r.result.value : undefined;
+  }
+}
+
+// ждём цель панели среди целей Chrome
+async function panelTarget(port, extId, timeoutMs = 20000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try {
+      const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const t = ts.find((x) => (x.url || '').includes(`${extId}/content.html`));
+      if (t) return t;
+    } catch { /* список недоступен */ }
+    await sleep(500);
+  }
+  return null;
+}
+
 async function openPanelViaExtension(port, extId) {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const sw = targets.find((t) => t.type === 'service_worker'
@@ -289,18 +337,33 @@ async function main() {
     // расширение само открывает свою страницу — навигация извне заблокирована
     const ok = await openPanelViaExtension(PORT, id);
     if (!ok) continue;
-    for (let i = 0; i < 20; i++) {
-      const p = ctx.pages().find((x) => x.url().includes(`${id}/content.html`));
-      if (p) {
-        await p.addInitScript(shimSrc);
-        await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-        panel = p;
-        log('   панель открыта самим расширением');
-        break;
-      }
-      await sleep(500);
-    }
-    if (panel) break;
+    const t = await panelTarget(PORT, id);
+    if (!t) { log('   окно панели не появилось среди целей'); continue; }
+    log(`   панель открыта расширением: ${t.url}`);
+    const c = await RawCDP.connect(t.webSocketDebuggerUrl);
+    // реальный id вкладки игры — читаем из контекста расширения
+    const tabs = await c.eval(`new Promise((res) => chrome.tabs.query({}, (l) => res(
+        (l || []).map((x) => ({ id: x.id, url: x.url || '' })))))`).catch(() => []);
+    const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
+    const gameTab = (tabs || []).find((x) => x.url.startsWith(origin)) || (tabs || [])[0];
+    const realTabId = gameTab ? gameTab.id : 0;
+    log(`   вкладка игры: id=${realTabId} ${gameTab ? gameTab.url.slice(0, 60) : '—'}`);
+    // подмена chrome.devtools + перезагрузка панели
+    await c.send('Page.enable');
+    await c.send('Page.addScriptToEvaluateOnNewDocument',
+      { source: SHIM(JSON.stringify({ resources, har, tabId: realTabId })) });
+    await c.send('Page.reload', { ignoreCache: true });
+    await sleep(2500);
+    const clicked = await c.eval(`(() => {
+      const b = document.getElementById('up-save');
+      if (!b) return 'кнопки #up-save нет';
+      const t = (b.textContent || '').trim();
+      b.click();
+      return 'нажата: ' + t;
+    })()`).catch((e) => 'ошибка: ' + e.message);
+    log(`   ${clicked}`);
+    panel = { raw: c, clicked };
+    break;
   }
   if (!panel) throw new Error('ни один id не открыл панель Resources Saver');
 
