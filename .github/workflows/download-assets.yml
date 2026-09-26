@@ -66,9 +66,115 @@ jobs:
       - name: unit-тесты (пути, манифесты, Spine-пары)
         run: npm test
 
+  single:
+    name: Один запуск по списку URL
+    needs: tests
+    if: ${{ inputs.full == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Скачать через AnyDownload (render) по каждому URL
+        env:
+          URLS: ${{ inputs.urls }}
+          WAIT_MS: ${{ inputs.spa_wait || '8000' }}
+          ATTEMPTS: ${{ inputs.attempts || '3' }}
+          TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
+        run: |
+          npm install -g anydownload@2.3.9
+          i=0
+          echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
+            i=$((i + 1))
+            slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
+            dir="artifacts/$slug"
+            best=0
+            for a in $(seq 1 "$ATTEMPTS"); do
+              try="$dir.try-$a"
+              rm -rf "$try"; mkdir -p "$try"
+              echo "=== [$i] $url — попытка $a/$ATTEMPTS"
+              printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$url" \
+                --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" -v || true
+              n=$(find "$try" -type f 2>/dev/null | wc -l)
+              echo "попытка $a: файлов $n"
+              if [ "$n" -gt "$best" ]; then
+                best=$n; rm -rf "$dir.keep"; mv "$try" "$dir.keep"
+              else
+                rm -rf "$try"
+              fi
+            done
+            mkdir -p "$dir"
+            [ -d "$dir.keep" ] && mv "$dir.keep"/* "$dir"/ 2>/dev/null || true
+            rm -rf "$dir.keep"
+            echo "$url -> $dir ($(find "$dir" -type f | wc -l) файлов)"
+            echo "$url" > "$dir/url.txt"
+          done
+
+      - name: Восстановить имена файлов (hash_to_name)
+        continue-on-error: true
+        run: |
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            echo "=== $d"
+            python3 .codespace/hash_to_name/manifest_resolver.py "$d" --apply || true
+            python3 .codespace/hash_to_name/restore_names_cli.py "$d" || true
+          done
+
+      - name: Собрать spine-паки
+        run: |
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            node scripts/spine-pack.mjs "$d" "$d/spine"
+          done
+
+      - name: Распаковать спрайты из атласов
+        continue-on-error: true
+        run: |
+          python3 -m pip install --quiet Pillow
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            mkdir -p "$d/sprites"
+            UNPACK_LAYOUT=global python3 .codespace/unpack_atlases.py "$d" --output "$d/sprites" || true
+            echo "$d: распакованных спрайтов $(find "$d/sprites" -type f | wc -l)"
+          done
+
+      - name: Отчёт по Spine
+        if: always()
+        run: |
+          set -euo pipefail
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            N=$(find "$d" -type f | wc -l)
+            A=$(find "$d" -type f -name '*.atlas' | wc -l)
+            K=$(find "$d" -type f -name '*.skel' | wc -l)
+            B=$(find "$d" -type f -name '*.bin' | wc -l)
+            IMG=$(find "$d" -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.webp' -o -name '*.avif' \) | wc -l)
+            MB=$(du -sm "$d" | cut -f1)
+            printf '### %s\nфайлов: %s | atlas: %s | skel: %s | bin: %s | картинок: %s | МБ: %s\n\n' \
+              "$(cat "$d/url.txt")" "$N" "$A" "$K" "$B" "$IMG" "$MB" >> "$GITHUB_STEP_SUMMARY"
+            echo "$d файлов=$N atlas=$A skel=$K bin=$B img=$IMG МБ=$MB"
+            du -sm "$d"/* 2>/dev/null | sort -n | awk '{printf "  %s: %s МБ\n", $2, $1}'
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: slots-${{ github.run_id }}
+          path: artifacts
+          retention-days: 14
+          if-no-files-found: warn
+
   download:
     name: ${{ matrix.name }}
     needs: tests
+    if: ${{ inputs.full != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -171,6 +277,11 @@ jobs:
           printf '### %s\nфайлов: %s | atlas: %s | skel: %s | bin: %s | картинок: %s\n\n' \
             "${{ matrix.name }}" "$N" "$A" "$K" "$B" "$IMG" >> "$GITHUB_STEP_SUMMARY"
           echo "файлов=$N atlas=$A skel=$K bin=$B img=$IMG"
+          echo "--- размеры по каталогам (МБ):"
+          du -sm artifacts/* 2>/dev/null | sort -n | awk '{printf "  %s: %s МБ\n", $2, $1}'
+          echo "--- 10 самых тяжёлых файлов:"
+          find artifacts -type f -printf '%s %p\n' 2>/dev/null | sort -rn | head -10 \
+            | awk '{printf "  %.1f МБ %s\n", $1/1048576, $2}'
 
       - uses: actions/upload-artifact@v4
         if: always()
