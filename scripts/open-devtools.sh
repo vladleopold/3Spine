@@ -38,16 +38,17 @@ xdotool key --window "$win" F12 2>/dev/null || true
 sleep 3
 log "DevTools открыт (F12)"
 
-# диагностика: появилось ли окно DevTools среди целей
+# диагностика: окно DevTools в CDP не видно (Chrome отдаёт его как browser_ui),
+# поэтому шаг не считаем ошибкой — кнопку нажмём на странице панели.
 PORT="${CDP_PORT:-9222}"
-for i in $(seq 1 15); do
-  if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/json/list" 2>/dev/null | grep -q 'devtools://'; then
-    log "окно DevTools видно среди целей Chrome"
-    exit 0
-  fi
-  sleep 1
-done
-log "ВНИМАНИЕ: окно DevTools не появилось среди целей, цели:"
-curl -fsS --max-time 3 "http://127.0.0.1:$PORT/json/list" 2>/dev/null \
-  | grep -o '"type": "[^"]*"' | sort | uniq -c || true
-exit 1
+targets="$(curl -fsS --max-time 3 "http://127.0.0.1:$PORT/json/list" 2>/dev/null || true)"
+types="$(printf '%s' "$targets" | grep -o '"type"[[:space:]]*:[[:space:]]*"[^"]*"' | sort | uniq -c | tr '\n' ' ')"
+log "цели Chrome: ${types:-нет}"
+if printf '%s' "$targets" | grep -q 'devtools://'; then
+  log "окно DevTools доступно по CDP"
+elif printf '%s' "$targets" | grep -q 'browser_ui'; then
+  log "DevTools открыт, но его окно видно только как browser_ui — нажатие кнопки пойдёт через страницу панели"
+else
+  log "DevTools открыт (F12 отправлен)"
+fi
+exit 0

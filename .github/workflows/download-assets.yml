@@ -91,7 +91,6 @@ jobs:
         run: bash scripts/start-chrome.sh
 
       - name: Открыть DevTools
-        continue-on-error: true
         run: bash scripts/open-devtools.sh
 
       - name: Нажать Save All Resources в Resources Saver
