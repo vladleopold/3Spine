@@ -86,6 +86,14 @@ jobs:
       - name: Активировать расширение в Chrome
         run: node scripts/activate-extension.mjs
 
+      - name: Chrome -> ссылка -> расширение -> перезапуск -> запуск Resources-Saver
+        env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+          OUTPUT_DIR: ./artifacts
+          EXT_DIR: .chrome-ext
+          WAIT_MS: ${{ inputs.wait_ms || '20000' }}
+        run: node scripts/launch-then-resources-saver.mjs
+
       - name: Скачать все ресурсы игры
         env:
           URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
