@@ -533,7 +533,7 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       "String(location.href).startsWith('devtools://')", sid, best.id, 3000).catch(() => false);
     if (!isDevtoolsDoc) continue;
 
-    const SHADOW_ROOTS = `(root) => {
+    const SHADOW_ROOTS = `root => {
       const out = [root];
       const scan = (r) => {
         const all = r.querySelectorAll ? r.querySelectorAll('*') : [];
@@ -545,7 +545,7 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
 
     for (let i = 0; i < 8; i++) {
       const tabs = await browser.eval(`(() => {
-        const roots = ${SHADOW_ROOTS}(document);
+        const roots = (${SHADOW_ROOTS})(document);
         const names = [];
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
           const role = el.getAttribute && el.getAttribute('role');
@@ -558,7 +558,7 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       log(`   ${tabs}`);
 
       const tabClicked = await browser.eval(`(() => {
-        const roots = ${SHADOW_ROOTS}(document);
+        const roots = (${SHADOW_ROOTS})(document);
         for (const r of roots) for (const el of r.querySelectorAll('*')) {
           if (el.children.length) continue;
           const t = (el.innerText || el.textContent || '').trim();
@@ -571,7 +571,7 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       log(`   ${tabClicked}`);
 
       const r = await browser.eval(`(() => {
-        const roots = ${SHADOW_ROOTS}(document);
+        const roots = (${SHADOW_ROOTS})(document);
         for (const r2 of roots) {
           const b = r2.querySelector('#up-save');
           if (!b) continue;
