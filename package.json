@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "download": "node scripts/download-resources.mjs",
+    "spa": "node scripts/spa-websnap.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
