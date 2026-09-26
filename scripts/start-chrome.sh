@@ -91,6 +91,10 @@ const bail = setTimeout(() => { console.error("Extensions.loadUnpacked: тайм
 })();
 ' || true
 
+log "хвост /tmp/chrome.log:"
+tail -n 12 /tmp/chrome.log 2>/dev/null | sed 's/^/  | /' >&2 || true
+grep -i -m5 'extension' /tmp/chrome.log 2>/dev/null | sed 's/^/  EXT: /' >&2 || true
+
 log "Chrome готов"
 exit 0
 log "Chrome не поднял порт отладки"; cat /tmp/chrome.log >&2 || true; exit 1
