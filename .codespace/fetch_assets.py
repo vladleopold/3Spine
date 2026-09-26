@@ -46,6 +46,8 @@ PROXY_HOSTS = set()
 # резидентный прокси для браузера: solves гео-блокировки и капчи
 BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
 PICKED_PROXY = os.environ.get("SPINE_PICKED_PROXY", "").strip()
+PROXY_POOL = []          # пул рабочих прокси (минимум 7)
+PROXY_IDX = [0]
 
 
 def proxy_flags() -> list:
@@ -119,7 +121,26 @@ def _fetch_via_picked(url: str, timeout: int = 60) -> bytes:
         return b""
 
 
-def auto_pick_proxy(target: str, limit: int = 40) -> str:
+def current_proxy() -> str:
+    if not PROXY_POOL:
+        return PICKED_PROXY or BROWSER_PROXY
+    return PROXY_POOL[PROXY_IDX[0] % len(PROXY_POOL)]
+
+
+def rotate_proxy(reason: str = "") -> str:
+    """Переключаемся на следующий прокси пула по кругу."""
+    global PICKED_PROXY, BROWSER_PROXY
+    if len(PROXY_POOL) < 2:
+        return current_proxy()
+    PROXY_IDX[0] = (PROXY_IDX[0] + 1) % len(PROXY_POOL)
+    PICKED_PROXY = BROWSER_PROXY = current_proxy()
+    log("ротация прокси%s → %d/%d: %s"
+        % ((" (%s)" % reason) if reason else "", PROXY_IDX[0] + 1, len(PROXY_POOL),
+           PICKED_PROXY))
+    return PICKED_PROXY
+
+
+def auto_pick_proxy(target: str, limit: int = 160, want: int = 7) -> str:
     """Подбираем рабочий публичный прокси, если сайт не отдаёт страницу напрямую."""
     global PICKED_PROXY, BROWSER_PROXY
     if BROWSER_PROXY or not target.lower().startswith("http"):
@@ -149,10 +170,15 @@ def fetch(url: str, timeout: int = 60) -> bytes:
     """Браузерные заголовки; при блокировке (403) — автоматически edge-прокси."""
     from urllib.parse import urlsplit as _us
     host = _us(url).netloc
-    if host in PROXY_HOSTS and PICKED_PROXY:
-        data = _fetch_via_picked(url, timeout)
-        if data:
-            return data
+    if host in PROXY_HOSTS and (PICKED_PROXY or PROXY_POOL):
+        for _attempt in range(max(1, len(PROXY_POOL))):
+            data = _fetch_via_picked(url, timeout)
+            if data:
+                return data
+            if len(PROXY_POOL) < 2:
+                break
+            rotate_proxy("не ответил")
+        return b""
     if PROXY and host in PROXY_HOSTS:
         data = _fetch_via_proxy(url, timeout, quiet=True)
         if data:
