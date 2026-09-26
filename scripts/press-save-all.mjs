@@ -515,6 +515,15 @@ async function pressInAnyDevtoolsWindow(browser, devtools) {
       const ttl = await browser.eval('String(document.title || "")', sid, cx.id, 2500)
         .catch(() => '');
       log(`   окно ${t.targetId.slice(0, 6)} контекст ${cx.id}: элементов=${n} title=${String(ttl).slice(0, 24)}`);
+      if (n < 200) {
+        const d = await browser.eval(`(() => {
+          const ks = Object.keys(globalThis).filter((k) => /^(UI|Root|Inspector|Common|DevTools|Host|Protocol)/.test(k));
+          return 'url=' + String(location.href).slice(0, 90)
+            + ' || глобалы=[' + ks.join(',') + ']'
+            + ' || html=' + String(document.documentElement.outerHTML).replace(/\\s+/g, ' ').slice(0, 300);
+        })()`, sid, cx.id, 3000).catch((e) => 'диагностика: ' + e.message);
+        log(`      ${d}`);
+      }
       if (n > bestN) { bestN = n; best = cx; }
     }
     if (!best || bestN < 200) continue;      // это ещё не загруженный фронтенд
