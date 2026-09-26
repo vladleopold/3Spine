@@ -251,6 +251,11 @@ def main():
             # съедают весь лимит времени, не давая попробовать мелкие
             scale = 40000.0 / max(40000, len(data))
             budget_here = max(200, int(repair_budget * scale))
+            # сильно повреждённые крупные файлы: полный перебор комбинаций ширин
+            # не помещается в разумное время — делаем быструю пробу и идём дальше
+            pct = data.count(b"\xef\xbf\xbd") * 3 * 100.0 / max(1, len(data))
+            if len(data) > 20000 and pct > 35.0:
+                budget_here = min(budget_here, 400)
             try:
                 parsed, rep = repair_tool.heal(data, budget=budget_here,
                                                 min_unknown_pct=0.0,
