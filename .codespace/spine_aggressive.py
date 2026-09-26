@@ -223,6 +223,21 @@ async def collect(url: str, bodies: bool = True) -> set:
     found: set = set()
     shells: set = set()
     bodies_enabled = bodies
+    slug = ""
+    try:
+        from urllib.parse import urlsplit as _us
+        _q = _us(url).query
+        for key in ("game-term", "game", "gameName", "slug", "gameSlug"):
+            for part in _q.split("&"):
+                if part.lower().startswith(key.lower() + "="):
+                    slug = part.split("=", 1)[1]
+        if not slug:
+            tail = [x for x in _us(url).path.split("/") if x]
+            slug = tail[-1] if tail else ""
+    except Exception:                                     # noqa: BLE001
+        slug = ""
+    if slug:
+        print("  слаг игры из ссылки: %s" % slug, flush=True)
     early = 30 if prov == "pragmatic" else 80
 
     async with async_playwright() as p:
@@ -350,6 +365,47 @@ async def collect(url: str, bodies: bool = True) -> set:
         })()
         """
 
+        SLUG_JS = """
+        (function(){
+          var slug = %SLUG%;
+          if (!slug) return 0;
+          var nodes = document.querySelectorAll('a,button,[role=button],div,li,span');
+          var hit = null;
+          for (var i = 0; i < nodes.length && i < 8000; i++) {
+            var n = nodes[i];
+            var t = ((n.innerText || n.textContent) || '').trim();
+            var h = n.getAttribute && (n.getAttribute('href') || '');
+            if ((h && h.indexOf(slug) >= 0) || (t && t.length < 120 && t.indexOf(slug) >= 0)) {
+              if (!hit || (t && t.length < (hit.innerText || '').length)) hit = n;
+            }
+          }
+          if (!hit) return 0;
+          hit.scrollIntoView({block: 'center'});
+          ['pointerdown','mousedown','mouseup','click'].forEach(function(t){
+            try { hit.dispatchEvent(new MouseEvent(t, {bubbles:true, cancelable:true,
+              clientX: hit.getBoundingClientRect().left + 5,
+              clientY: hit.getBoundingClientRect().top + 5})); } catch(e){}
+          });
+          try { hit.click(); } catch(e){}
+          return 1;
+        })()
+        """
+
+        async def click_game(pg, slug: str):
+            """Клик по карточке игры: слаг берём из ссылки пользователя."""
+            if not slug:
+                return False
+            try:
+                n = await pg.evaluate(SLUG_JS.replace("%SLUG%",
+                                                       __import__("json").dumps(slug)))
+            except Exception:                             # noqa: BLE001
+                return False
+            if n:
+                log2 = "клик по карточке игры: %s" % slug
+                print("  " + log2, flush=True)
+                await asyncio.sleep(1.5)
+            return bool(n)
+
         async def poke_selectors(pg):
             """Кликаем по кнопкам запуска игры — универсальный набор селекторов."""
             for fr in pg.frames:
@@ -450,6 +506,7 @@ async def collect(url: str, bodies: bool = True) -> set:
             if now - last_click > 1.5:
                 last_click = now
                 for pg in list(context.pages):
+                    await click_game(pg, slug)
                     await poke(pg)
                 poked += 1
             if len(found) >= early and poked >= 3:
