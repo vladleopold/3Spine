@@ -35,6 +35,18 @@ SPINE_EXT = (".json", ".atlas", ".atlas.txt")
 NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 DEFAULT_KINDS = ("json", "atlas", "png")
+REJECTED = []
+
+
+def _guard(url: str, data: bytes) -> tuple:
+    """Мягкая проверка: режем soft-404 и HTML, которые CDN отдаёт с кодом 200."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fetch_guard import check
+    except Exception:                                     # noqa: BLE001
+        return True, ""
+    path = url.split("://", 1)[-1].split("/", 1)[-1]
+    return check(path, data)
 
 
 def log(msg: str) -> None:
@@ -410,6 +422,10 @@ def download_set(urls, root: str, workers: int, timeout: int, log_prefix: str) -
             data = fetch(u, timeout=timeout)
         except Exception:                                # noqa: BLE001
             return 0
+        ok, why = _guard(u, data)
+        if not ok:
+            REJECTED.append((u, why))
+            return 0
         with open(dst, "wb") as f:
             f.write(data)
         done[0] += 1
@@ -642,6 +658,12 @@ def main() -> int:
         for rel, _sz in files:
             z.write(os.path.join(root, rel), rel)
         z.writestr("fetch-report.json", json.dumps(report, ensure_ascii=False, indent=1))
+    if REJECTED:
+        kinds = {}
+        for _u, why in REJECTED:
+            kinds[why] = kinds.get(why, 0) + 1
+        log("отброшено мусорных ответов: %d (%s)" % (
+            len(REJECTED), ", ".join("%s×%d" % (k, v) for k, v in sorted(kinds.items()))))
     log("готово: %d файлов, %.1f МБ за %ss" % (len(files), total / 1048576, report["seconds"]))
     if total > limit:
         log("ВНИМАНИЕ: архив больше лимита %d МБ" % args.max_mb)

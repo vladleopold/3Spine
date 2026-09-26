@@ -114,6 +114,17 @@ def priority(url: str) -> int:
     return 2
 
 
+def _guard_ok(url: str, data: bytes) -> bool:
+    """Отсекаем soft-404/HTML, которые CDN отдаёт с кодом 200."""
+    try:
+        sys.path.insert(0, str(HERE))
+        from fetch_guard import check
+    except Exception:                                     # noqa: BLE001
+        return True
+    ok, _why = check(urlparse(url).path, data)
+    return ok
+
+
 def local_name(url: str) -> str:
     h = hashlib.sha1(url.encode()).hexdigest()[:11]
     ext = Path(urlparse(url).path).suffix.lower()
@@ -166,8 +177,11 @@ async def download_all(urls: list, folder: Path) -> list:
                                 total=to, connect=8, sock_read=to)) as r:
                             if r.status != 200:
                                 continue
+                            ctype = (r.headers.get("Content-Type") or "").lower()
+                            if "html" in ctype and not url.lower().endswith((".html", ".htm")):
+                                return False
                             data = await r.read()
-                            if len(data) < 64:
+                            if len(data) < 64 or not _guard_ok(url, data):
                                 continue
                             await asyncio.to_thread(dest.write_bytes, data)
                             return True
