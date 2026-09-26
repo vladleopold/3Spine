@@ -40,16 +40,21 @@ jobs:
           [ -d "$EXT_DIR" ] && echo "расширение Resources-Saver: подключено" || echo "расширение: недоступно, работаем без него"
           # страховка от зависания: весь шаг обязан уложиться в 9 минут
           set +e
-          # вывод в файл, а не в tee: убитый python может оставить браузер
-          # держать stdout, и тогда пайп не закрывается и шаг висит вечно
-          timeout -k 15 75 python3 .codespace/fetch_assets.py "$URL" -o input.zip --max-mb 300 --total-budget 55 --budget-ms 18000 \
-            > fetch-log.txt 2>&1
+          # файл + живой прогресс в логе; хвост читает отдельный процесс,
+          # поэтому браузер не может удержать шаг (в отличие от конвейера)
+          ( timeout -k 15 75 python3 -u .codespace/fetch_assets.py "$URL" -o input.zip \
+              --max-mb 300 --total-budget 55 --budget-ms 18000 > fetch-log.txt 2>&1 ) &
+          FETCH_PID=$!
+          tail -n +1 -f fetch-log.txt &
+          TAIL_PID=$!
+          wait $FETCH_PID
           RC=$?
+          kill $TAIL_PID >/dev/null 2>&1 || true
           pkill -f 'chrome|chromium' >/dev/null 2>&1 || true
           set -e
-          tail -60 fetch-log.txt || true
+          echo "выкачивание завершено с кодой $RC"
           if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then
-            echo "::warning::выкачивание не уложилось в 9 минут — берём то, что успело"
+            echo "::warning::выкачивание не уложилось в 75 секунд — берём то, что успело"
           fi
           rm -f fetch-url.txt
           unzip -l input.zip | head -30
