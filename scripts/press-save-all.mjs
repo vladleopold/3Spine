@@ -466,13 +466,20 @@ async function pressViaPanelTab(browser, extId, shimSrc) {
   if (!has) {
     const diag = await browser.eval(`(() => {
       const b = document.body;
-      return 'url=' + String(location.href).slice(0, 58)
-        + ' | текст=' + (b ? (b.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 50) : 'нет body')
-        + ' | shim=' + (globalThis.__rsShimError || 'ок')
-        + ' | devtools=' + (globalThis.chrome && chrome.devtools ? 'есть' : 'нет')
-        + ' | входов=' + (b ? b.querySelectorAll('*').length : 0);
+      return 'url=' + String(location.href).slice(0, 70)
+        + ' || текст=' + (b ? (b.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 220) : 'нет body')
+        + ' || shim=' + (globalThis.__rsShimError || 'ок')
+        + ' || devtools=' + (globalThis.chrome && chrome.devtools ? 'есть' : 'нет')
+        + ' || входов=' + (b ? b.querySelectorAll('*').length : 0);
     })()`, sessionId, main.id, 3000).catch((e) => 'диагностика: ' + e.message);
     log(`   ${diag}`);
+    // проверяем, доступна ли страница панели вообще: WAR работает — значит
+    //Extension.getURL доступна, а блокирует именно навигация вкладки
+    const probe = await browser.eval(`fetch('chrome-extension://' + ${JSON.stringify(extId)} + '/content.html')
+      .then((r) => 'fetch панели: ' + r.status + ' байт=' + r.headers.get('content-length'))
+      .catch((e) => 'fetch панели: ' + e.message)`, sessionId, main.id, 4000)
+      .catch((e) => 'fetch панели: ' + e.message);
+    log(`   ${probe}`);
     return 'в панели кнопки #up-save нет';
   }
 
