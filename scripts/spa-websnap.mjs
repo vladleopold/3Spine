@@ -70,12 +70,65 @@ function rewrite(html) {
   return out;
 }
 
-function collectActions(node, acc = []) {
-  if (!node) return acc;
-  if (Array.isArray(node)) { for (const n of node) collectActions(n, acc); return acc; }
-  if (ROLES.has(node.role) && node.name) acc.push({ role: node.role, name: String(node.name) });
-  for (const key of ['children']) collectActions(node[key], acc);
-  return acc;
+// Интерактивные элементы берём прямо из DOM: page.accessibility в этой
+// версии Playwright отсутствует, а дерево доступности всё равно сводится
+// к тем же элементам с ролями и доступными именами.
+const DOM_SCAN = (roleNames) => {
+  const roles = roleNames;
+  const out = [];
+  const nameOf = (el) => (el.getAttribute('aria-label') || el.getAttribute('title')
+    || el.textContent || el.getAttribute('alt') || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+  const roleOf = (el) => {
+    const explicit = (el.getAttribute('role') || '').toLowerCase();
+    if (explicit && roles.includes(explicit)) return explicit;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'a') return el.hasAttribute('href') ? 'link' : null;
+    if (tag === 'button' || tag === 'summary') return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'input') {
+      const t = (el.getAttribute('type') || 'text').toLowerCase();
+      if (t === 'checkbox') return 'checkbox';
+      if (t === 'radio') return 'radio';
+      if (t === 'submit' || t === 'button' || t === 'reset') return 'button';
+      return null;
+    }
+    return null;
+  };
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width <= 2 || r.height <= 2) return false;
+    const st = getComputedStyle(el);
+    return st.visibility !== 'hidden' && st.display !== 'none' && st.opacity !== '0';
+  };
+  for (const el of document.querySelectorAll('a[href], button, summary, select, [role], [onclick], [tabindex]')) {
+    const role = roleOf(el);
+    if (!role || !roles.includes(role)) continue;
+    if (!visible(el)) continue;
+    const name = nameOf(el);
+    if (!name) continue;
+    if (role === 'link') {
+      const href = el.getAttribute('href') || '';
+      if (/^(https?:)?\/\//.test(href)) {
+        try {
+          if (new URL(href, location.href).origin !== location.origin) continue;
+        } catch { continue; }
+      }
+    }
+    out.push({ role, name, tag: el.tagName.toLowerCase() });
+  }
+  return out;
+};
+
+async function collectActions(page) {
+  return await page.evaluate(DOM_SCAN, [...ROLES]).catch(() => []);
+}
+
+async function clickAction(page, a) {
+  const byRole = page.getByRole(a.role, { name: a.name, exact: false }).first();
+  if (await byRole.count().catch(() => 0)) { await byRole.click({ timeout: 4000 }).catch(() => {}); return; }
+  const safe = a.name.replace(/"/g, '');
+  const byTag = page.locator(`${a.tag}:has-text("${safe}")`).first();
+  if (await byTag.count().catch(() => 0)) { await byTag.click({ timeout: 4000 }).catch(() => {}); }
 }
 
 async function settle(page) {
@@ -85,11 +138,8 @@ async function settle(page) {
 
 async function applyActions(page, actions) {
   for (const a of actions) {
-    const loc = page.getByRole(a.role, { name: a.name, exact: false }).first();
-    if (await loc.count().catch(() => 0)) {
-      await loc.click({ timeout: 4000 }).catch(() => {});
-      await settle(page);
-    }
+    await clickAction(page, a);
+    await settle(page);
   }
 }
 
@@ -145,7 +195,7 @@ async function main() {
     log(`  ✓ ${file} (состояний ${tree.length}, ассетов ${assets.size}, ${since()})`);
     if (state.depth >= DEPTH) continue;
 
-    let candidates = collectActions(await page.accessibility.snapshot({ interestingOnly: true }).catch(() => null));
+    let candidates = await collectActions(page);
     const seenAct = new Set();
     candidates = candidates.filter((a) => {
       const key = `${a.role}|${a.name}`;
@@ -156,12 +206,9 @@ async function main() {
     if (INCLUDE) {
       const kept = [];
       for (const a of candidates) {
-        const loc = page.getByRole(a.role, { name: a.name, exact: false }).first();
-        if (await loc.count().catch(() => 0)) {
-          for (const sel of INCLUDE.split(',').map((s) => s.trim()).filter(Boolean)) {
-            if (await loc.locator(sel).count().catch(() => 0)) { kept.push(a); break; }
-            if (await page.locator(`${sel}:has-text("${a.name.replace(/"/g, '')}")`).count().catch(() => 0)) { kept.push(a); break; }
-          }
+        const safe = a.name.replace(/"/g, '');
+        for (const sel of INCLUDE.split(',').map((s) => s.trim()).filter(Boolean)) {
+          if (await page.locator(`${sel}:has-text("${safe}")`).count().catch(() => 0)) { kept.push(a); break; }
         }
       }
       candidates = kept;
@@ -169,11 +216,10 @@ async function main() {
     if (EXCLUDE) {
       const kept = [];
       for (const a of candidates) {
-        const loc = page.getByRole(a.role, { name: a.name, exact: false }).first();
+        const safe = a.name.replace(/"/g, '');
         let skip = false;
         for (const sel of EXCLUDE.split(',').map((s) => s.trim()).filter(Boolean)) {
-          if (await loc.locator(sel).count().catch(() => 0)) { skip = true; break; }
-          if (await page.locator(`${sel}:has-text("${a.name.replace(/"/g, '')}")`).count().catch(() => 0)) { skip = true; break; }
+          if (await page.locator(`${sel}:has-text("${safe}")`).count().catch(() => 0)) { skip = true; break; }
         }
         if (!skip) kept.push(a);
       }
