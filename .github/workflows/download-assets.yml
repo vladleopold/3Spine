@@ -101,6 +101,12 @@ jobs:
           PROFILE: ${{ github.workspace }}/.chrome-profile
         run: node scripts/press-save-all.mjs
 
+      - name: Дождаться архива (отдельный шаг)
+        env:
+          OUTPUT_DIR: ./artifacts
+          ARCHIVE_WAIT_MS: '120000'
+        run: node scripts/wait-archive.mjs
+
       - name: Скачать все ресурсы игры
         env:
           URLS: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}

@@ -6,13 +6,9 @@ import path from 'path';
 import { execSync } from 'child_process';
 
 const URL_ = process.env.URL || '';
-const OUT = path.resolve(process.env.OUTPUT_DIR || './artifacts');
 const PROFILE_DIR = path.resolve(process.env.PROFILE || './.chrome-profile');
 const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
-const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
-const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '20000', 10);
-const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '30000', 10);
 const TOTAL_LIMIT = parseInt(process.env.TOTAL_LIMIT_MS || '30000', 10);   // лимит шага
 
 const t0 = Date.now();
@@ -306,16 +302,12 @@ async function main() {
     throw new Error(`кнопка Save All Resources НЕ НАЖАТА: ${why} — архив не создавался (${since()})`);
   }
 
-  // 4) ждём ZIP в остатке лимита (после нажатия архив собирается ~15 с)
-  let dl = Date.now() + Math.min(ZIP_TIMEOUT, Math.max(2000, left()));
-  let zip = null;
-  while (Date.now() < dl) {
-    const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
-    if (z.length) { zip = z[z.length - 1]; break; }
-    await sleep(1000);
+  // нажатия не было — это и есть результат шага
+  if (!pressed) {
+    console.error(`кнопка Save All Resources НЕ НАЖАТА: ${why}`);
+    process.exit(1);
   }
-  if (!zip) throw new Error(`кнопка нажата, но архив не создался за ${since()}`);
-  log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
+  log(`кнопка нажата (${since()}) — архив собирает отдельный шаг`);
   process.exit(0);
 }
 
