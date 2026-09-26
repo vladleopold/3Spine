@@ -1,14 +1,11 @@
 #!/usr/bin/env node
-// Нажимаем «Save All Resources» в панели Resources Saver.
+// Нажатие «Save All Resources» в панели Resources Saver настоящего DevTools.
 //
-// Проблема: окно DevTools не появляется среди целей CDP (Chrome не отдаёт
-// фронтенд DevTools как target), поэтому кликнуть по нему через CDP нельзя.
-//
-// Решение: открываем ту же панель расширения (chrome-extension://<id>/content.html)
-// как страницу и подставляем ей chrome.devtools через подмену: ресурсы и HAR
-// собираем сами через CDP. Кнопка #up-save — настоящая, из content.html.
-import { chromium } from 'playwright';
-import crypto from 'crypto';
+// Работаем только через CDP (Playwright к уже запущенному Chrome не подключается):
+//   1) собираем все ресурсы страницы (Network.getResponseBody)
+//   2) находим панель Resources Saver среди целей (её открыли в DevTools)
+//   3) нажимаем в ней #up-save — кнопка «Save All Resources»
+//   4) ждём ZIP
 import fs from 'fs';
 import path from 'path';
 
@@ -18,93 +15,24 @@ const EXT = path.resolve(process.env.EXT_DIR || './.chrome-ext');
 const PORT = parseInt(process.env.CDP_PORT || '9222', 10);
 const COLLECT_MS = parseInt(process.env.COLLECT_MS || '20000', 10);
 const ZIP_TIMEOUT = parseInt(process.env.ZIP_TIMEOUT_MS || '240000', 10);
+const PANEL_TIMEOUT = parseInt(process.env.PANEL_TIMEOUT_MS || '60000', 10);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
 
-function unpackedExtensionId(dir) {
-  const h = crypto.createHash('sha256').update(dir).digest('hex').slice(0, 32);
-  return h.split('').map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
-}
-
-// id нашего расширения: в chrome://extensions-internals есть запись с путём,
-// по которому мы грузили расширение. Цели Chrome тут ненадёжны — среди них
-// бывают встроенные компонентные расширения без popup.html.
-// Chrome 137+ не грузит расширение через --load-extension (ERR_BLOCKED_BY_CLIENT).
-// Поддерживаемый путь — CDP-домен Extensions.loadUnpacked; он же возвращает id.
-async function loadUnpacked(port, extPath) {
-  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const ws = new WebSocket(v.webSocketDebuggerUrl);
-  await new Promise((res, rej) => {
-    ws.addEventListener('open', res, { once: true });
-    ws.addEventListener('error', () => rej(new Error('CDP браузера недоступен')), { once: true });
-  });
-  const answer = new Promise((res) => {
-    ws.addEventListener('message', (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.id === 1) res(m);
-    });
-  });
-  ws.send(JSON.stringify({
-    id: 1, method: 'Extensions.loadUnpacked', params: { path: extPath },
-  }));
-  const m = await Promise.race([
-    answer,
-    new Promise((res) => setTimeout(() => res({ error: { message: 'таймаут' } }), 20000)),
-  ]);
-  ws.close();
-  if (m.error) throw new Error(`Extensions.loadUnpacked: ${m.error.message}`);
-  return (m.result && m.result.id) || '';
-}
-
-
-// Chrome не даёт открыть content.html вкладкой (ERR_BLOCKED_BY_CLIENT).
-// Открываем страницу расширения и встраиваем панель iframe'ом на том же origin —
-// свои ресурсы расширение в свои страницы грузит разрешает.
-async function openPanel(ctx, extId, shimSrc) {
-  for (const f of ['content.html', 'popup.html', 'devtools.html']) {
-    const p = await ctx.newPage();
-    try {
-      await p.goto(`chrome-extension://${extId}/${f}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      log(`   страница расширения открыта: ${f}`);
-      if (f === 'content.html') return { host: p, panel: p };
-      await p.addInitScript(shimSrc);
-      await p.evaluate((src) => new Promise((res) => {
-        const fr = document.createElement('iframe');
-        fr.style.cssText = 'width:1200px;height:800px;border:0';
-        fr.src = src;
-        fr.onload = () => res(true);
-        document.body.appendChild(fr);
-      }), `chrome-extension://${extId}/content.html`);
-      for (let i = 0; i < 20; i++) {
-        const fr = p.frames().find((x) => x.url().includes('content.html'));
-        if (fr) { log('   панель встроена как iframe'); return { host: p, panel: fr }; }
-        await sleep(500);
-      }
-    } catch (e) {
-      log(`   ${f}: ${e.message.split('\n')[0].slice(0, 90)}`);
-    }
-    await p.close().catch(() => {});
-  }
-  return null;
-}
-
-
-// Chrome блокирует навигацию на chrome-extension://<id>/* (ERR_BLOCKED_BY_CLIENT).
-// Но расширение само открывает свои страницы: просим его service worker сделать это.
-// Прямая работа с CDP-целью: без Playwright (окно расширения в его списке не появляется)
-class RawCDP {
-  constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); }
+class CDP {
+  constructor(ws) { this.ws = ws; this.n = 0; this.waiting = new Map(); this.onEvent = null; }
 
   static async connect(wsUrl) {
     const ws = new WebSocket(wsUrl);
     await new Promise((res, rej) => {
       ws.addEventListener('open', res, { once: true });
-      ws.addEventListener('error', () => rej(new Error('WS не подключился')), { once: true });
+      ws.addEventListener('error', () => rej(new Error('WebSocket не подключился')), { once: true });
     });
-    const c = new RawCDP(ws);
+    const c = new CDP(ws);
     ws.addEventListener('message', (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.method) { if (c.onEvent) c.onEvent(m); return; }
       const w = c.waiting.get(m.id);
       if (!w) return;
       c.waiting.delete(m.id);
@@ -113,382 +41,115 @@ class RawCDP {
     return c;
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, sessionId) {
     const id = ++this.n;
-    this.ws.send(JSON.stringify({ id, method, params }));
+    const msg = { id, method, params };
+    if (sessionId) msg.sessionId = sessionId;
+    this.ws.send(JSON.stringify(msg));
     return new Promise((res, rej) => this.waiting.set(id, { res, rej }));
   }
 
-  async eval(expression) {
+  async eval(expression, sessionId) {
     const r = await this.send('Runtime.evaluate',
-      { expression, returnByValue: true, awaitPromise: true });
+      { expression, returnByValue: true, awaitPromise: true }, sessionId);
+    if (r && r.exceptionDetails) throw new Error(r.exceptionDetails.text || 'ошибка в странице');
     return r && r.result ? r.result.value : undefined;
   }
 }
 
-// ждём цель панели среди целей Chrome
-async function panelTarget(port, extId, timeoutMs = 20000) {
-  const until = Date.now() + timeoutMs;
-  while (Date.now() < until) {
-    try {
-      const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      const t = ts.find((x) => (x.url || '').includes(`${extId}/content.html`));
-      if (t) return t;
-    } catch { /* список недоступен */ }
-    await sleep(500);
-  }
-  return null;
+async function listTargets(port) {
+  const r = await fetch(`http://127.0.0.1:${port}/json/list`);
+  return r.json();
 }
-
-// Пустой background.js => service worker не стартует сам. Запускаем его через
-// CDP-домен ServiceWorker, тогда расширение может само открыть свою панель.
-async function startExtensionWorker(port, extId) {
-  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const c = await RawCDP.connect(v.webSocketDebuggerUrl);
-  try {
-    await c.send('ServiceWorker.enable');
-    const r = await c.send('ServiceWorker.startWorker',
-      { scopeURL: `chrome-extension://${extId}/` });
-    log(`   ServiceWorker.startWorker: ${JSON.stringify(r).slice(0, 120)}`);
-  } catch (e) {
-    log(`   ServiceWorker.startWorker: ${e.message}`);
-  }
-  await sleep(1500);
-  const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const sw = ts.find((t) => t.type === 'service_worker'
-    && (t.url || '').startsWith(`chrome-extension://${extId}/`));
-  if (sw) log('   service worker запущен');
-  return sw ? sw.webSocketDebuggerUrl : '';
-}
-
-// Создание цели из браузера — обходит блокировку навигацииrenderer'а
-async function createTarget(port, extId) {
-  const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-  const c = await RawCDP.connect(v.webSocketDebuggerUrl);
-  try {
-    const r = await c.send('Target.createTarget',
-      { url: `chrome-extension://${extId}/content.html`, newWindow: true });
-    log(`   Target.createTarget: ${JSON.stringify(r).slice(0, 120)}`);
-    return r.targetId || '';
-  } catch (e) {
-    log(`   Target.createTarget: ${e.message}`);
-    return '';
-  }
-}
-
-async function openPanelViaExtension(port, extId) {
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const sw = targets.find((t) => t.type === 'service_worker'
-    && (t.url || '').startsWith(`chrome-extension://${extId}/`));
-  if (!sw) { log('   service worker расширения не найден среди целей'); return ''; }
-  const ws = new WebSocket(sw.webSocketDebuggerUrl);
-  await new Promise((res, rej) => {
-    ws.addEventListener('open', res, { once: true });
-    ws.addEventListener('error', () => rej(new Error('WS не подключился')), { once: true });
-  });
-  const ask = (method, params) => new Promise((res) => {
-    const id = Math.floor(Math.random() * 1e6);
-    const h = (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.id === id) { ws.removeEventListener('message', h); res(m); }
-    };
-    ws.addEventListener('message', h);
-    ws.send(JSON.stringify({ id, method, params }));
-    setTimeout(() => res({ error: { message: 'таймаут' } }), 15000);
-  });
-  const r = await ask('Runtime.evaluate', {
-    expression: `(() => { try {
-        chrome.windows.create({ url: chrome.runtime.getURL('content.html'),
-                               type: 'popup', width: 1400, height: 900 });
-        return 'ok';
-      } catch (e) { return 'ошибка: ' + e.message; } })()`,
-    returnByValue: true, awaitPromise: true,
-  });
-  ws.close();
-  const val = (r.result && r.result.result && r.result.result.value) || 'нет ответа';
-  log(`   service worker открывает панель: ${val}`);
-  return val === 'ok' ? sw.webSocketDebuggerUrl : '';
-}
-
-async function dumpExtensions(ctx) {
-  const p = await ctx.newPage();
-  try {
-    await p.goto('chrome://extensions-internals/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-    const txt = (await p.textContent('body').catch(() => '')) || '';
-    let data = [];
-    try { data = JSON.parse(txt); } catch { /* не JSON */ }
-    log(`ВСЕ расширения в профиле: ${Array.isArray(data) ? data.length : 'не JSON'}`);
-    for (const e of (Array.isArray(data) ? data : [])) {
-      const nm = e.name || (e.manifest && e.manifest.name) || '?';
-      log(`   id=${e.id} имя="${nm}" путь=${e.path || e.manifest_path || '—'}`);
-    }
-    if (!Array.isArray(data)) log(`   сырой ответ: ${txt.slice(0, 300)}`);
-  } catch (e) {
-    log(`chrome://extensions-internals недоступна: ${e.message.split('\n')[0]}`);
-  } finally {
-    await p.close().catch(() => {});
-  }
-}
-
-async function extensionIdFromProfile(ctx, extDir) {
-  const p = await ctx.newPage();
-  let txt = '';
-  try {
-    await p.goto('chrome://extensions-internals/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-    txt = (await p.textContent('body').catch(() => '')) || '';
-  } catch { /* страница недоступна */ }
-  await p.close().catch(() => {});
-  let data = [];
-  try { data = JSON.parse(txt); } catch { /* не JSON */ }
-  if (!Array.isArray(data)) data = [];
-  const dir = extDir.replace(/\/$/, '');
-  for (const e of data) {
-    const where = `${e.path || ''} ${e.manifest_path || ''} ${e.install_path || ''}`;
-    if (where.includes(dir)) return e.id;
-  }
-  for (const e of data) {
-    const nm = e.name || (e.manifest && e.manifest.name) || '';
-    if (/resources saver/i.test(nm)) return e.id;
-  }
-  return '';
-}
-
-// Запасной путь: Chrome сам сообщает id в целях (service worker расширения).
-// Вычисленный по пути id может не совпасть — тогда страница панели отдаёт
-// ERR_BLOCKED_BY_CLIENT.
-async function realExtensionId(ctx, port, extDir) {
-  for (let i = 0; i * 500 < 10000; i++) {
-    try {
-      const ts = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-      const t = ts.find((x) => (x.url || '').startsWith('chrome-extension://'));
-      if (t) return new URL(t.url).host;
-    } catch { /* список целей недоступен */ }
-    // поднимаем service worker расширения, чтобы он появился в целях
-    if (i === 2) {
-      const p = await ctx.newPage().catch(() => null);
-      if (p) { await p.goto('chrome://extensions/').catch(() => {}); await p.close().catch(() => {}); }
-    }
-    await sleep(500);
-  }
-  return unpackedExtensionId(extDir);
-}
-
-const SHIM = (payload) => `(() => {
-  const DATA = ${payload};
-  const noop = { addListener() {}, removeListener() {} };
-  const resources = DATA.resources.map((r) => ({ url: r.url, content: r.body, size: r.size }));
-  chrome.devtools = {
-    inspectedWindow: {
-      tabId: DATA.tabId,
-      getResources(cb) { cb(resources); },
-      onResourceAdded: noop,
-      reload() {},
-      eval() {},
-    },
-    network: {
-      getHAR(cb) { cb({ log: { version: '1.2', entries: DATA.har } }); },
-      onRequestFinished: noop,
-    },
-  };
-})();`;
-
-// id распакованного расширения: Chrome считает его от абсолютного пути
-function extIdGuess() { return unpackedExtensionId(EXT); }
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const m = JSON.parse(fs.readFileSync(path.join(EXT, 'manifest.json'), 'utf8'));
   log(`расширение: ${m.name} v${m.version}`);
 
-  // Chrome уже запущен предыдущим шагом (с расширением и ссылкой) — подключаемся к нему
-  let browser;
-  for (let i = 0; i * 500 < 20000; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${PORT}/json/version`);
-      if (r.ok) break;
-    } catch { /* порт ещё не поднят */ }
-    await sleep(500);
-  }
-  browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
-  log('подключился к уже запущенному Chrome');
-  const ctx = browser.contexts()[0];
+  const v = await (await fetch(`http://127.0.0.1:${PORT}/json/version`)).json();
+  const browser = await CDP.connect(v.webSocketDebuggerUrl);
+  log('Chrome подключён по CDP');
 
-  // 1) собираем все ресурсы страницы через CDP
-  const page = ctx.pages()[0] || await ctx.newPage();
-  const cdp = await ctx.newCDPSession(page);
-  await cdp.send('Browser.setDownloadBehavior',
+  // 1) вкладка с игрой
+  await browser.send('Target.setDiscoverTargets', { discover: true });
+  const ts = await browser.send('Target.getTargets');
+  const infos = ts.targetInfos.filter((t) => t.type === 'page');
+  const want = URL_ ? URL_.split('?')[0] : '';
+  const game = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
+  if (!game) throw new Error('не нашёл вкладку с игрой');
+  log(`вкладка: ${game.url.slice(0, 100)}`);
+
+  const { sessionId } = await browser.send('Target.attachToTarget',
+    { targetId: game.targetId, flatten: true });
+  await browser.send('Network.enable', {}, sessionId);
+  await browser.send('Page.enable', {}, sessionId);
+  await browser.send('Browser.setDownloadBehavior',
     { behavior: 'allow', downloadPath: OUT, eventsEnabled: true });
-  await cdp.send('Network.enable');
 
-  const bodies = new Map();     // url -> { body, mimeType, size }
-  cdp.on('Network.responseReceived', async (ev) => {
-    const { response, requestId } = ev;
-    if (!/^https?:/i.test(response.url)) return;
-    if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
-    try {
-      const r = await cdp.send('Network.getResponseBody', { requestId });
-      const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
-      bodies.set(response.url, {
-        body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
-      });
-    } catch { /* тело уже вытеснено из кеша */ }
-  });
-
-  if (URL_ && !page.url().startsWith(URL_.split('?')[0])) {
-    log(`открываю ${URL_}`);
-    await page.goto(URL_, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  }
-  // перезагрузка с включённой сетью — чтобы поймать всё, что игра грузит сама
-  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-  await sleep(Math.min(COLLECT_MS, 20000));
+  // 2) сбор всех ответов с телами
+  const bodies = new Map();
+  const pending = [];
+  browser.onEvent = (m) => {
+    if (m.sessionId !== sessionId) return;
+    if (m.method === 'Network.responseReceived') {
+      const { requestId, response } = m.params;
+      if (!/^https?:/i.test(response.url)) return;
+      if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
+      pending.push(browser.send('Network.getResponseBody', { requestId }, sessionId)
+        .then((r) => {
+          const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+          bodies.set(response.url, {
+            body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
+          });
+        })
+        .catch(() => {}));
+    }
+  };
+  log('перезагружаю страницу для полного сбора…');
+  await browser.send('Page.reload', { ignoreCache: false }, sessionId).catch(() => {});
+  await sleep(COLLECT_MS);
+  await Promise.race([Promise.all(pending), sleep(5000)]);
   log(`ресурсов собрано: ${bodies.size}`);
 
-  const resources = [...bodies].map(([url, v]) => ({ url, body: v.body, size: v.size }));
-  const har = resources.map((r) => {
-    const v = bodies.get(r.url);
-    return { request: { url: r.url, method: 'GET' },
-      response: { status: 200, content: { size: v.size, mimeType: v.mimeType } } };
-  });
-
-  // 2) перебираем известные id: из профиля, вычисленный по пути, из целей.
-  //    Берём тот, у которого панель реально открывается — так не зависим от
-  //    того, откуда взялся id (цели Chrome могут принадлежать чужим расширениям).
-  // 0) если панель уже открыта в реальном DevTools (её выбрали через Ctrl+Shift+P),
-  //    она видна среди целей и chrome.devtools в ней настоящий — подменять ничего не надо
-  const realPanel = await panelTarget(PORT, extIdGuess(), 60000);
-  const panel0 = realPanel ? {} : null;
-  if (realPanel) {
-    log(`реальная панель DevTools: ${realPanel.url}`);
-    const pc0 = await RawCDP.connect(realPanel.webSocketDebuggerUrl);
-    const clicked0 = await pc0.eval(`(() => {
-      const b = document.getElementById('up-save');
-      if (!b) return 'кнопки #up-save нет';
-      const t = (b.textContent || '').trim();
-      b.click();
-      return 'нажата: ' + t;
-    })()`).catch((e) => 'ошибка: ' + e.message);
-    log(`   ${clicked0}`);
-    panel = { raw: pc0, clicked: clicked0 };
+  // 3) панель Resources Saver в DevTools
+  let panel = null;
+  const until = Date.now() + PANEL_TIMEOUT;
+  while (Date.now() < until && !panel) {
+    const list = await listTargets(PORT).catch(() => []);
+    panel = list.find((t) => (t.url || '').includes('/content.html'));
+    if (!panel) await sleep(1000);
   }
+  if (!panel) throw new Error('панель Resources Saver не найдена среди целей');
+  log(`панель: ${panel.url}`);
 
-  // сначала пробуем официальную загрузку через CDP — она же даёт id
-  let loaded = '';
-  try {
-    loaded = await loadUnpacked(PORT, EXT);
-    log(`Extensions.loadUnpacked: ${loaded ? 'ok, id ' + loaded : 'без id'}`);
-  } catch (e) {
-    log(`Extensions.loadUnpacked не сработал: ${e.message}`);
-  }
-  const fromProfile = await extensionIdFromProfile(ctx, EXT);
-  const fromTargets = await realExtensionId(ctx, PORT, EXT);
-  const computed = unpackedExtensionId(EXT);
-  const candidates = loaded ? [loaded]
-    : [...new Set([fromProfile, computed, fromTargets].filter(Boolean))];
-  log(`кандидаты id: ${candidates.join(', ') || 'нет'}`);
-
-  let panel = panel0 || null;
-  const shimSrc = SHIM(JSON.stringify({ resources, har, tabId: 0 }));
-  for (const id of (panel ? [] : candidates)) {
-    log(`   пробуем id ${id}`);
-    const found = await openPanel(ctx, id, shimSrc);
-    if (found) { panel = found.panel; break; }
-    // расширение само открывает свою страницу — навигация извне заблокирована
-    // 1) поднимаем service worker расширения, 2) он сам открывает панель,
-    // 3) запасной путь — создать цель из браузера
-    await startExtensionWorker(PORT, id);
-    let ok = await openPanelViaExtension(PORT, id);
-    if (!ok) {
-      await createTarget(PORT, id);
-      const t0 = await panelTarget(PORT, id, 8000);
-      ok = !!t0;
-      if (ok) log('   панель создана через Target.createTarget');
-    }
-    if (!ok) continue;
-    const t = await panelTarget(PORT, id);
-    if (!t) { log('   окно панели не появилось среди целей'); continue; }
-    log(`   панель открыта расширением: ${t.url}`);
-    const c = await RawCDP.connect(t.webSocketDebuggerUrl);
-    await sleep(3000);                 // панель должна прогрузиться
-    // реальный id вкладки игры — читаем из контекста расширения, с повторами
-    let tabs = [];
-    for (let i = 0; i < 10 && !tabs.length; i++) {
-      const raw = await c.eval(`new Promise((res) => { try {
-          chrome.tabs.query({}, (l) => res((l || []).map((x) => ({ id: x.id, url: x.url || '' }))));
-        } catch (e) { res([]); } })`).catch(() => []);
-      tabs = Array.isArray(raw) ? raw : [];
-      if (!tabs.length) await sleep(1000);
-    }
-    const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
-    const gameTab = tabs.find((x) => x.url.startsWith(origin)) || tabs[0];
-    const realTabId = gameTab ? gameTab.id : 0;
-    log(`   вкладка игры: id=${realTabId} ${gameTab ? gameTab.url.slice(0, 60) : '—'}`);
-    // подмена chrome.devtools + перезагрузка панели
-    await c.send('Page.enable');
-    await c.send('Page.addScriptToEvaluateOnNewDocument',
-      { source: SHIM(JSON.stringify({ resources, har, tabId: realTabId })) });
-    await c.send('Page.reload', { ignoreCache: true });
-    await sleep(2500);
-    const clicked = await c.eval(`(() => {
-      const b = document.getElementById('up-save');
-      if (!b) return 'кнопки #up-save нет';
-      const t = (b.textContent || '').trim();
-      b.click();
-      return 'нажата: ' + t;
-    })()`).catch((e) => 'ошибка: ' + e.message);
-    log(`   ${clicked}`);
-    panel = { raw: c, clicked };
-    break;
-  }
-  if (!panel) throw new Error('ни один id не открыл панель Resources Saver');
-
-  // 3-4) для панели, открытой напрямую по CDP, всё уже сделано при клике;
-  //      этот блок — только для панели Playwright (content.html вкладкой)
-  if (!panel.raw) {
-    const tabs = await panel.evaluate(() => new Promise((res) => {
-      chrome.tabs.query({}, (list) => res((list || []).map((x) => ({ id: x.id, url: x.url || '' }))));
-    })).catch(() => []);
-    const origin = (() => { try { return new URL(URL_ || page.url()).origin; } catch { return ''; } })();
-    const gameTab = (Array.isArray(tabs) ? tabs : []).find((t) => t.url.startsWith(origin))
-      || (Array.isArray(tabs) ? tabs[0] : null);
-    const tabId = gameTab ? gameTab.id : 0;
-    log(`вкладка игры: id=${tabId} ${gameTab ? gameTab.url.slice(0, 70) : '—'}`);
-    await panel.addInitScript(SHIM(JSON.stringify({ resources, har, tabId })));
-    if (panel === panel.page()) {
-      await panel.reload({ waitUntil: 'domcontentloaded' });
-    } else {
-      await panel.evaluate(() => location.reload()).catch(() => {});
-    }
-    const btn = panel.locator('#up-save');
-    await btn.waitFor({ state: 'visible', timeout: 20000 });
-    const label = (await btn.textContent().catch(() => '')) || '';
-    log(`нажимаю кнопку: "${label.trim()}"`);
-    await panel.evaluate(() => document.getElementById('up-save').click());
-  } else {
-    log(`панель обработана напрямую: ${panel.clicked}`);
-  }
+  // 4) нажимаем «Save All Resources»
+  const pc = await CDP.connect(panel.webSocketDebuggerUrl);
+  await sleep(1000);
+  const clicked = await pc.eval(`(() => {
+    const b = document.getElementById('up-save');
+    if (!b) return 'кнопки #up-save нет';
+    const t = (b.textContent || '').trim();
+    b.click();
+    return 'нажата: ' + t;
+  })()`).catch((e) => 'ошибка: ' + e.message);
+  log(`кнопка: ${clicked}`);
 
   // 5) ждём ZIP
-  const deadline = Date.now() + ZIP_TIMEOUT;
+  const dl = Date.now() + ZIP_TIMEOUT;
   let zip = null;
-  while (Date.now() < deadline) {
+  while (Date.now() < dl) {
     const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(2000);
   }
   if (!zip) {
-    let state = '';
-    if (panel && panel.raw) {
-      state = await panel.raw.eval('document.body.innerText').catch(() => '');
-    } else if (panel) {
-      state = await panel.textContent('body').catch(() => '');
-    }
-    state = String(state || '').replace(/\s+/g, ' ').slice(0, 300);
-    log(`состояние панели: ${state}`);
-    await browser.close().catch(() => {});
+    const state = await pc.eval('document.body.innerText').catch(() => '');
+    log(`состояние панели: ${String(state || '').replace(/\s+/g, ' ').slice(0, 300)}`);
     throw new Error('ZIP не появился после нажатия Save All Resources');
   }
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ)`);
-  await browser.close().catch(() => {});
+  process.exit(0);
 }
 
 main().catch((e) => { console.error('ошибка:', e.message); process.exit(1); });
