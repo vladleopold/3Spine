@@ -96,10 +96,26 @@ except Exception as e:
 '''
 
 
+def free_port(preferred: int = 8899) -> int:
+    """Занятый порт не беда — берём следующий свободный."""
+    import socket
+    for p in [preferred] + [preferred + i for i in range(1, 40)]:
+        with socket.socket() as sk:
+            sk.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sk.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    return preferred
+
+
 def serve(port: int = 8899) -> int:
-    """Запускает локальный прокси в потоке; возвращает порт."""
+    """Запускает локальный прокси в потоке; возвращает реальный порт."""
     loop = asyncio.new_event_loop()
     ready = threading.Event()
+    nonlocal_resolved = {"port": port}
+    port = free_port(port)
 
     async def main():
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -182,6 +198,7 @@ def serve(port: int = 8899) -> int:
             return parts[0], parts[1], hdrs, b""
 
         srv = await asyncio.start_server(handle, "127.0.0.1", port)
+        nonlocal_resolved["port"] = port
         ready.set()
         async with srv:
             await srv.serve_forever()
@@ -193,7 +210,7 @@ def serve(port: int = 8899) -> int:
     t = threading.Thread(target=run, daemon=True)
     t.start()
     ready.wait(timeout=20)
-    return port
+    return nonlocal_resolved["port"]
 
 
 if __name__ == "__main__":
