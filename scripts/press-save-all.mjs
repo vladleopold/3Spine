@@ -402,6 +402,89 @@ const SHOW_PANEL = `(async () => {
   } catch (e) { return 'ошибка: ' + e.message; }
 })()`;
 
+// Настоящая панель Resources Saver открытой вкладкой: та же content.html
+// с настоящей кнопкой #up-save. Шэм ставится ДО загрузки страницы, иначе
+// content.js не увидит chrome.devtools и не соберёт ресурсы.
+async function pressViaPanelTab(browser, extId, shimSrc) {
+  const url = 'chrome-extension://' + extId + '/content.html';
+  let sessionId = null; let targetId = null;
+  try {
+    ({ targetId } = await browser.send('Target.createTarget', { url: 'about:blank' }, undefined, 5000));
+  } catch (e) { return 'вкладку панели не создали: ' + e.message; }
+  try {
+    ({ sessionId } = await browser.send('Target.attachToTarget', { targetId, flatten: true }, undefined, 5000));
+  } catch (e) { return 'к вкладке панели не подключились: ' + e.message; }
+
+  const contexts = [];
+  browser.onEvent = (m) => {
+    if (m.sessionId !== sessionId) return;
+    if (m.method === 'Runtime.executionContextCreated') contexts.push(m.params.context);
+    if (m.method === 'Runtime.exceptionThrown') {
+      const d = m.params.exceptionDetails || {};
+      log(`   панель бросила: ${d.text || ''} ${(d.exception || {}).description || ''}`.slice(0, 170));
+    }
+  };
+  try { await browser.send('Runtime.enable', {}, sessionId, 3000); } catch (e) { return 'Runtime.enable: ' + e.message; }
+  try { await browser.send('Page.enable', {}, sessionId, 3000); } catch {}
+
+  const wrapped = '(() => { try { if (!globalThis.chrome) globalThis.chrome = {}; ' + shimSrc
+    + ' } catch (e) { globalThis.__rsShimError = String(e); } })();';
+  await browser.send('Page.addScriptToEvaluateOnNewDocument', { source: wrapped }, sessionId, 3000)
+    .catch((e) => log(`   шэм не поставился: ${e.message}`));
+  await browser.send('Page.navigate', { url }, sessionId, 6000).catch((e) => log(`   переход: ${e.message}`));
+
+  const mainCtx = async () => {
+    for (let i = 0; i < 34; i++) {
+      const def = contexts.filter((c) => c.auxData && c.auxData.isDefault);
+      if (def.length) return def[def.length - 1];
+      await sleep(300);
+    }
+    return contexts[0] || null;
+  };
+  let main = await mainCtx();
+  if (!main) { log('   контекстов панели: 0'); return 'контекст панели не появился'; }
+  log(`   контекстов панели: ${contexts.length}`);
+
+  // если биндинги Chrome перекрыли шэм — ставим шэм ещё раз и перезагружаем панель
+  const hasDevtools = await browser.eval('!!(globalThis.chrome && chrome.devtools)', sessionId, main.id, 3000)
+    .catch(() => false);
+  if (!hasDevtools) {
+    log('   chrome.devtools в панели нет — ставим шэм заново и перезагружаем');
+    await browser.eval(shimSrc, sessionId, main.id, 3000).catch((e) => log(`   шэм в странице: ${e.message}`));
+    contexts.length = 0;
+    await browser.send('Page.reload', { ignoreCache: true }, sessionId, 6000).catch(() => {});
+    main = await mainCtx();
+    if (!main) return 'после шэма контекст панели не появился';
+  }
+
+  let has = false;
+  for (let i = 0; i < 30 && !has; i++) {
+    has = !!(await browser.eval('!!document.getElementById("up-save")', sessionId, main.id, 2500)
+      .catch(() => false));
+    if (!has) await sleep(300);
+  }
+  if (!has) {
+    const diag = await browser.eval(`(() => {
+      const b = document.body;
+      return 'url=' + String(location.href).slice(0, 58)
+        + ' | текст=' + (b ? (b.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 50) : 'нет body')
+        + ' | shim=' + (globalThis.__rsShimError || 'ок')
+        + ' | devtools=' + (globalThis.chrome && chrome.devtools ? 'есть' : 'нет')
+        + ' | входов=' + (b ? b.querySelectorAll('*').length : 0);
+    })()`, sessionId, main.id, 3000).catch((e) => 'диагностика: ' + e.message);
+    log(`   ${diag}`);
+    return 'в панели кнопки #up-save нет';
+  }
+
+  return await browser.eval(`(() => {
+    const b = document.getElementById('up-save');
+    const t = (b.textContent || '').trim();
+    b.click();
+    return 'НАЖАТА: "' + t + '"';
+  })()`, sessionId, main.id, 4000).catch((e) => 'ошибка: ' + e.message);
+}
+
+
 async function main() {
   // сторож: шаг не может длиться дольше лимита ни при каких зависаниях
   const watchdog = setTimeout(() => {
@@ -651,6 +734,11 @@ async function main() {
   why = String(clicked);
   log(`   панель в iframe: ${why}`);
   if (/НАЖАТА/.test(why)) pressed = true; else why = why;
+  if (!pressed && extId) {
+    why = String(await pressViaPanelTab(browser, extId, shim));
+    log(`   панель во вкладке: ${why}`);
+    if (/НАЖАТА/.test(why)) pressed = true;
+  }
   const skipCdp = true;   // окно DevTools не отдаётся в CDP — жмём только вводом X11
   for (const dt of (clicked || skipCdp ? [] : devtools)) {
     let sid;
