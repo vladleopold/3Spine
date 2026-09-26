@@ -193,18 +193,26 @@ async function pressViaIframe(browser, extId, shimSrc) {
 
   const mainCtx = contexts[0];
   if (!mainCtx) return 'нет контекста страницы';
+  const src = 'chrome-extension://' + extId + '/content.html';
   const injected = await browser.eval(`(() => {
+    window.__rs = 'создаём iframe';
     const old = document.getElementById('rs-panel');
     if (old) old.remove();
     const f = document.createElement('iframe');
     f.id = 'rs-panel';
     f.style.cssText = 'position:fixed;left:0;top:0;width:900px;height:600px;z-index:2147483647';
-    f.src = ${JSON.stringify('chrome-extension://' + extId + '/content.html')};
+    f.onload = () => { window.__rs = 'iframe загрузился'; };
+    f.onerror = () => { window.__rs = 'iframe не загрузился'; };
+    f.src = ${JSON.stringify(src)};
     document.body.appendChild(f);
-    return 'iframe создан';
+    return 'iframe создан: ' + f.src;
   })()`, sessionId, mainCtx.id).catch((e) => 'ошибка: ' + e.message);
   log(`   ${injected}`);
-  await sleep(2500);
+  await sleep(3000);
+  const st = await browser.eval('window.__rs || "нет статуса"', sessionId, mainCtx.id)
+    .catch(() => 'нет статуса');
+  log(`   статус iframe: ${st}`);
+  log(`   контексты: ${contexts.map((c) => c.origin).join(' | ')}`);
 
   // контекст фрейма панели
   let panelCtx = null;
@@ -259,10 +267,18 @@ async function collectFromGame(browser) {
           mimeType: response.mimeType || 'text/plain' });
       }).catch(() => {}));
   };
-  try { await browser.send('Network.enable', {}, sessionId, 4000); } catch (e) { log(`   Network.enable: ${e.message}`); }
-  try { await browser.send('Page.enable', {}, sessionId, 4000); } catch { /* не критично */ }
-  try { await browser.send('Page.reload', { ignoreCache: false }, sessionId, 6000); } catch { /* не критично */ }
-  await sleep(8000);
+  try { await browser.send('Network.enable', {}, sessionId, 4000); log('   Network.enable ok'); }
+  catch (e) { log(`   Network.enable: ${e.message}`); }
+  try { await browser.send('Page.enable', {}, sessionId, 4000); log('   Page.enable ok'); }
+  catch (e) { log(`   Page.enable: ${e.message}`); }
+  try {
+    await browser.send('Page.navigate', { url: game.url }, sessionId, 8000);
+    log('   Page.navigate ok');
+  } catch (e) {
+    log(`   Page.navigate: ${e.message}`);
+    try { await browser.send('Page.reload', { ignoreCache: false }, sessionId, 6000); } catch { /* всё равно пробуем собирать */ }
+  }
+  await sleep(10000);
   await Promise.race([Promise.all(pend), sleep(2000)]);
   log(`   ресурсов собрано: ${bodies.size} (${since()})`);
   return { sessionId, bodies };
