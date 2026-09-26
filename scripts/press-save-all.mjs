@@ -81,44 +81,58 @@ async function main() {
   const browser = await CDP.connect(v.webSocketDebuggerUrl);
   log('Chrome подключён по CDP');
 
-  // 1) вкладка с игрой
-  await browser.send('Target.setDiscoverTargets', { discover: true });
-  const ts = await browser.send('Target.getTargets');
-  const infos = ts.targetInfos.filter((t) => t.type === 'page');
-  const want = URL_ ? URL_.split('?')[0] : '';
-  const game = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
-  if (!game) throw new Error('не нашёл вкладку с игрой');
-  log(`вкладка: ${game.url.slice(0, 90)}`);
+  // 1) вкладка с игрой (нажатие от неё не зависит — берём мягко)
+  let sessionId = null;
+  let bodies = new Map();
+  try {
+    await browser.send('Target.setDiscoverTargets', { discover: true });
+    const ts = await browser.send('Target.getTargets');
+    const infos = ts.targetInfos.filter((t) => t.type === 'page');
+    const want = URL_ ? URL_.split('?')[0] : '';
+    const game = infos.find((t) => want && t.url.startsWith(want)) || infos[0];
+    if (game) {
+      log(`вкладка: ${game.url.slice(0, 90)}`);
+      ({ sessionId } = await browser.send('Target.attachToTarget',
+        { targetId: game.targetId, flatten: true }));
+    } else {
+      log('вкладка с игрой не найдена');
+    }
+  } catch (e) { log(`вкладку не взяли: ${e.message}`); }
+  try {
+    await browser.send('Browser.setDownloadBehavior',
+      { behavior: 'allow', downloadPath: OUT, eventsEnabled: true });
+  } catch { /* не критично */ }
 
-  const { sessionId } = await browser.send('Target.attachToTarget',
-    { targetId: game.targetId, flatten: true });
-  await browser.send('Network.enable', {}, sessionId);
-  await browser.send('Page.enable', {}, sessionId);
-  await browser.send('Browser.setDownloadBehavior',
-    { behavior: 'allow', downloadPath: OUT, eventsEnabled: true });
-
-  // 2) сбор всех ответов с телами — остаётся, как было
-  const bodies = new Map();
-  const pending = [];
-  browser.onEvent = (m) => {
-    if (m.sessionId !== sessionId) return;
-    if (m.method !== 'Network.responseReceived') return;
-    const { requestId, response } = m.params;
-    if (!/^https?:/i.test(response.url)) return;
-    if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
-    pending.push(browser.send('Network.getResponseBody', { requestId }, sessionId)
-      .then((r) => {
-        const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
-        bodies.set(response.url, {
-          body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
-        });
-      })
-      .catch(() => {}));
-  };
-  await browser.send('Page.reload', { ignoreCache: false }, sessionId).catch(() => {});
-  await sleep(Math.min(COLLECT_MS, Math.max(2000, left() - 12000)));
-  await Promise.race([Promise.all(pending), sleep(2000)]);
-  log(`ресурсов собрано: ${bodies.size} (${since()})`);
+  // 2) сбор ответов с телами — остаётся, но выполняется после нажатия кнопки
+  //    и только если кнопка сама не справилась (панель берёт данные у DevTools)
+  async function collectResources() {
+    if (!sessionId) return bodies;
+    const pend = [];
+    browser.onEvent = (m) => {
+      if (m.sessionId !== sessionId) return;
+      if (m.method !== 'Network.responseReceived') return;
+      const { requestId, response } = m.params;
+      if (!/^https?:/i.test(response.url)) return;
+      if (/cdn-cgi\/challenge|googletagmanager|google-analytics|ipify/i.test(response.url)) return;
+      pend.push(browser.send('Network.getResponseBody', { requestId }, sessionId, 4000)
+        .then((r) => {
+          const body = r.base64Encoded ? Buffer.from(r.body, 'base64').toString('utf8') : r.body;
+          bodies.set(response.url, {
+            body, size: (body || '').length, mimeType: response.mimeType || 'text/plain',
+          });
+        })
+        .catch(() => {}));
+    };
+    try { await browser.send('Network.enable', {}, sessionId, 3000); } catch (e) {
+      log(`Network.enable: ${e.message}`);
+    }
+    await browser.send('Page.enable', {}, sessionId, 3000).catch(() => {});
+    await browser.send('Page.reload', { ignoreCache: false }, sessionId, 5000).catch(() => {});
+    await sleep(Math.min(COLLECT_MS, Math.max(1000, left() - 8000)));
+    await Promise.race([Promise.all(pend), sleep(2000)]);
+    log(`ресурсов собрано: ${bodies.size} (${since()})`);
+    return bodies;
+  }
 
   // 3) панель Resources Saver живёт внутри окна DevTools и отдельной CDP-целью
   //    не является — подключаемся к самому DevTools и ищем #up-save в его
@@ -205,6 +219,24 @@ async function main() {
     const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
     if (z.length) { zip = z[z.length - 1]; break; }
     await sleep(1000);
+  }
+  if (!zip) {
+    // запасной путь: собираем ресурсы сами и повторяем нажатие
+    log('ZIP не появился, пробую запасной путь: сбор ресурсов и повторное нажатие');
+    await collectResources();
+    const again = await pc.eval(`(() => {
+      const b = document.getElementById('up-save');
+      if (!b) return 'кнопки нет';
+      b.click();
+      return 'повторно нажата';
+    })()`).catch((e) => 'ошибка: ' + e.message);
+    log(`   ${again} (${since()})`);
+    const dl2 = Date.now() + Math.max(2000, left());
+    while (Date.now() < dl2) {
+      const z = fs.readdirSync(OUT).filter((f) => f.endsWith('.zip') && !f.endsWith('.crdownload'));
+      if (z.length) { zip = z[z.length - 1]; break; }
+      await sleep(1000);
+    }
   }
   if (!zip) throw new Error(`ZIP не появился после нажатия кнопки (${since()})`);
   log(`готово: ${path.join(OUT, zip)} (${(fs.statSync(path.join(OUT, zip)).size / 1048576).toFixed(1)} МБ) за ${since()}`);
