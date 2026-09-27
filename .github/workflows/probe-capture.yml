@@ -31,7 +31,9 @@ jobs:
           try() { echo "--- пробую: $*"; "$@" >/dev/null 2>&1 || true; }
           if command -v ktx2ktx2 >/dev/null; then
             echo "--- ktx2ktx2 --decode (в uncompressed KTX2):"
-            ktx2ktx2 --decode t.ktx t_dec.ktx2 2>&1 | tail -n 3 || true
+            ktx2ktx2 --decode t.ktx t_dec.ktx2 > ktxlog.txt 2>&1 || true
+            echo "--- вывод ktx2ktx2 (первые 12 строк):"
+            head -n 12 ktxlog.txt | cut -c1-110
             ls -l t_dec.ktx2 2>/dev/null | awk '{print "  dec: " $5 " байт"}' || echo "  dec не получился"
             echo "--- заголовок декодированного:"
             python3 -c "import struct,sys;d=open('t_dec.ktx2','rb').read();vk,ts,w,h,dep,lay,fac,lev,sup=struct.unpack_from('<9I',d,12);print(f'  vkFormat={vk} w={w} h={h} supercompression={sup}');dfd,dfdl=struct.unpack_from('<2I',d,48);print(f'  dfd@{dfd}+{dfdl}');body=d[dfd:dfd+dfdl];print('  dfd:',body[:24].hex(' ')) if dfdl else None" || echo "  разбор не удался"
