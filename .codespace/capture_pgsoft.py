@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from urllib.parse import parse_qs, urlparse
 from collections import Counter
@@ -25,10 +26,30 @@ RESOURCE_SERIES = ("main_resources", "other_resources", "resources", "common")
 GAME_SUBDIR = "desktop/game/"
 
 
+# Публикатор запросов: подставляется в CI, когда хост режет IP раннера.
+RELAY = (os.environ.get("FETCH_RELAY") or "").strip()
+
+
+def _relay_url(url: str) -> str:
+    if "{url}" in RELAY:
+        return RELAY.replace("{url}", urllib.parse.quote(url, safe=""))
+    sep = "&" if "?" in RELAY else "?"
+    return RELAY + sep + "url=" + urllib.parse.quote(url, safe="")
+
+
 def http_get(url: str, timeout: int = 60) -> bytes:
+    """Прямой запрос, а при 403/таймауте — через публикатор (воркер)."""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except Exception as direct_err:
+        if not RELAY:
+            raise
+        print("  прямой запрос не прошёл (%s) — иду через публикатор" % direct_err)
+        rreq = urllib.request.Request(_relay_url(url), headers={"User-Agent": UA, "Accept": "*/*"})
+        with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
+            return resp.read()
 
 
 def http_head_ok(url: str, timeout: int = 20) -> bool:
@@ -37,6 +58,13 @@ def http_head_ok(url: str, timeout: int = 20) -> bool:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
+        if e.code == 403 and RELAY:
+            rreq = urllib.request.Request(_relay_url(url), headers={"User-Agent": UA}, method="HEAD")
+            try:
+                with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
+                    return 200 <= resp.status < 300
+            except Exception:
+                return False
         return 200 <= e.code < 300
     except Exception:
         return False

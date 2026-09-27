@@ -59,6 +59,10 @@ on:
         description: 'HTTP-публикатор запросов для AnyDownload (шаблон с {url}); пусто = выключить'
         required: false
         type: string
+      fetch_relay:
+        description: 'Публикатор для прямого захвата (шаблон с {url}); пусто = выключить'
+        required: false
+        type: string
 
 jobs:
   tests:
@@ -101,6 +105,8 @@ jobs:
           # публикатор выключен по умолчанию: на проверенной игре он давал 0 файлов
           # (страница не отдаётся через relay). Включается input'ом fetch_proxy.
           FETCH_PROXY: ${{ inputs.fetch_proxy || '' }}
+          # сетевой фолбэк для хостов, режущих IP раннера (403)
+          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
