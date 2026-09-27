@@ -93,6 +93,9 @@ jobs:
           WAIT_MS: ${{ inputs.spa_wait || '8000' }}
           ATTEMPTS: ${{ inputs.attempts || '3' }}
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
+          MIN_FILES: ${{ inputs.min_files || '10' }}
+          SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+          FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
           npm install -g anydownload@2.3.9
           i=0
