@@ -36,7 +36,6 @@ class SiteDownloader extends EventEmitter {
         this.loginForm = options.loginForm || null;
         this.loginCredentials = options.loginCredentials || null;
         this.cookie = options.cookie || '';
-        this.fetchProxy = options.fetchProxy || '';
         this.onResource = options.onResource || (() => {});
         this.onDownloadProgress = typeof options.onDownloadProgress === 'function'
             ? options.onDownloadProgress
@@ -65,7 +64,6 @@ class SiteDownloader extends EventEmitter {
             maxFileSize: options.maxFileSize || 0,
             userAgent: this.userAgent,
             cookie: this.cookie,
-            fetchProxy: this.fetchProxy,
             proxy: options.proxy,
             type: options.type || 'all',
             filterRegex: options.filterRegex,

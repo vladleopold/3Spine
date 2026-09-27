@@ -107,7 +107,6 @@ function buildDownloaderOptions(opts) {
         retry: parseInt(merged.retry, 10) || 3,
         filterRegex: merged.filter || null,
         proxy: merged.proxy || null,
-        fetchProxy: merged.fetchProxy || config.fetchProxy || process.env.ANYDOWNLOAD_FETCH_PROXY || '',
         type: merged.type || 'all',
         blockExternalAssets: merged.blockExternalAssets === true ||
             merged.blockExternalAssets === 'true' ||
@@ -455,7 +454,6 @@ program
     .argument('<url>', 'URL to download')
     .option('-o, --output <dir>', 'Output folder', 'downloaded_site')
     .option('--proxy <url>', 'Proxy server URL')
-    .option('--fetch-proxy <template>', 'HTTP fetch relay for every request, {url} placeholder')
     .option('--type <type>', 'Resource type: all|image|css|js|html|media|font', 'all')
     .option('--block-external-assets', 'Skip cross-origin assets (CDN/fonts/etc.)')
     .option('--block-asset <pattern>', 'Skip assets matching wildcard/regex pattern (repeatable)', collectOption, [])

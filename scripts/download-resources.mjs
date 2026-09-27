@@ -43,7 +43,6 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR || './downloaded';
 const WAIT_AFTER_LOAD = parseInt(process.env.WAIT_MS || '35000', 10);
 const HEADLESS = process.env.HEADLESS !== 'false';
 const PROFILE = process.env.PROFILE || '';          // развёрнутая сессия
-const PROXY = process.env.PROXY || '';              // http://user:pass@host:port
 const GAME_URL = process.env.GAME_URL || '';        // уже найденный игровой шелл
 const MANIFEST_DEPTH = parseInt(process.env.MANIFEST_DEPTH || '2', 10);
 // расширение берём из пути URL: query-строка ломала /\.(atlas|skel|bin)$/
@@ -251,7 +250,6 @@ async function openCtx() {
     await fs.ensureDir(PROFILE);
     return await chromium.launchPersistentContext(PROFILE, {
       ...opts,
-      proxy: PROXY ? { server: PROXY } : undefined,
       ignoreHTTPSErrors: true,
       viewport: { width: 1920, height: 1080 },
       locale: 'uk-UA',
@@ -261,7 +259,6 @@ async function openCtx() {
   }
   const b = await chromium.launch(opts);
   const c = await b.newContext({
-    proxy: PROXY ? { server: PROXY } : undefined,
     viewport: { width: 1920, height: 1080 },
     ignoreHTTPSErrors: true,
     javaScriptEnabled: true,

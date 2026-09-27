@@ -98,17 +98,3 @@ jobs:
         env:
           GH_TOKEN_VALUE: ${{ secrets.ACCESS_TOKEN }}
         run: printf '%s' "${GH_TOKEN_VALUE}" | npx wrangler@latest secret put GITHUB_TOKEN
-
-      # Секрет публикатора: с ним /proxy считает запросы по токену, а не по IP
-      # (IP у раннеров общие, по IP они всегда получают 429).
-      - name: Store SPINE_PROXY_TOKEN as worker secret
-        working-directory: worker
-        env:
-          PROXY_TOKEN_VALUE: ${{ secrets.SPINE_PROXY_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PROXY_TOKEN_VALUE}" ]; then
-            echo "SPINE_PROXY_TOKEN не задан — публикатор остаётся открытым"
-            exit 0
-          fi
-          printf '%s' "${PROXY_TOKEN_VALUE}" | npx wrangler@latest secret put SPINE_PROXY_TOKEN

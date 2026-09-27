@@ -27,7 +27,6 @@ class PlaywrightAdapter {
         this.proxy = options.proxy;
         // HTTP-публикатор запросов: шаблон с {url}, напр. https://host/proxy?url={url}.
         // Нужен для площадок, которые режут запросы по IP раннера.
-        this.fetchProxy = options.fetchProxy || '';
         this.timeout = options.timeout || 60000;
         this.browserName = BROWSER_MAP[options.browser] || 'chromium';
         this.browser = null;
@@ -62,36 +61,6 @@ class PlaywrightAdapter {
             }
         }
         this.context = await this.browser.newContext(contextOptions);
-
-        if (this.fetchProxy) {
-            const template = this.fetchProxy.includes('{url}')
-                ? this.fetchProxy
-                : `${this.fetchProxy}${this.fetchProxy.includes('?') ? '&' : '?'}url={url}`;
-            const self = this;
-            await this.context.route('**/*', async (route) => {
-                const target = route.request().url();
-                // data:/blob:/about: — отдаём как есть, публикатор их не умеет
-                if (/^(data|blob|about|chrome|devtools):/i.test(target)) {
-                    return route.continue();
-                }
-                const via = template.replace('{url}', encodeURIComponent(target));
-                try {
-                    const res = await self.context.request.fetch(via, {
-                        timeout: 60000,
-                        maxRedirects: 5,
-                    });
-                    const body = await res.body();
-                    await route.fulfill({
-                        status: res.status(),
-                        headers: res.headers(),
-                        body,
-                    });
-                } catch (e) {
-                    // публикатор не сработал — ведём себя как обычно
-                    await route.continue().catch(() => {});
-                }
-            });
-        }
     }
 
     async newPage() {

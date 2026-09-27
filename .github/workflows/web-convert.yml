@@ -44,7 +44,6 @@ jobs:
 
       - name: Fetch game assets by URL (если пришла ссылка)
         env:
-          SPINE_PROXY_SERVER: ${{ secrets.SPINE_PROXY_SERVER }}
         run: |
           set -euo pipefail
           if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
@@ -58,13 +57,6 @@ jobs:
               "${RUNNER_TEMP}/Resources-Saver" || true
           fi
           echo "SPINE_EXT_DIR=$EXT_DIR" >> "$GITHUB_ENV"
-          # резидентный прокси для браузера: снимает гео-блокировки и капчу.
-          # Задаётся секретом SPINE_PROXY_SERVER вида http://user:pass@host:port
-          if [ -n "${SPINE_PROXY_SERVER:-}" ]; then
-            echo "SPINE_PROXY_SERVER настроен"
-          else
-            echo "::warning::SPINE_PROXY_SERVER не задан — браузер идёт напрямую с IP runner'а"
-          fi
           [ -d "$EXT_DIR" ] && echo "расширение Resources-Saver: подключено" || echo "расширение: недоступно, работаем без него"
           # страховка от зависания: весь шаг обязан уложиться в 9 минут
           set +e
@@ -101,7 +93,6 @@ jobs:
         if: steps.mode.outputs.mode == 'url'
         continue-on-error: true
         env:
-          SPINE_PROXY_SERVER: ${{ secrets.SPINE_PROXY_SERVER }}
         run: |
           set -uo pipefail
           # install не должен утащить весь job: 7 минут потолок на оба шага
@@ -125,7 +116,6 @@ jobs:
           WAIT_MS: "35000"
           OUTPUT_DIR: saver-out
           HEADLESS: "true"
-          PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
         run: |
           set -uo pipefail
           if [ "${NODE_READY:-0}" != "1" ]; then

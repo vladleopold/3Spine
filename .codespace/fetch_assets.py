@@ -38,57 +38,6 @@ NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 DEFAULT_KINDS = ("json", "atlas", "png")
 DEADLINE = [0.0]          # абсолютное время окончания всей выкачки
 INLINE_SEEN = set()
-# хосты, которые не отдают страницу напрямую с IP runner'а (403 гео/антибот):
-# для них запрашиваем через edge-прокси брокера
-PROXY = os.environ.get(
-    "SPINE_PROXY",
-    "https://spine-broker.leopolds2010.workers.dev/proxy?url=").strip()
-PROXY_HOSTS = set()
-# резидентный прокси для браузера: solves гео-блокировки и капчи
-BROWSER_PROXY = os.environ.get("SPINE_PROXY_SERVER", "").strip()
-PICKED_PROXY = os.environ.get("SPINE_PICKED_PROXY", "").strip()
-PROXY_POOL = []          # пул рабочих прокси (минимум 7)
-PROXY_IDX = [0]
-
-
-EDGE_BROWSER = [None]      # локальный MITM-прокси через edge воркера
-
-
-def edge_browser_proxy() -> str:
-    """Поднимает наш собственный прокси 127.0.0.1 -> edge Cloudflare.
-
-    Свой, постоянный, не зависит от чужих списков. Возвращает '' или ''.
-    """
-    if os.environ.get("SPINE_EDGE_BROWSER", "1") != "1":
-        return ""
-    if EDGE_BROWSER[0] is not None:
-        return EDGE_BROWSER[0]
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from edge_proxy import serve
-        port = serve(8899)
-        EDGE_BROWSER[0] = "127.0.0.1:%d" % port
-        log("собственный edge-прокси для браузера: %s" % EDGE_BROWSER[0])
-    except Exception as e:                                 # noqa: BLE001
-        log("edge-прокси для браузера не поднялся: %s" % str(e)[:60])
-        EDGE_BROWSER[0] = ""
-    return EDGE_BROWSER[0] or ""
-
-
-def proxy_flags() -> list:
-    """Флаги Chrome для прокси и безопасная строка для лога."""
-    if not BROWSER_PROXY:
-        return []
-    masked = re.sub(r"//[^@/]+@", "//***@", BROWSER_PROXY)
-    log("браузер идёт через прокси: %s" % masked)
-    return ["--proxy-server=" + BROWSER_PROXY]
-REJECTED = []
-MANIFESTS = []
-REMOTE = {}
-NAME2URL = {}
-URL2NAME = {}
-
-
 def _guard_state(url: str, data: bytes) -> str:
     """ok | manifest | reject — режем soft-404/HTML, манифесты кладём отдельно."""
     try:
@@ -115,99 +64,8 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _fetch_via_proxy(url: str, timeout: int = 60, quiet: bool = False) -> bytes:
-    """Второй выход: edge-адрес Cloudflare вместо IP дата-центра."""
-    from urllib.parse import quote as _q
-    if not PROXY:
-        return b""
-    try:
-        req = urllib.request.Request(PROXY + _q(url, safe=""),
-                                     headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/131.0",
-                                              "Accept": "*/*"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read() if r.status == 200 else b""
-    except Exception:                                     # noqa: BLE001
-        if not quiet:
-            log("прокси не ответил: %s" % url[:90])
-        return b""
-
-
-def _fetch_via_picked(url: str, timeout: int = 60) -> bytes:
-    """Загрузка через подобранный публичный прокси (обход гео-блокировок)."""
-    if not PICKED_PROXY:
-        return b""
-    try:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({
-            "http": PICKED_PROXY, "https": PICKED_PROXY}))
-        req = urllib.request.Request(url, headers=browser_headers())
-        with opener.open(req, timeout=timeout) as r:
-            return r.read()
-    except Exception:                                     # noqa: BLE001
-        return b""
-
-
-def current_proxy() -> str:
-    if not PROXY_POOL:
-        return PICKED_PROXY or BROWSER_PROXY
-    return PROXY_POOL[PROXY_IDX[0] % len(PROXY_POOL)]
-
-
-def rotate_proxy(reason: str = "") -> str:
-    """Переключаемся на следующий прокси пула по кругу."""
-    global PICKED_PROXY, BROWSER_PROXY
-    if len(PROXY_POOL) < 2:
-        return current_proxy()
-    PROXY_IDX[0] = (PROXY_IDX[0] + 1) % len(PROXY_POOL)
-    PICKED_PROXY = BROWSER_PROXY = current_proxy()
-    log("ротация прокси%s → %d/%d: %s"
-        % ((" (%s)" % reason) if reason else "", PROXY_IDX[0] + 1, len(PROXY_POOL),
-           PICKED_PROXY))
-    return PICKED_PROXY
-
-
-def auto_pick_proxy(target: str, limit: int = 160, want: int = 7) -> str:
-    """Подбираем рабочий публичный прокси, если сайт не отдаёт страницу напрямую."""
-    global PICKED_PROXY, BROWSER_PROXY
-    if BROWSER_PROXY or not target.lower().startswith("http"):
-        return PICKED_PROXY
-    try:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from proxy_picker import pick
-    except Exception as e:                                 # noqa: BLE001
-        log("подбор прокси недоступен: %s" % e)
-        return ""
-    t0 = time.time()
-    log("страница недоступна напрямую — подбираю прокси автоматически…")
-    try:
-        cand = pick(target, limit=limit, workers=24)
-    except Exception as e:                                 # noqa: BLE001
-        log("подбор прокси не удался: %s" % str(e)[:60])
-        return ""
-    if not cand:
-        return ""
-    PICKED_PROXY = cand
-    BROWSER_PROXY = cand
-    log("прокси подобран за %.0f c: %s" % (time.time() - t0, cand))
-    return cand
-
-
 def fetch(url: str, timeout: int = 60) -> bytes:
-    """Браузерные заголовки; при блокировке (403) — автоматически edge-прокси."""
-    from urllib.parse import urlsplit as _us
-    host = _us(url).netloc
-    if host in PROXY_HOSTS and (PICKED_PROXY or PROXY_POOL):
-        for _attempt in range(max(1, len(PROXY_POOL))):
-            data = _fetch_via_picked(url, timeout)
-            if data:
-                return data
-            if len(PROXY_POOL) < 2:
-                break
-            rotate_proxy("не ответил")
-        return b""
-    if PROXY and host in PROXY_HOSTS:
-        data = _fetch_via_proxy(url, timeout, quiet=True)
-        if data:
-            return data
+    """Прямой запрос к origins."""
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers=browser_headers()),
                                     timeout=timeout) as r:
@@ -218,11 +76,6 @@ def fetch(url: str, timeout: int = 60) -> bytes:
         pass
     except Exception:                                     # noqa: BLE001
         pass
-    if PROXY:
-        data = _fetch_via_proxy(url, timeout, quiet=True)
-        if data:
-            PROXY_HOSTS.add(host)
-            return data
     with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}),
                                 timeout=timeout) as r:
         return r.read()
@@ -350,13 +203,7 @@ def netlog_urls(url: str, netlog: str, budget_ms: int) -> list:
     ext = os.environ.get("SPINE_EXT_DIR", "").strip()
     ext_flags = (["--load-extension=" + ext, "--disable-extensions-except=" + ext]
                  if ext and os.path.isdir(ext) else [])
-    local = edge_browser_proxy()
-    if local:
-        # весь трафик браузера идёт через наш edge: блокировки IP не мешают
-        net_flags = ["--proxy-server=" + local, "--ignore-certificate-errors",
-                     "--proxy-bypass-list=<-loopback>"]
-    else:
-        net_flags = proxy_flags()
+    net_flags = []
     cmd = [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
            "--disable-dev-shm-usage", "--no-first-run", "--no-default-browser-check",
            "--disable-extensions", "--mute-audio", "--hide-scrollbars",
@@ -610,7 +457,7 @@ def diagnose_page(url: str) -> dict:
     или отдаться пустой SPA-оболочкой — и это видно сразу, а не по догадкам.
     """
     out = {"url": url, "final": url, "status": 0, "bytes": 0, "antibot": [],
-           "engine": "unknown", "html": "", "via_proxy": False}
+           "engine": "unknown", "html": ""}
     text = ""
     try:
         req = urllib.request.Request(url, headers=browser_headers())
@@ -637,17 +484,6 @@ def diagnose_page(url: str) -> dict:
             out["status"] = e.code
         except Exception:                         # noqa: BLE001
             pass
-    if not text and PROXY:
-        # прямой запрос не прошёл (403 гео/антибот/таймаут) — пробуем edge-прокси
-        log("прямой запрос не дал страницу — пробую edge-прокси воркера")
-        data = _fetch_via_proxy(url, 45, quiet=True)
-        if data:
-            out["via_proxy"] = True
-            out["status"] = 200
-            out["bytes"] = len(data)
-            text = data.decode("utf-8", "replace")
-            from urllib.parse import urlsplit as _us
-            PROXY_HOSTS.add(_us(url).netloc)
     out["html"] = text
     low = text.lower()
     out["antibot"] = [m for m in ANTIBOT_MARKERS if m in low]
@@ -666,7 +502,7 @@ def report_diagnosis(d: dict) -> None:
     if d["antibot"]:
         log("антибот на странице: %s" % ", ".join(d["antibot"][:4]))
     log("отпечаток движка по HTML: %s%s"
-        % (d["engine"], " (через edge-прокси)" if d.get("via_proxy") else ""))
+        % (d["engine"], ""))
 
 
 def collect_bodies(url: str, budget_ms: int = 30000) -> tuple:
@@ -713,7 +549,7 @@ def catalog_shells(origin: str, limit: int = 4) -> list:
     """Ищем адрес игры в типовых API-конфигах площадки.
 
     SPA прячет игровой URL в рантайме, но он почти всегда лежит в одном из
-    этих конфигов. Запросы идут через edge-прокси, если хост заблокирован.
+    этих конфигов.
     """
     from urllib.parse import urlsplit as _us
     host = _us(origin).netloc
@@ -840,9 +676,7 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
     netlog = os.path.join(tmp, "netlog.json")
     got = netlog_urls(url, netlog, budget_ms)  # первый проход самый важный
     if len(got) < 10 and budget_ms >= 8000:
-        log("браузер вернул %d адресов — повтор через другой прокси/профиль" % len(got))
-        if len(PROXY_POOL) > 1:
-            rotate_proxy("пустой браузерный сбор")
+        log("браузер вернул %d адресов — повтор с другим профилем" % len(got))
         got += [u for u in netlog_urls(url, netlog + ".r",
                                        int(budget_ms * 0.8)) if u not in got]
     urls |= set(got)
@@ -1112,22 +946,159 @@ def finish_empty(args, diag, verdict: str, urls) -> int:
     return 3
 
 
-def run_saver_only(args, diag, tmp) -> int:
-    """Единственный путь выкачки: код расширения Resources-Saver.
+NODE_SAVER_NAME = "download-resources.mjs"
+NODE_PACK_NAME = "spine-pack.mjs"
 
-    Он сам открывает страницу в браузере, собирает все ресурсы (включая
-    iframe/popup) и отдаёт их телами — без повторных HTTP-запросов.
+
+def repo_root() -> str:
+    """Корень репозитория: .codespace/ лежит уровнем ниже."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def node_saver_script() -> str:
+    """Путь к Node-сейверу или '' — в CI node может не быть, это не ошибка."""
+    if not shutil.which("node"):
+        return ""
+    p = os.path.join(repo_root(), "scripts", NODE_SAVER_NAME)
+    return p if os.path.exists(p) else ""
+
+
+def node_pack_script() -> str:
+    """Путь к раскладщику набора или '' — опционален."""
+    p = os.path.join(repo_root(), "scripts", NODE_PACK_NAME)
+    return p if os.path.exists(p) else ""
+
+
+def spine_set_name(url: str) -> str:
+    """Имя набора для res/spine/<набор>/ — ровно как у Node-сейвера."""
+    safe = re.sub(r"^https?://", "", url or "")
+    safe = re.sub(r"[^a-zA-Z0-9._-]", "_", safe)[:70].strip("._-")
+    return safe or "game"
+
+
+def count_spine_files(root: str) -> int:
+    """Считаем только настоящие Spine-ассеты, а не файлы сайта."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fetch_guard import check as _fcheck
+    except Exception:                                     # noqa: BLE001
+        _fcheck = None
+    n = 0
+    for _r, _d, fns in os.walk(root):
+        for fn in fns:
+            low = fn.lower()
+            if not low.endswith((".json", ".atlas", ".skel", ".scn")):
+                continue
+            fp = os.path.join(_r, fn)
+            try:
+                with open(fp, "rb") as f:
+                    head = f.read(70000)
+            except OSError:
+                continue
+            if _fcheck is None:
+                n += 1
+                continue
+            ok, _why = _fcheck(fn, head)
+            if ok and low.endswith((".json", ".atlas", ".skel")):
+                n += 1
+    return n
+
+
+def copy_assets(src: str, dst: str) -> int:
+    """Переносим добытое в общий каталог: zip'ы и отчёты сейвера не тащим."""
+    n = 0
+    for r, _d, fns in os.walk(src):
+        for fn in fns:
+            if fn.endswith(".zip") or fn in ("saver-report.json", "mapping.json"):
+                continue
+            fp = os.path.join(r, fn)
+            out = os.path.join(dst, os.path.relpath(fp, src))
+            os.makedirs(os.path.dirname(out) or dst, exist_ok=True)
+            try:
+                shutil.copy2(fp, out)
+                n += 1
+            except OSError:
+                continue
+    return n
+
+
+def run_node_saver(args, out_dir: str, tmp: str, budget: int, profile: str) -> bool:
+    """Единый путь захвата для URL-режима: Node-сейвер + раскладка набора.
+
+    Одна развёрнутая сессия ловит всю сеть страницы (включая iframe/popup) и
+    отдаёт тела без повторных HTTP-запросов. True — Spine найден и разложен,
+    False — нужен честный откат на Python-путь.
     """
-    import subprocess
-    log("режим: только Resources-Saver")
-    out_dir = os.path.join(tmp, "saver")
-    os.makedirs(out_dir, exist_ok=True)
-    saver = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "resources_saver.py")
-    budget = int(max(20, min(70, args.saver_seconds)))
-    log("запускаю Resources-Saver, бюджет %d c" % budget)
-    profile = os.path.join(os.path.expanduser("~"), ".spine-session") \
-        if args.session else ""
+    mjs = node_saver_script()
+    if not mjs:
+        log("Node-сейвер недоступен (нет node или scripts/%s) — Python-путь"
+            % NODE_SAVER_NAME)
+        return False
+    if left() < 12:
+        log("до дедлайна %.0f c — Node-сейвер пропускаем" % left())
+        return False
+
+    node = shutil.which("node") or "node"
+    node_dir = os.path.join(tmp, "node-saver")
+    set_name = spine_set_name(args.url)
+    slice_s = max(10.0, min(float(budget), left() - 8.0))
+    wait_ms = int(args.node_wait_ms if args.node_wait_ms > 0 else slice_s * 1000)
+    wait_ms = max(3000, min(wait_ms, int(slice_s * 1000)))
+    tmo = float(args.node_timeout) if args.node_timeout > 0 else max(8.0, min(slice_s + 15.0, left()))
+    tmo = max(5.0, min(tmo, max(5.0, left())))
+    env = dict(os.environ)
+    env.update({
+        "URLS": args.url, "OUTPUT_DIR": node_dir, "WAIT_MS": str(wait_ms),
+        "PROFILE": profile or "",
+        "HEADLESS": "true" if args.node_headless else "false",
+    })
+    log("Node-сейвер: %s" % os.path.relpath(mjs, repo_root()))
+    log("  env: URLS=%s, OUTPUT_DIR=%s, WAIT_MS=%d, PROFILE=%s, HEADLESS=%s"
+        % (args.url[:70], os.path.relpath(node_dir, tmp), wait_ms,
+           profile or "-", env["HEADLESS"]))
+    log("  браузер %.0f c, потолок процесса %.0f c, до дедлайна %.0f c"
+        % (wait_ms / 1000.0, tmo, left()))
+    try:
+        subprocess.run([node, mjs], env=env, timeout=tmo, check=False)
+    except subprocess.TimeoutExpired:
+        log("Node-сейвер не уложился в %.0f c — берём что успел" % tmo)
+    except Exception as e:                                 # noqa: BLE001
+        log("Node-сейвер не отработал: %s" % str(e)[:60])
+        return False
+
+    src = node_dir
+    pack = node_pack_script()
+    if pack:
+        set_dir = os.path.join(repo_root(), "res", "spine", set_name)
+        log("раскладка набора: %s" % os.path.relpath(set_dir, repo_root()))
+        penv = dict(env)
+        penv.update({"INPUT_DIR": node_dir, "OUTPUT_DIR": set_dir, "SET": set_name})
+        try:
+            subprocess.run([node, pack, node_dir, set_dir, set_name], env=penv,
+                           timeout=max(6.0, min(20.0, left())), check=False)
+            if os.path.isdir(set_dir):
+                src = set_dir
+            else:
+                log("%s ничего не разложил — берём сырой вывод Node" % NODE_PACK_NAME)
+        except subprocess.TimeoutExpired:
+            log("%s не уложился — берём сырой вывод Node" % NODE_PACK_NAME)
+        except Exception as e:                             # noqa: BLE001
+            log("%s не отработал: %s" % (NODE_PACK_NAME, str(e)[:60]))
+    else:
+        log("scripts/%s нет — раскладку делаем сами" % NODE_PACK_NAME)
+
+    have = count_spine_files(src)
+    log("Spine-файлов от Node-сейвера: %d" % have)
+    if have == 0:
+        return False
+    log("Node-сейвер: перенесено %d файлов из набора %s"
+        % (copy_assets(src, out_dir), set_name))
+    return True
+
+
+def run_python_saver(args, out_dir: str, saver: str, budget: int, profile: str) -> None:
+    """Прежний путь: Python + Playwright (resources_saver.py)."""
+    log("запускаю Resources-Saver (Python+Playwright), бюджет %d c" % budget)
     if profile:
         log("развёрнутая сессия: профиль %s" % profile)
     try:
@@ -1138,35 +1109,35 @@ def run_saver_only(args, diag, tmp) -> int:
     except Exception as e:                                 # noqa: BLE001
         log("Resources-Saver не отработал: %s" % str(e)[:60])
 
-    # сайт ничего не дал -> ищем запускающий URL игры через API площадки
-    def _game_files(root: str) -> int:
-        """Считаем только настоящие Spine-ассеты, а не файлы сайта."""
-        try:
-            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-            from fetch_guard import check as _fcheck
-        except Exception:                                 # noqa: BLE001
-            _fcheck = None
-        n = 0
-        for _r, _d, fns in os.walk(root):
-            for fn in fns:
-                low = fn.lower()
-                if not low.endswith((".json", ".atlas", ".skel", ".scn")):
-                    continue
-                fp = os.path.join(_r, fn)
-                try:
-                    with open(fp, "rb") as f:
-                        head = f.read(70000)
-                except OSError:
-                    continue
-                if _fcheck is None:
-                    n += 1
-                    continue
-                ok, _why = _fcheck(fn, head)
-                if ok and low.endswith((".json", ".atlas", ".skel")):
-                    n += 1
-        return n
 
-    have_spine = _game_files(out_dir)
+def run_saver_only(args, diag, tmp) -> int:
+    """URL-режим: Node-сейвер, а при нулевом Spine — Python Resources-Saver.
+
+    Node-сейвер (scripts/download-resources.mjs) — основной путь захвата: он
+    сам открывает страницу в браузере, собирает все ресурсы (включая
+    iframe/popup) и отдаёт их телами — без повторных HTTP-запросов. Если node
+    недоступен или Spine не найден — молча берём прежний Python-путь.
+    """
+    log("режим: только Resources-Saver")
+    out_dir = os.path.join(tmp, "saver")
+    os.makedirs(out_dir, exist_ok=True)
+    saver = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "resources_saver.py")
+    budget = int(max(20, min(70, args.saver_seconds)))
+    profile = os.path.join(os.path.expanduser("~"), ".spine-session") \
+        if args.session else ""
+
+    node_ok = run_node_saver(args, out_dir, tmp, budget, profile) \
+        if args.node_saver else False
+    if args.node_saver and not node_ok:
+        log("Node-путь не дал Spine — откат на Python-путь")
+    elif not args.node_saver:
+        log("Node-сейвер выключен (--node-saver 0) — Python-путь")
+    if not node_ok:
+        run_python_saver(args, out_dir, saver, budget, profile)
+
+    # сайт ничего не дал -> ищем запускающий URL игры через API площадки
+    have_spine = count_spine_files(out_dir)
     log("настоящих Spine-файлов после первого прохода: %d" % have_spine)
     if have_spine == 0 and args.resolve:
         try:
@@ -1281,7 +1252,8 @@ def run_saver_only(args, diag, tmp) -> int:
                 log("на странице капTCHA/антибот: %s"
                     % ", ".join(saver_diag["captcha"][:3]))
         z.writestr("fetch-report.json", json.dumps({
-            "url": args.url, "mode": "resources-saver", "ok": bool(files),
+            "url": args.url, "mode": "node-saver" if node_ok else "resources-saver",
+            "ok": bool(files), "spine_set": spine_set_name(args.url) if node_ok else "",
             "files": len(files), "bytes": total,
             "http_status": diag["status"], "antibot": diag["antibot"],
             "saver": saver_diag,
@@ -1315,6 +1287,15 @@ def main() -> int:
                     help="0 выкл (быстро), 1 всегда, -1 авто (дольше)")
     ap.add_argument("--only-saver", type=int, default=1,
                     help="1 — единственный путь: код расширения Resources-Saver")
+    ap.add_argument("--node-saver", type=int, default=1,
+                    help="1 — основной путь: Node-сейвер scripts/download-resources.mjs "
+                         "(0 — только Python Resources-Saver)")
+    ap.add_argument("--node-wait-ms", type=int, default=0,
+                    help="ожидание браузера в Node-сейвере, мс (0 — по --saver-seconds)")
+    ap.add_argument("--node-headless", type=int, default=1,
+                    help="1 — headless-браузер в Node-сейвере")
+    ap.add_argument("--node-timeout", type=int, default=0,
+                    help="потолок процесса Node-сейвера, с (0 — по остатку бюджета)")
     ap.add_argument("--session", type=int, default=1,
                     help="1 — развёрнутая сессия: постоянный профиль браузера")
     ap.add_argument("--resolve", type=int, default=1,
@@ -1362,15 +1343,11 @@ def main() -> int:
 
     discover_ms = int(min(max(args.budget_ms, 18000), max(6000, left() * 0.62)))
     if not diag.get("bytes"):
-        if auto_pick_proxy(args.url):
-            # перепроверяем страницу через найденный выход
-            d2 = diagnose_page(args.url)
-            if d2["bytes"]:
-                diag.update({"status": d2["status"], "bytes": d2["bytes"],
-                             "html": d2["html"], "final": d2["final"]})
-                report_diagnosis(diag)
-            from urllib.parse import urlsplit as _us2
-            PROXY_HOSTS.add(_us2(args.url).netloc)
+        d2 = diagnose_page(args.url)
+        if d2["bytes"]:
+            diag.update({"status": d2["status"], "bytes": d2["bytes"],
+                         "html": d2["html"], "final": d2["final"]})
+            report_diagnosis(diag)
 
     info = discover(args.url, tmp, discover_ms, args.depth, args.passes, args.cdp)
     urls = info["urls"]
@@ -1397,7 +1374,7 @@ def main() -> int:
         log("--- СВОДКА ПОИСКА ---")
         log("HTTP %s | байт: %d | адресов в сети: %d | кандидатов Spine: 0"
             % (diag["status"], diag["bytes"], len(urls)))
-        log("ВЫВОД: %s. Нужен другой IP/прокси или ручная выгрузка ассетов." % verdict)
+        log("ВЫВОД: %s. Нужен другой IP или ручная выгрузка ассетов." % verdict)
         return finish_empty(args, diag, verdict, urls)
 
     # netlog может остаться без Spine (игра за модалкой) -> запасной путь с кликами

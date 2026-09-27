@@ -153,7 +153,7 @@ jobs:
             echo "$url -> $dir ($got файлов)"
             echo "$url" > "$dir/url.txt"
             if [ "$got" -lt "$MIN_FILES" ]; then
-              echo "::warning::$url — AnyDownload взял $got файлов, пробуем свой захват с прокси"
+              echo "::warning::$url — AnyDownload взял $got файлов, пробуем резервный захват"
               rm -rf "$dir"; mkdir -p "$dir"
               OUTPUT_DIR="$dir" URL="$url" WAIT_MS="$FB_WAIT_MS" HEADLESS=true \
                 node scripts/download-resources.mjs || true
@@ -336,7 +336,7 @@ jobs:
             exit 1
           fi
 
-      - name: "Фолбэк: свой захват с прокси"
+      - name: "Фолбэк: резервный захват"
         if: failure() && steps.anydownload.outcome == 'failure'
         continue-on-error: true
         env:

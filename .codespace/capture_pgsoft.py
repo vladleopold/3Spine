@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Прямой захват игр PG Soft (тип html5Game.do), без браузера и без прокси.
+# Прямой захват игр PG Soft (тип html5Game.do): только прямые запросы, без браузера.
 #
 # Почему так: лобби отдаёт HTML, в котором лежит gameConfig с публичным
 # datapath. Игра тянет оттуда файлы main_resourcesNNN.json /
@@ -27,7 +27,7 @@ GAME_SUBDIR = "desktop/game/"
 
 
 def http_get(url: str, timeout: int = 60) -> bytes:
-    """Прямой запрос: без публикаторов и прокси."""
+    """Прямой запрос к origins."""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     _throttle()
     with urllib.request.urlopen(req, timeout=timeout) as resp:

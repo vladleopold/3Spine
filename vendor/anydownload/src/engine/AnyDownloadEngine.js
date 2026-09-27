@@ -27,7 +27,6 @@ class AnyDownloadEngine {
         this.maxFileSize = options.maxFileSize || 0;
         this.proxy = options.proxy || null;
         // HTTP-публикатор запросов (шаблон с {url}) — гоняем все запросы через него
-        this.fetchProxy = options.fetchProxy || '';
         this._static = new StaticEngine(options);
         this._render = null;
     }
@@ -68,7 +67,6 @@ class AnyDownloadEngine {
                 userAgent: this.userAgent,
                 cookie: this.cookie,
                 proxy: this.proxy,
-                fetchProxy: this.fetchProxy,
                 extraWait: this.extraWait,
                 loginUrl: this.loginUrl,
                 loginForm: this.loginForm,
