@@ -28,6 +28,15 @@ GAME_SUBDIR = "desktop/game/"
 
 # Публикатор запросов: подставляется в CI, когда хост режет IP раннера.
 RELAY = (os.environ.get("FETCH_RELAY") or "").strip()
+# Токен публикатора: с ним лимит считается по токену, а не по IP.
+RELAY_TOKEN = (os.environ.get("FETCH_RELAY_TOKEN") or "").strip()
+
+
+def relay_headers() -> dict:
+    h = {"User-Agent": UA, "Accept": "*/*"}
+    if RELAY_TOKEN:
+        h["X-Spine-Token"] = RELAY_TOKEN
+    return h
 
 
 def _relay_url(url: str) -> str:
@@ -47,7 +56,7 @@ def http_get(url: str, timeout: int = 60) -> bytes:
         if not RELAY:
             raise
         print("  прямой запрос не прошёл (%s) — иду через публикатор" % direct_err)
-        rreq = urllib.request.Request(_relay_url(url), headers={"User-Agent": UA, "Accept": "*/*"})
+        rreq = urllib.request.Request(_relay_url(url), headers=relay_headers())
         with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
             return resp.read()
 
@@ -59,7 +68,7 @@ def http_head_ok(url: str, timeout: int = 20) -> bool:
     отвечает ошибкой, из-за чего все файлы считались отсутствующими.
     """
     for target in ((url, _relay_url(url)) if RELAY else (url,)):
-        req = urllib.request.Request(target, headers={"User-Agent": UA, "Accept": "*/*"})
+        req = urllib.request.Request(target, headers=relay_headers())
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp.read(1)

@@ -1,0 +1,162 @@
+name: Saver self-test (7 URL, headless)
+
+# Регламентный прогон сейвера по эталонным URL: ловим регрессии захвата без человека.
+# Отличие от download-assets.yml: без ручных inputs, без full-режима, ежедневно + вручную.
+
+on:
+  schedule:
+    # 04:23 UTC — off-peak, минута не кратна 10 (меньше шанс попасть в пук cron'ов)
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saver-selftest-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Unit-тесты сейвера (быстрый gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Установить Google Chrome (Linux)
+        run: |
+          bash scripts/install-chrome-linux.sh
+          echo "CHROME_PATH=/usr/bin/google-chrome" >> "$GITHUB_ENV"
+      - name: node --test (пути, манифесты, Spine-пары)
+        run: npm test
+
+  capture:
+    name: ${{ matrix.name }}
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: first-ua-kendoo
+            url: 'https://first.ua/ua/igrovie-avtomaty/kendoo/4-gold-carts'
+          - name: slotcity-spinjoy
+            url: 'https://slotcity.ua/?modals=game&game-term=spinjoy-meduzas-fortune&demo=true'
+          - name: cosmolot-demonic-dolls
+            url: 'https://cosmolot.ua/ua/game/demonic-dolls'
+          - name: playson-clover-strike
+            url: 'https://playson.com/game/clover-strike-hold-and-win'
+          - name: 3oaks-superpower-diamonds
+            url: 'https://3oaks.com/game/3_superpower_diamonds'
+          - name: slotor777-demo
+            url: 'https://slotor777.ua/ru/game/view/56dab5f9954f459f919d800306e48b35?mode=demo'
+          - name: beton-dog-house
+            url: 'https://beton.ua/game/pragmaticplay-direct-the-dog-house-megaways-1000?isDemo=true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+
+      - name: Захват ресурсов (headless)
+        env:
+          URLS: ${{ matrix.url }}
+          OUTPUT_DIR: ./artifacts
+          WAIT_MS: '35000'
+          HEADLESS: 'true'
+        run: node scripts/download-resources.mjs
+
+      - name: Собрать spine-паки (если scripts/spine-pack.mjs есть)
+        if: ${{ hashFiles('scripts/spine-pack.mjs') != '' }}
+        env:
+          URL: ${{ matrix.url }}
+          OUTPUT_DIR: ./artifacts
+        run: node scripts/spine-pack.mjs
+
+      - name: Отчёт по игре (если scripts/report.mjs есть)
+        if: ${{ hashFiles('scripts/report.mjs') != '' }}
+        env:
+          URL: ${{ matrix.url }}
+          OUTPUT_DIR: ./artifacts
+        run: node scripts/report.mjs >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ matrix.name }}-${{ github.run_id }}
+          path: artifacts
+          retention-days: 7
+          if-no-files-found: warn
+
+  summary:
+    name: Итог по матрице
+    needs: capture
+    # агрегатор нужен и при частичных падениях легов матрицы (без cancelled())
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: selftest-*-${{ github.run_id }}
+          path: reports
+          merge-multiple: true
+
+      - name: Таблица по матрице в $GITHUB_STEP_SUMMARY
+        env:
+          EXPECTED: |
+            first-ua-kendoo|https://first.ua/ua/igrovie-avtomaty/kendoo/4-gold-carts
+            slotcity-spinjoy|https://slotcity.ua/?modals=game&game-term=spinjoy-meduzas-fortune&demo=true
+            cosmolot-demonic-dolls|https://cosmolot.ua/ua/game/demonic-dolls
+            playson-clover-strike|https://playson.com/game/clover-strike-hold-and-win
+            3oaks-superpower-diamonds|https://3oaks.com/game/3_superpower_diamonds
+            slotor777-demo|https://slotor777.ua/ru/game/view/56dab5f9954f459f919d800306e48b35?mode=demo
+            beton-dog-house|https://beton.ua/game/pragmaticplay-direct-the-dog-house-megaways-1000?isDemo=true
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import glob, json, os
+
+          rows = []
+          for line in os.environ['EXPECTED'].strip().splitlines():
+              name, url = line.split('|', 1)
+              rows.append([name, url, None, None])
+
+          found = {}
+          for path in glob.glob('reports/**/saver-report.json', recursive=True):
+              try:
+                  data = json.load(open(path, encoding='utf-8'))
+              except Exception:
+                  continue
+              found[data.get('url')] = (int(data.get('files') or 0), int(data.get('spine') or 0))
+
+          total_files = total_spine = 0
+          missing = []
+          print('## Saver self-test — захват 7 эталонных URL\n')
+          print('| Игра | Файлов | Spine-пар | Отчёт |')
+          print('| --- | ---: | ---: | :---: |')
+          for name, url, files, spine in rows:
+              got = found.get(url)
+              if got is None:
+                  missing.append(name)
+                  print('| %s | — | — | ❌ |' % name)
+                  continue
+              files, spine = got
+              total_files += files
+              total_spine += spine
+              print('| %s | %d | %d | ✅ |' % (name, files, spine))
+          print('| **Итого** | **%d** | **%d** | **%d/7** |'
+                % (total_files, total_spine, len(rows) - len(missing)))
+          if missing:
+              print('\nНет артефакта (падение или таймаут): %s' % ', '.join(missing))
+          PY

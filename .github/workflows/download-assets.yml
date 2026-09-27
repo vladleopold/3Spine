@@ -107,6 +107,8 @@ jobs:
           FETCH_PROXY: ${{ inputs.fetch_proxy || '' }}
           # сетевой фолбэк для хостов, режущих IP раннера (403)
           FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
+          # Токен публикатора: лимит запросов считается по нему, а не по IP
+          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
@@ -277,6 +279,8 @@ jobs:
         continue-on-error: true
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
+          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
         run: |
           mkdir -p artifacts/anydownload
           case "$URL" in

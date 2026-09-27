@@ -9,7 +9,7 @@ const MAX_BYTES = 35 * 1024 * 1024;
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "content-type, authorization",
+  "Access-Control-Allow-Headers": "content-type, authorization, x-spine-token",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -113,17 +113,220 @@ const FETCH_RE = /^https?:\/\/[\w.-]+\.[a-z]{2,}(\S*)$/i;
 
 const PRIVATE_HOST = /^(localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.0\.0\.0$|\[?::1\]?$|172\.(1[6-9]|2\d|3[01])\.)/i;
 
-async function handleProxy(request) {
-  const raw = new URL(request.url).searchParams.get("url");
-  if (!raw) return json({ error: "url required" }, 400);
+// ---------------------------------------------------------------------------
+// Защита /proxy от абьюза: лимит запросов на IP + необязательный общий секрет.
+//
+// Durable Object в проекте НЕ используется (в worker/wrangler.toml только
+// KV-биндинг VISITS), поэтому счётчики живут в памяти изолята воркера.
+// Следствия, которые надо понимать:
+//   * лимит приблизительный — на нескольких изолятах он действует как N
+//     независимых счётчиков, при холодном старте счётчики обнуляются;
+//   * при переезде на Durable Object достаточно вынести bucketFor/hit в класс
+//     с одним ключом на IP — контракт эндпоинта не изменится;
+//   * Map ограничен MAX_BUCKETS и чистится по sweep (см. ниже), чтобы не расти
+//     в памяти при сканировании с тысяч разных IP.
+// Этого достаточно, чтобы отсечь массовый абьюз одного источника, но НЕ
+// защищает от распределённого флуда — для этого Cloudflare Rate Limiting.
+// В CI каждый прогон приходит со свежего IP, поэтому умолчания щедрые.
+// ---------------------------------------------------------------------------
+const RATE_LIMIT = 600;         // запросов /proxy на IP за окно
+const TOKEN_RATE_LIMIT = 6000;  // запросов /proxy на токен за окно (CI: IP у раннеров общие)
+const RATE_WINDOW_MS = 600000;  // 10 минут
+const AUTH_FAIL_LIMIT = 10;     // неудачных X-Spine-Token на IP за окно
+const MAX_BUCKETS = 20000;      // больше IP одновременно не держим
+const SWEEP_MS = 60000;         // как часто чистим протухшие бакеты
+const PROXY_MAX_BYTES = 8 * 1024 * 1024;
+
+const buckets = new Map();      // ip -> { hits: number[], fails: number[] }
+let lastSweep = 0;
+
+function numEnv(env, name, dflt) {
+  const v = Number(env[name]);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : dflt;
+}
+
+function rateCfg(env) {
+  return {
+    limit: numEnv(env, "SPINE_PROXY_RATE_LIMIT", RATE_LIMIT),
+    tokenLimit: numEnv(env, "SPINE_PROXY_TOKEN_RATE_LIMIT", TOKEN_RATE_LIMIT),
+    windowMs: numEnv(env, "SPINE_PROXY_RATE_WINDOW_MS", RATE_WINDOW_MS),
+    failLimit: numEnv(env, "SPINE_PROXY_AUTH_LIMIT", AUTH_FAIL_LIMIT),
+  };
+}
+
+// скользящее окно по массиву таймстемпов: список ограничен лимитом,
+// поэтому память на один IP константная.
+function hitWindow(list, limit, windowMs, now) {
+  const cutoff = now - windowMs;
+  let drop = 0;
+  while (drop < list.length && list[drop] <= cutoff) drop++;
+  if (drop) list.splice(0, drop);
+  if (list.length >= limit) {
+    return {
+      ok: false,
+      remaining: 0,
+      retryAfter: Math.max(1, Math.ceil((list[0] + windowMs - now) / 1000)),
+      reset: list[0] + windowMs,
+    };
+  }
+  list.push(now);
+  return { ok: true, remaining: limit - list.length, reset: now + windowMs };
+}
+
+function sweepBuckets(now, windowMs) {
+  if (now - lastSweep < SWEEP_MS) return;
+  lastSweep = now;
+  for (const [ip, b] of buckets) {
+    const win = now - windowMs;
+    while (b.hits.length && b.hits[0] <= win) b.hits.shift();
+    while (b.fails.length && b.fails[0] <= win) b.fails.shift();
+    if (!b.hits.length && !b.fails.length) buckets.delete(ip);
+  }
+  while (buckets.size > MAX_BUCKETS) {          // вытесняем самые старые (LRU)
+    const oldest = buckets.keys().next().value;
+    if (oldest === undefined) break;
+    buckets.delete(oldest);
+  }
+}
+
+function bucketFor(ip) {
+  let b = buckets.get(ip);
+  if (!b) {
+    b = { hits: [], fails: [] };
+    buckets.set(ip, b);
+  } else {
+    buckets.delete(ip);                        // обновляем позицию для LRU
+    buckets.set(ip, b);
+  }
+  return b;
+}
+
+function clientIp(request) {
+  const ip = (request.headers.get("CF-Connecting-IP") || "").trim();
+  if (ip) return ip;
+  const xff = (request.headers.get("X-Forwarded-For") || "").split(",")[0].trim();
+  return xff || "anon";                        // локальная отладка без CF
+}
+
+function rateHeaders(h) {
+  return {
+    "X-RateLimit-Limit": String(h.limit),
+    "X-RateLimit-Remaining": String(h.remaining),
+    "X-RateLimit-Reset": String(Math.ceil(h.reset / 1000)),
+  };
+}
+
+function tooMany(retryAfter, h, scope) {
+  return json({ error: "rate limit exceeded (" + scope + ")", retry_after: retryAfter }, 429, {
+    "Retry-After": String(retryAfter),
+    ...rateHeaders(h),
+  });
+}
+
+function safeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function proxySecret(env) {
+  return String(env.SPINE_PROXY_TOKEN || "").trim();
+}
+
+function givenToken(request) {
+  return String(request.headers.get("X-Spine-Token") || "").trim();
+}
+
+function tokenMatches(request, env) {
+  const secret = proxySecret(env);
+  return !!secret && safeEqual(givenToken(request), secret);
+}
+
+// Ключ бакета для запросов с токеном: сам токен в памяти не держим,
+// только короткий необратимый хеш.
+function tokenKey(request) {
+  const t = givenToken(request);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) {
+    h ^= t.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+// Секрет задан -> /proxy закрыт; не задан -> работает открыто (текущее поведение).
+function checkToken(request, env, bucket, c, now) {
+  const secret = proxySecret(env);
+  if (!secret) return null;
+  if (safeEqual(givenToken(request), secret)) return null;
+  const f = hitWindow(bucket.fails, c.failLimit, c.windowMs, now);
+  if (!f.ok) return tooMany(f.retryAfter, { limit: c.failLimit, remaining: 0, reset: f.reset }, "auth");
+  return json({ error: "proxy token required" }, 401, {
+    "WWW-Authenticate": 'Bearer realm="spine-proxy", header="X-Spine-Token"',
+    ...rateHeaders({ limit: c.failLimit, remaining: Math.max(0, c.failLimit - bucket.fails.length), reset: now + c.windowMs }),
+  });
+}
+
+const HOST_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/;
+const HOST6_RE = /^\[[0-9a-f:.]+\](?::\d{1,5})?$/;
+
+// Апстрим строится только из ?url=, Host в него не попадает, но инъекция
+// (дубль Host, CRLF, чужой домен) ломает логи/кэш/счётчики -> 421.
+// Строгий allowlist включается через SPINE_PROXY_HOSTS (через запятую).
+function hostProblem(request, env, reqUrl) {
+  const raw = request.headers.get("host");
+  if (raw === null) return "Host header required";
+  const v = raw.trim().toLowerCase();
+  if (!v || v.length > 255) return "empty Host header";
+  if (/[\s,;\\/@?#]/.test(v)) return "malformed Host header";
+  if (!HOST_RE.test(v) && !HOST6_RE.test(v)) return "malformed Host header";
+  const hostname = v.startsWith("[")
+    ? v.slice(0, v.indexOf("]") + 1)
+    : v.replace(/:\d{1,5}$/, "");
+  const allow = String(env.SPINE_PROXY_HOSTS || "")
+    .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (allow.length) {
+    return allow.includes(hostname) ? null : "Host not allowed: " + hostname;
+  }
+  if (reqUrl.hostname && hostname !== reqUrl.hostname) {
+    return "Host does not match request URL";
+  }
+  return null;
+}
+
+async function handleProxy(request, env) {
+  const reqUrl = new URL(request.url);
+
+  const hostProblemMsg = hostProblem(request, env, reqUrl);
+  if (hostProblemMsg) return json({ error: hostProblemMsg }, 421);
+
+  const c = rateCfg(env);
+  const now = Date.now();
+  sweepBuckets(now, c.windowMs);
+  // С токеном считаем запросы по токену, а не по IP: у GitHub-раннеров IP
+  // общие на весь мир, по IP они всегда упираются в лимит и получают 429
+  // вместо файла. Без токена всё как раньше — лимит по IP.
+  const authed = tokenMatches(request, env);
+  const bucket = bucketFor(authed ? "tok:" + tokenKey(request) : "ip:" + clientIp(request));
+  const limit = authed ? c.tokenLimit : c.limit;
+  const rl = hitWindow(bucket.hits, limit, c.windowMs, now);
+  if (!rl.ok) return tooMany(rl.retryAfter, { limit, remaining: 0, reset: rl.reset }, limit + " req/" + Math.round(c.windowMs / 1000) + "s " + (authed ? "per token" : "per IP"));
+  const rlHeaders = rateHeaders({ limit, remaining: rl.remaining, reset: rl.reset });
+
+  const denied = checkToken(request, env, bucket, c, now);
+  if (denied) return denied;
+
+  const raw = reqUrl.searchParams.get("url");
+  if (!raw) return json({ error: "url required" }, 400, rlHeaders);
   let target;
   try {
     target = new URL(raw);
   } catch (_) {
-    return json({ error: "bad url" }, 400);
+    return json({ error: "bad url" }, 400, rlHeaders);
   }
-  if (target.protocol !== "https:") return json({ error: "https only" }, 400);
-  if (PRIVATE_HOST.test(target.hostname)) return json({ error: "private host" }, 400);
+  if (target.protocol !== "https:") return json({ error: "https only" }, 400, rlHeaders);
+  if (PRIVATE_HOST.test(target.hostname)) return json({ error: "private host" }, 400, rlHeaders);
 
   // страховка от редиректов во внутреннюю сеть
   const controller = new AbortController();
@@ -141,10 +344,14 @@ async function handleProxy(request) {
       },
     });
     const len = Number(r.headers.get("content-length") || 0);
-    if (len > 8 * 1024 * 1024) {
+    if (len > PROXY_MAX_BYTES) {
       return { error: "too large", bytes: len };
     }
     const buf = await r.arrayBuffer();
+    // тот же лимит для ответов без content-length (chunked/сжатые)
+    if (buf.byteLength > PROXY_MAX_BYTES) {
+      return { error: "too large", bytes: buf.byteLength };
+    }
     return { status: r.status,
              type: r.headers.get("content-type") || "application/octet-stream",
              body: buf };
@@ -158,12 +365,12 @@ async function handleProxy(request) {
       resp = await attemptOnce();
     } catch (e) {
       clearTimeout(timer);
-      return json({ error: "proxy fetch failed: " + String(e).slice(0, 120) }, 502);
+      return json({ error: "proxy fetch failed: " + String(e).slice(0, 120) }, 502, rlHeaders);
     }
   }
   clearTimeout(timer);
   if (resp.error) {
-    return json({ error: resp.error, bytes: resp.bytes || 0 }, 413);
+    return json({ error: resp.error, bytes: resp.bytes || 0 }, 413, rlHeaders);
   }
   return new Response(resp.body, {
     status: resp.status,
@@ -171,6 +378,7 @@ async function handleProxy(request) {
       "Content-Type": resp.type,
       "X-Proxy-Status": String(resp.status),
       "X-Proxy-Url": target.toString(),
+      ...rlHeaders,
       ...CORS,
     },
   });
@@ -355,7 +563,7 @@ export default {
         return await handleConvert(request, env);
       }
       if (request.method === "GET" && url.pathname === "/proxy") {
-        return handleProxy(request);
+        return handleProxy(request, env);
       }
       if (request.method === "GET" && url.pathname === "/status") {
         return await handleStatus(request, env);
