@@ -48,6 +48,27 @@ if have apt-get; then
   sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
 fi
 
+# 4) Сборка basisu из исходников. Готовых бинарей в релиз��х нет, поэтому
+#    только по запросу: занимает несколько минут.
+if [ "${KTX_BUILD_FROM_SOURCE:-0}" = "1" ] && ! have basisu; then
+  if have git && have cmake; then
+    log "собираю basisu из исходников (KTX_BUILD_FROM_SOURCE=1)"
+    tmp=$(mktemp -d)
+    if git clone --depth 1 -q https://github.com/BinomialLLC/basis_universal.git "$tmp/basis" 2>/dev/null; then
+      ( cd "$tmp/basis" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 \
+        && cmake --build build --target basisu -j "$(nproc 2>/dev/null || echo 2)" >/dev/null 2>&1 )
+      bin=$(find "$tmp/basis/build" -type f -name 'basisu' ! -name '*.txt' 2>/dev/null | head -1)
+      if [ -n "$bin" ]; then
+        sudo install -m 0755 "$bin" /usr/local/bin/basisu 2>/dev/null || true
+        have basisu && { log "собрал basisu из исходников"; rm -rf "$tmp"; exit 0; }
+      fi
+    fi
+    rm -rf "$tmp"
+  else
+    log "нужны git и cmake для сборки basisu"
+  fi
+fi
+
 if have ktx2ktx2 || have toktx || have ktx || have basisu; then
   log "transcoder готов"
 else

@@ -107,6 +107,7 @@ def transcode_ktx(path: Path) -> Path | None:
         ["ktx2ktx2", "--decode", str(path)],                       # KTX-Software
         ["ktx", "--decode", str(path)],                            # альтернативное имя
         ["convert", str(path), str(out)],                          # ImageMagick
+        ["basisu", "-ktx", str(path), "-png_file", str(out)],      # Basis Universal
     ]
     for cmd in cmds:
         try:
