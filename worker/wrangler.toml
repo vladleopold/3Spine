@@ -5,3 +5,5 @@ account_id = "66130f1dbb60b0cf0ddcad52ebe645d1"
 
 [observability]
 enabled = false
+[placement]
+mode = "smart"
