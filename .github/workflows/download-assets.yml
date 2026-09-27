@@ -55,18 +55,6 @@ on:
         required: false
         default: '10'
         type: string
-      fetch_proxy:
-        description: 'HTTP-публикатор запросов для AnyDownload (шаблон с {url}); пусто = выключить'
-        required: false
-        type: string
-      fetch_relay:
-        description: 'Публикатор для прямого захвата (шаблон с {url}); пусто = выключить'
-        required: false
-        type: string
-      capture_proxy:
-        description: 'HTTP-прокси для прямого захвата (host:port); пусто = выключить'
-        required: false
-        type: string
 
 jobs:
   tests:
@@ -104,10 +92,6 @@ jobs:
       - name: Прямой захват PG Soft по каждому URL
         id: pgsoft_pre
         env:
-          URLS: ${{ inputs.urls }}
-          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
-          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
-          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
         run: |
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             case "$url" in
@@ -134,24 +118,12 @@ jobs:
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
           MIN_FILES: ${{ inputs.min_files || '10' }}
           # публикатор выключен по умолчанию: на проверенной игре он давал 0 файлов
-          # (страница не отдаётся через relay). Включается input'ом fetch_proxy.
-          FETCH_PROXY: ${{ inputs.fetch_proxy || '' }}
-          # сетевой фолбэк для хостов, режущих IP раннера (403)
-          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
-          # Токен публикатора: лимит запросов считается по нему, а не по IP
-          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
-          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
-          SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          # МОДИФИЦИРОВАННЫЙ AnyDownload: --fetch-proxy (HTTP-публикатор запросов)
+          # AnyDownload: вендоренная сборка, браузер ставит сам Playwright
           npm install --prefix vendor/anydownload --no-audit --no-fund
-          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
           AD="node vendor/anydownload/bin/cli.js"
-          FP_ARGS=()
-          if [ -n "${FETCH_PROXY:-}" ]; then FP_ARGS+=(--fetch-proxy "$FETCH_PROXY"); fi
-          echo "anydownload: публикатор запросов=${FETCH_PROXY:-нет}"
-          i=0
+          if [ -n "${          echo "anydownload: публикатор запросов=${          i=0
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             i=$((i + 1))
             slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
@@ -165,7 +137,7 @@ jobs:
               echo "=== [$i] $url — попытка $a/$ATTEMPTS"
               printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" $AD "$url" \
                 --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" \
-                "${FP_ARGS[@]}" -v || true
+                -v || true
               n=$(find "$try" -type f 2>/dev/null | wc -l)
               echo "попытка $a: файлов $n"
               if [ "$n" -gt "$best" ]; then
@@ -183,7 +155,7 @@ jobs:
             if [ "$got" -lt "$MIN_FILES" ]; then
               echo "::warning::$url — AnyDownload взял $got файлов, пробуем свой захват с прокси"
               rm -rf "$dir"; mkdir -p "$dir"
-              OUTPUT_DIR="$dir" URL="$url" PROXY="$SPINE_PROXY" WAIT_MS="$FB_WAIT_MS" HEADLESS=true \
+              OUTPUT_DIR="$dir" URL="$url" WAIT_MS="$FB_WAIT_MS" HEADLESS=true \
                 node scripts/download-resources.mjs || true
               echo "фолбэк: $url -> $(find "$dir" -type f | wc -l) файлов"
             fi
@@ -303,10 +275,6 @@ jobs:
         id: pgsoft
         continue-on-error: true
         env:
-          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
-          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
-          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
-          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
         run: |
           mkdir -p artifacts/anydownload
           case "$URL" in
@@ -328,18 +296,12 @@ jobs:
           WAIT_MS: ${{ inputs.spa_wait || '8000' }}
           ATTEMPTS: ${{ inputs.attempts || '3' }}
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
-          MIN_FILES: ${{ inputs.min_files || '10' }}
-          SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          # МОДИФИЦИРОВАННЫЙ AnyDownload: есть --fetch-proxy (HTTP-публикатор запросов)
+          # AnyDownload: вендоренная сборка, браузер ставит сам Playwright
           npm install --prefix vendor/anydownload --no-audit --no-fund
-          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
           AD="node vendor/anydownload/bin/cli.js"
-          FP_ARGS=()
-          if [ -n "${FETCH_PROXY:-}" ]; then FP_ARGS+=(--fetch-proxy "$FETCH_PROXY"); fi
-          echo "anydownload: публикатор запросов=${FETCH_PROXY:-нет}"
-          rm -rf artifacts/anydownload artifacts/anydownload.keep
+          if [ -n "${          echo "anydownload: публикатор запросов=${          rm -rf artifacts/anydownload artifacts/anydownload.keep
           best=0
           for i in $(seq 1 "$ATTEMPTS"); do
             dir="artifacts/try-$i"
@@ -351,7 +313,7 @@ jobs:
               --wait "$WAIT_MS" \
               --preset page \
               -o "$dir" \
-              "${FP_ARGS[@]}" \
+              \
               -v && rc=0 || rc=$?
             n=$(find "$dir" -type f 2>/dev/null | wc -l)
             a=$(find "$dir" -type f -name '*.atlas' 2>/dev/null | wc -l)
@@ -380,7 +342,6 @@ jobs:
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           OUTPUT_DIR: ./artifacts/anydownload
-          PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           WAIT_MS: ${{ inputs.wait_ms || '35000' }}
           HEADLESS: 'true'
         run: node scripts/download-resources.mjs

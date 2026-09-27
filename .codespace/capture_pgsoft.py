@@ -26,139 +26,26 @@ RESOURCE_SERIES = ("main_resources", "other_resources", "resources", "common")
 GAME_SUBDIR = "desktop/game/"
 
 
-# Публикатор запросов: подставляется в CI, когда хост режет IP раннера.
-RELAY = (os.environ.get("FETCH_RELAY") or "").strip()
-# Токен публикатора: с ним лимит считается по токену, а не по IP.
-RELAY_TOKEN = (os.environ.get("FETCH_RELAY_TOKEN") or "").strip()
-# Прямой HTTP-прокси (host:port). Работает без CONNECT, поэтому через него
-# берём схему http: тот же origins отдаёт по http те же файлы.
-CAPTURE_PROXY = (os.environ.get("CAPTURE_PROXY") or "").strip()
-_opener = None
-
-
-def proxy_get(url: str, timeout: int) -> bytes:
-    """Забрать через HTTP-прокси.
-
-    Через curl, а не urllib: этот прокси не отвечает на CONNECT, поэтому
-    берём схему http (origins отдаёт по http те же файлы), и curl с ним
-    работает, а urllib виснет.
-    """
-    import subprocess
-    import tempfile
-    import time
-    target = re.sub(r"^https://", "http://", url)
-    tries = int(os.environ.get("CAPTURE_PROXY_TRIES") or "4")
-    last = ""
-    for attempt in range(1, tries + 1):
-        _throttle()
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-            out = tmp.name
-        try:
-            proc = subprocess.run(
-                ["curl", "-sS", "--max-time", str(timeout), "-x", CAPTURE_PROXY,
-                 "-A", UA, "-o", out, "-w", "%{http_code}", target],
-                capture_output=True, text=True, timeout=timeout + 20)
-            code = (proc.stdout or "").strip()
-            if proc.returncode == 0 and code.isdigit() and code.startswith("2"):
-                with open(out, "rb") as fh:
-                    return fh.read()
-            last = "%s (rc=%s)" % (code or "нет кода", proc.returncode)
-            if code in ("404", "410"):
-                # файла нет — это ответ origins, повторять и пробовать дальше бессмысленно
-                raise urllib.error.HTTPError(target, int(code), "Not Found", None, None)
-            if code == "403":
-                raise RuntimeError("прокси: 403")
-        except subprocess.TimeoutExpired:
-            last = "таймаут"
-        finally:
-            try:
-                os.unlink(out)
-            except OSError:
-                pass
-        # прокси периодически не отвечает (000), поэтому пробуем ещё раз
-        time.sleep(2.0 * attempt)
-    raise RuntimeError("прокси не отдал файл: %s" % last)
-
-
-def relay_headers() -> dict:
-    h = {"User-Agent": UA, "Accept": "*/*"}
-    if RELAY_TOKEN:
-        h["X-Spine-Token"] = RELAY_TOKEN
-    return h
-
-
-def _relay_url(url: str) -> str:
-    if "{url}" in RELAY:
-        return RELAY.replace("{url}", urllib.parse.quote(url, safe=""))
-    sep = "&" if "?" in RELAY else "?"
-    return RELAY + sep + "url=" + urllib.parse.quote(url, safe="")
-
-
-# Пауза между запросами к origins: он режет пачки (пачками приходит 403),
-# одиночные запросы проходят нормально.
-DELAY = float(os.environ.get("FETCH_DELAY") or "1.2")
-_last_req = [0.0]
-
-
-def _throttle() -> None:
-    import time
-    gap = time.time() - _last_req[0]
-    if gap < DELAY:
-        time.sleep(DELAY - gap)
-    _last_req[0] = time.time()
-
-
 def http_get(url: str, timeout: int = 60) -> bytes:
-    """Прямой запрос, а при 403/таймауте — через публикатор (воркер)."""
+    """Прямой запрос: без публикаторов и прокси."""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
     _throttle()
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.read()
-    except Exception as direct_err:
-        print("  прямой запрос не прошёл (%s)" % direct_err)
-
-    if CAPTURE_PROXY:
-        try:
-            data = proxy_get(url, timeout)
-            print("  взято через прокси")
-            return data
-        except urllib.error.HTTPError as e:
-            # 404/410 — это честный ответ origins, файл кончился
-            raise
-        except Exception as proxy_err:
-            print("  прокси не помог (%s)" % proxy_err)
-
-    if not RELAY:
-        raise direct_err
-    _throttle()
-    rreq = urllib.request.Request(_relay_url(url), headers=relay_headers())
-    with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
 
 def http_head_ok(url: str, timeout: int = 20) -> bool:
-    """Проверка существования обычным GET с чтением 1 байта.
-
-    HEAD не годится: публикатор (воркер) держит только GET и на HEAD
-    отвечает ошибкой, из-за чего все файлы считались отсутствующими.
-    """
-    for target in ((url, _relay_url(url)) if RELAY else (url,)):
-        req = urllib.request.Request(target, headers=relay_headers())
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                resp.read(1)
-                if 200 <= resp.status < 300:
-                    return True
-        except urllib.error.HTTPError as e:
-            if 200 <= e.code < 300:
-                return True
-            if os.environ.get("FETCH_DEBUG"):
-                print("  проба %s: HTTP %d" % ("публикатор" if target != url else "напрямую", e.code))
-        except Exception as e:
-            if os.environ.get("FETCH_DEBUG"):
-                print("  проба %s: %s" % ("публикатор" if target != url else "напрямую", e))
-    return False
+    """Проверка существования обычным GET с чтением 1 байта."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+    _throttle()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            resp.read(1)
+            return 200 <= resp.status < 300
+    except urllib.error.HTTPError as e:
+        return 200 <= e.code < 300
+    except Exception:
+        return False
 
 
 def extract_game_config(html: str) -> dict:

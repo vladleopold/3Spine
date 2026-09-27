@@ -7,10 +7,6 @@ on:
         description: 'URL игры для прямого захвата'
         required: true
         type: string
-      proxy:
-        description: 'HTTP-прокси (host:port)'
-        required: false
-        type: string
 
 jobs:
   capture:
@@ -18,10 +14,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Прямой захват
-        env:
-          CAPTURE_PROXY: ${{ inputs.proxy }}
-          FETCH_RELAY: 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}'
-          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
         run: |
           mkdir -p out
           python3 .codespace/capture_pgsoft.py "${{ inputs.url }}" out --max-index 20 || true
