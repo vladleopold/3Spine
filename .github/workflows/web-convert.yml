@@ -431,29 +431,7 @@ jobs:
           echo "распаковка спрайтов завершилась с кодом $SPRITES_RC, спрайтов: $(find work/sprites-out -type f 2>/dev/null | wc -l)"
           [ "$SPRITES_RC" = "0" ] || tail -20 /tmp/sprites.log || true
 
-          COMPILE_RC SPRITES_RC WORK="$PWD/work" python3 - <<'PY'
-          import os, zipfile
-          work = os.environ["WORK"]
-          src = os.path.join(work, "compile.zip")
-          dst = os.path.join(work, "output.zip")
-          sprites = os.path.join(work, "sprites-out")
-          if os.environ.get("SPRITES_RC") != "0" or not os.path.isdir(sprites):
-              import shutil; shutil.copyfile(src, dst)
-              print("спрайты не добавлены: rc=%s" % os.environ.get("SPRITES_RC"))
-          else:
-              with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-                  for item in zin.infolist():
-                      zout.writestr(item, zin.read(item.filename))
-                  added = 0
-                  for root, _, files in os.walk(sprites):
-                      for name in files:
-                          full = os.path.join(root, name)
-                          rel = os.path.relpath(full, sprites).split(os.sep)
-                          arc = os.path.join("images", *rel) if not rel[0].startswith("images") else os.path.join(*rel)
-                          zout.write(full, arc)
-                          added += 1
-                  print("спрайтов добавлено в архив: %d" % added)
-          PY
+          python3 .codespace/merge_sprites_into_zip.py work/compile.zip work/sprites-out work/output.zip
           unzip -l work/output.zip | tail -5
 
       - name: Logout Spine license
