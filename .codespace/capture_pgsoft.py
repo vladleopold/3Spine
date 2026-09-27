@@ -22,7 +22,10 @@ from urllib.parse import parse_qs, urlparse
 from collections import Counter
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0 Safari/537.36"
-RESOURCE_SERIES = ("main_resources", "other_resources", "resources", "common")
+# UHT-ресурсы PragmaticPlay. Атласы (UIAtlas) лежат в game*/GUI*, а скелеты
+# (UHTSpine) — в main_resources*, поэтому нужны все серии.
+RESOURCE_SERIES = ("main_resources", "other_resources", "game", "GUI_resources",
+                   "GUI", "resources", "common")
 GAME_SUBDIR = "desktop/game/"
 # Casino-CDN (например *.wxxrkjglyf.net) режет IP раннеров с 403,
 # официальный хост PragmaticPlay отдаёт те же файлы без блокировки.
@@ -219,6 +222,20 @@ def main() -> int:
         print("не скачалось ни одного файла ресурсов")
 
     # рядом могут лежать скелеты/атласы отдельными файлами
+    # одиночные манифесты клиента (в них тоже бывают UIAtlas)
+    datadir = base.rsplit("/", 1)[0] + "/client/"
+    for rel in ("resources.json", "game.json"):
+        try:
+            blob = http_get(datadir + rel)
+        except Exception:
+            continue
+        dest = os.path.join(args.out, "client_" + rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(blob)
+        print("  + client/%s (%d КБ)" % (rel, len(blob) // 1024))
+        found.append("client/" + rel)
+
     for extra in ("game.js", "index.html", "config.json", "settings.json", "version.json"):
         try:
             blob = http_get(base + extra)
