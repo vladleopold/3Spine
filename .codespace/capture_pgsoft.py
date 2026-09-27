@@ -46,9 +46,24 @@ def _relay_url(url: str) -> str:
     return RELAY + sep + "url=" + urllib.parse.quote(url, safe="")
 
 
+# Пауза между запросами к origins: он режет пачки (пачками приходит 403),
+# одиночные запросы проходят нормально.
+DELAY = float(os.environ.get("FETCH_DELAY") or "1.2")
+_last_req = [0.0]
+
+
+def _throttle() -> None:
+    import time
+    gap = time.time() - _last_req[0]
+    if gap < DELAY:
+        time.sleep(DELAY - gap)
+    _last_req[0] = time.time()
+
+
 def http_get(url: str, timeout: int = 60) -> bytes:
     """Прямой запрос, а при 403/таймауте — через публикатор (воркер)."""
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+    _throttle()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
@@ -56,6 +71,7 @@ def http_get(url: str, timeout: int = 60) -> bytes:
         if not RELAY:
             raise
         print("  прямой запрос не прошёл (%s) — иду через публикатор" % direct_err)
+        _throttle()
         rreq = urllib.request.Request(_relay_url(url), headers=relay_headers())
         with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
             return resp.read()
@@ -199,15 +215,16 @@ def main() -> int:
         for i in range(args.max_index + 1):
             name = "%s%03d.json" % (series, i)
             url = base + name
-            if not http_head_ok(url):
-                miss += 1
-                if miss >= 2:
-                    print("  %s: дальше нет (с %d)" % (series, i))
-                    break
-                continue
-            miss = 0
+            # Без предварительной пробы: один запрос на файл вместо двух,
+            # иначе origins начинает отдавать 403 на пачки.
             try:
                 raw = http_get(url, timeout=120)
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 404, 410):
+                    print("  %s: нет (HTTP %d), серия закончилась" % (series if miss else name, e.code))
+                    break
+                print("  %s: не скачался (HTTP %d)" % (name, e.code))
+                continue
             except Exception as e:
                 print("  %s: не скачался (%s)" % (name, e))
                 continue
@@ -220,12 +237,14 @@ def main() -> int:
 
     # рядом могут лежать скелеты/атласы отдельными файлами
     for extra in ("game.js", "index.html", "config.json", "settings.json", "version.json"):
-        if http_head_ok(base + extra):
+        try:
             blob = http_get(base + extra)
-            with open(os.path.join(args.out, extra), "wb") as fh:
-                fh.write(blob)
-            print("  + %s (%d КБ)" % (extra, len(blob) // 1024))
-            found.append(extra)
+        except Exception:
+            continue
+        with open(os.path.join(args.out, extra), "wb") as fh:
+            fh.write(blob)
+        print("  + %s (%d КБ)" % (extra, len(blob) // 1024))
+        found.append(extra)
 
     with open(os.path.join(args.out, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump({"datapath": datapath, "files": found,
