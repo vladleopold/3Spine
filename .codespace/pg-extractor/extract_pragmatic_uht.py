@@ -24,6 +24,7 @@ import struct
 import subprocess
 import sys
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -78,6 +79,77 @@ def download_remote_textures(
     return got
 
 
+# vkFormat → (каналы, порядок BGR?)
+VK_RGBA = {
+    37: ("RGBA", False),   # VK_FORMAT_R8G8B8A8_UNORM
+    43: ("RGBA", False),   # ..._SRGB
+    44: ("RGBA", True),    # VK_FORMAT_B8G8R8A8_UNORM
+    50: ("RGBA", True),    # ..._SRGB
+}
+VK_RGB = {
+    23: ("RGB", False),    # VK_FORMAT_R8G8B8_UNORM
+    29: ("RGB", False),    # ..._SRGB
+    30: ("RGB", True),     # VK_FORMAT_B8G8R8_UNORM
+    36: ("RGB", True),     # ..._SRGB
+}
+
+
+def ktx2_to_png(path: Path) -> Path | None:
+    """Uncompressed KTX2 (после ktx2ktx2 --decode) → PNG.
+
+    KTX2 после декодирования отдаёт верхний mip-уровень без сжатия,
+    поэтому пиксели копируются напрямую, только перестановка каналов BGR→RGB.
+    """
+    data = path.read_bytes()
+    if len(data) < 100 or data[:4] != b"\xabKTX":
+        return None
+    vk, _ts, w, h, _depth, _lay, _fac, levels, superc = struct.unpack_from("<9I", data, 12)
+    if superc != 0 or w <= 0 or h <= 0:
+        return None
+    dfd_off, _dfd_len, kvd_off, kvd_len = struct.unpack_from("<4I", data, 48)
+    sgd_off, sgd_len = struct.unpack_from("<2Q", data, 64)
+    lev_off, lev_len = struct.unpack_from("<2Q", data, 80)
+    if lev_len < 24:
+        return None
+    byte_off, byte_len = struct.unpack_from("<2Q", data, int(lev_off))
+    chunk = data[int(byte_off):int(byte_off) + int(byte_len)]
+    if not chunk or len(chunk) < int(w) * int(h):
+        return None
+
+    spec = VK_RGBA.get(vk) or VK_RGB.get(vk)
+    if not spec:
+        return None
+    mode, bgr = spec
+    c = len(mode)
+
+    raw = bytearray()
+    for y in range(int(h)):
+        raw.append(0)                                  # PNG filter type 0
+        row = chunk[y * int(w) * c:(y + 1) * int(w) * c]
+        if bgr:
+            if c == 4:      # B,G,R,A → R,G,B,A
+                row = bytes(v for i in range(0, len(row), 4)
+                            for v in (row[i + 2], row[i + 1], row[i], row[i + 3]))
+            else:           # B,G,R → R,G,B
+                row = bytes(v for i in range(0, len(row), 3)
+                            for v in (row[i + 2], row[i + 1], row[i]))
+        raw += row
+
+    out = path.with_suffix(".png")
+    png = bytearray(b"\x89PNG\r\n\x1a\n")
+
+    def chunk_(tag: bytes, payload: bytes) -> None:
+        png.extend(struct.pack(">I", len(payload)))
+        png.extend(tag + payload)
+        png.extend(struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    chunk_(b"IHDR", struct.pack(">IIBBBBB", int(w), int(h), 8, 6 if c == 4 else 2, 0, 0, 0))
+    chunk_(b"IDAT", zlib.compress(bytes(raw), 6))
+    chunk_(b"IEND", b"")
+    out.write_bytes(bytes(png))
+    return out
+
+
 def ktx_size(data: bytes) -> tuple[int, int] | None:
     """Размер страницы из KTX/KTX2-заголовка.
 
@@ -104,8 +176,25 @@ def transcode_ktx(path: Path) -> Path | None:
     if out.exists() and out.stat().st_size > 32:
         return out
     # 1) готовые transcoder'ы с явным выходным файлом
+    # ktx2ktx2: выходной файл не позиционный, он получается сам
+    # (то же имя, расширение .ktx2) — это распакованный KTX2 без сжатия.
+    exe = shutil.which("ktx2ktx2")
+    if exe:
+        try:
+            subprocess.run([exe, "--decode", str(path)], check=True,
+                           capture_output=True, timeout=180)
+        except Exception:
+            pass
+        dec = path.with_suffix(".ktx2")
+        if dec.exists() and dec.stat().st_size > 32:
+            made = ktx2_to_png(dec)
+            if made and made.stat().st_size > 32:
+                out.write_bytes(made.read_bytes())
+                print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
+                return out
+            dec.unlink()
+
     for cmd in (
-        ["ktx2ktx2", "--decode", str(path)],                  # KTX-Software
         ["ktx", "--decode", str(path)],
         ["convert", str(path), str(out)],                     # ImageMagick
         ["basisu", "-ktx", str(path), "-file_out", str(out)], # Basis Universal
