@@ -55,6 +55,10 @@ on:
         required: false
         default: '10'
         type: string
+      fetch_proxy:
+        description: 'HTTP-публикатор запросов для AnyDownload (шаблон с {url}); пусто = выключить'
+        required: false
+        type: string
 
 jobs:
   tests:
@@ -94,10 +98,18 @@ jobs:
           ATTEMPTS: ${{ inputs.attempts || '3' }}
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
           MIN_FILES: ${{ inputs.min_files || '10' }}
+          # бесплатный воркер-публикатор из репозитория; переопределяется input'ом
+          FETCH_PROXY: ${{ inputs.fetch_proxy || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          npm install -g anydownload@2.3.9
+          # МОДИФИЦИРОВАННЫЙ AnyDownload: --fetch-proxy (HTTP-публикатор запросов)
+          npm install --prefix vendor/anydownload --no-audit --no-fund
+          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
+          AD="node vendor/anydownload/bin/cli.js"
+          FP_ARGS=()
+          if [ -n "${FETCH_PROXY:-}" ]; then FP_ARGS+=(--fetch-proxy "$FETCH_PROXY"); fi
+          echo "anydownload: публикатор запросов=${FETCH_PROXY:-нет}"
           i=0
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             i=$((i + 1))
@@ -108,8 +120,9 @@ jobs:
               try="$dir.try-$a"
               rm -rf "$try"; mkdir -p "$try"
               echo "=== [$i] $url — попытка $a/$ATTEMPTS"
-              printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$url" \
-                --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" -v || true
+              printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" $AD "$url" \
+                --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" \
+                "${FP_ARGS[@]}" -v || true
               n=$(find "$try" -type f 2>/dev/null | wc -l)
               echo "попытка $a: файлов $n"
               if [ "$n" -gt "$best" ]; then
@@ -245,19 +258,26 @@ jobs:
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          npm install -g anydownload@2.3.9
+          # МОДИФИЦИРОВАННЫЙ AnyDownload: есть --fetch-proxy (HTTP-публикатор запросов)
+          npm install --prefix vendor/anydownload --no-audit --no-fund
+          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
+          AD="node vendor/anydownload/bin/cli.js"
+          FP_ARGS=()
+          if [ -n "${FETCH_PROXY:-}" ]; then FP_ARGS+=(--fetch-proxy "$FETCH_PROXY"); fi
+          echo "anydownload: публикатор запросов=${FETCH_PROXY:-нет}"
           rm -rf artifacts/anydownload artifacts/anydownload.keep
           best=0
           for i in $(seq 1 "$ATTEMPTS"); do
             dir="artifacts/try-$i"
             rm -rf "$dir"; mkdir -p "$dir"
             echo "=== попытка $i/$ATTEMPTS, ожидание ${WAIT_MS} мс, лимит ${TRY_TIMEOUT}с"
-            printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$URL" \
+            printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" $AD "$URL" \
               --mode render \
               --headless \
               --wait "$WAIT_MS" \
               --preset page \
               -o "$dir" \
+              "${FP_ARGS[@]}" \
               -v && rc=0 || rc=$?
             n=$(find "$dir" -type f 2>/dev/null | wc -l)
             a=$(find "$dir" -type f -name '*.atlas' 2>/dev/null | wc -l)
