@@ -30,6 +30,40 @@ GAME_SUBDIR = "desktop/game/"
 RELAY = (os.environ.get("FETCH_RELAY") or "").strip()
 # Токен публикатора: с ним лимит считается по токену, а не по IP.
 RELAY_TOKEN = (os.environ.get("FETCH_RELAY_TOKEN") or "").strip()
+# Прямой HTTP-прокси (host:port). Работает без CONNECT, поэтому через него
+# берём схему http: тот же origins отдаёт по http те же файлы.
+CAPTURE_PROXY = (os.environ.get("CAPTURE_PROXY") or "").strip()
+_opener = None
+
+
+def proxy_get(url: str, timeout: int) -> bytes:
+    """Забрать через HTTP-прокси.
+
+    Через curl, а не urllib: этот прокси не отвечает на CONNECT, поэтому
+    берём схему http (origins отдаёт по http те же файлы), и curl с ним
+    работает, а urllib виснет.
+    """
+    import subprocess
+    import tempfile
+    target = re.sub(r"^https://", "http://", url)
+    _throttle()
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+        out = tmp.name
+    try:
+        proc = subprocess.run(
+            ["curl", "-sS", "--max-time", str(timeout), "-x", CAPTURE_PROXY,
+             "-A", UA, "-o", out, "-w", "%{http_code}", target],
+            capture_output=True, text=True, timeout=timeout + 20)
+        code = (proc.stdout or "").strip()
+        if proc.returncode != 0 or not code.isdigit() or not code.startswith("2"):
+            raise RuntimeError("curl %s (rc=%s)" % (code or "нет кода", proc.returncode))
+        with open(out, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
 
 
 def relay_headers() -> dict:
@@ -68,13 +102,22 @@ def http_get(url: str, timeout: int = 60) -> bytes:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except Exception as direct_err:
-        if not RELAY:
-            raise
-        print("  прямой запрос не прошёл (%s) — иду через публикатор" % direct_err)
-        _throttle()
-        rreq = urllib.request.Request(_relay_url(url), headers=relay_headers())
-        with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
-            return resp.read()
+        print("  прямой запрос не прошёл (%s)" % direct_err)
+
+    if CAPTURE_PROXY:
+        try:
+            data = proxy_get(url, timeout)
+            print("  взято через прокси")
+            return data
+        except Exception as proxy_err:
+            print("  прокси не помог (%s)" % proxy_err)
+
+    if not RELAY:
+        raise direct_err
+    _throttle()
+    rreq = urllib.request.Request(_relay_url(url), headers=relay_headers())
+    with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
+        return resp.read()
 
 
 def http_head_ok(url: str, timeout: int = 20) -> bool:

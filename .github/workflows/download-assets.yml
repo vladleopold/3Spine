@@ -63,6 +63,10 @@ on:
         description: 'Публикатор для прямого захвата (шаблон с {url}); пусто = выключить'
         required: false
         type: string
+      capture_proxy:
+        description: 'HTTP-прокси для прямого захвата (host:port); пусто = выключить'
+        required: false
+        type: string
 
 jobs:
   tests:
@@ -109,6 +113,7 @@ jobs:
           FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
           # Токен публикатора: лимит запросов считается по нему, а не по IP
           FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
+          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
@@ -281,6 +286,7 @@ jobs:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
           FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
+          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
         run: |
           mkdir -p artifacts/anydownload
           case "$URL" in
