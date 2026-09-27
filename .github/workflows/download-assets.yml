@@ -107,9 +107,12 @@ jobs:
           EXTRA_UA: ${{ inputs.extra_ua || '' }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent
-          npm install -g ./vendor/anydownload
-          anydownload --help | grep -E '\-\-proxy|\-\-cookie' || true
+          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent.
+          # Ставим через --prefix: `npm i -g ./dir` делает symlink без зависимостей.
+          npm install --prefix vendor/anydownload --no-audit --no-fund
+          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
+          AD="node vendor/anydownload/bin/cli.js"
+          $AD --help | grep -E '\-\-proxy|\-\-cookie' || true
           PROXY_ARGS=()
           if [ -n "${SPINE_PROXY:-}" ]; then PROXY_ARGS+=(--proxy "$SPINE_PROXY"); fi
           if [ -n "${EXTRA_COOKIE:-}" ]; then PROXY_ARGS+=(--cookie "$EXTRA_COOKIE"); fi
@@ -125,7 +128,7 @@ jobs:
               try="$dir.try-$a"
               rm -rf "$try"; mkdir -p "$try"
               echo "=== [$i] $url — попытка $a/$ATTEMPTS"
-              printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$url" \
+              printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" $AD "$url" \
                 --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" \
                 "${PROXY_ARGS[@]}" -v || true
               n=$(find "$try" -type f 2>/dev/null | wc -l)
@@ -265,9 +268,12 @@ jobs:
           EXTRA_UA: ${{ inputs.extra_ua || '' }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent
-          npm install -g ./vendor/anydownload
-          anydownload --help | grep -E '\-\-proxy|\-\-cookie' || true
+          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent.
+          # Ставим через --prefix: `npm i -g ./dir` делает symlink без зависимостей.
+          npm install --prefix vendor/anydownload --no-audit --no-fund
+          node vendor/anydownload/node_modules/playwright/cli.js install chromium || true
+          AD="node vendor/anydownload/bin/cli.js"
+          $AD --help | grep -E '\-\-proxy|\-\-cookie' || true
           PROXY_ARGS=()
           if [ -n "${SPINE_PROXY:-}" ]; then PROXY_ARGS+=(--proxy "$SPINE_PROXY"); fi
           if [ -n "${EXTRA_COOKIE:-}" ]; then PROXY_ARGS+=(--cookie "$EXTRA_COOKIE"); fi
@@ -279,7 +285,7 @@ jobs:
             dir="artifacts/try-$i"
             rm -rf "$dir"; mkdir -p "$dir"
             echo "=== попытка $i/$ATTEMPTS, ожидание ${WAIT_MS} мс, лимит ${TRY_TIMEOUT}с"
-            printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$URL" \
+            printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" $AD "$URL" \
               --mode render \
               --headless \
               --wait "$WAIT_MS" \
