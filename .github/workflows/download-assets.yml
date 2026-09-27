@@ -55,6 +55,14 @@ on:
         required: false
         default: '10'
         type: string
+      extra_cookie:
+        description: 'Cookie-заголовок для сайтов с сессией (например казино-лобби)'
+        required: false
+        type: string
+      extra_ua:
+        description: 'Свой User-Agent для браузера'
+        required: false
+        type: string
 
 jobs:
   tests:
@@ -95,9 +103,18 @@ jobs:
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
           MIN_FILES: ${{ inputs.min_files || '10' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+          EXTRA_COOKIE: ${{ inputs.extra_cookie || '' }}
+          EXTRA_UA: ${{ inputs.extra_ua || '' }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          npm install -g anydownload@2.3.9
+          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent
+          npm install -g ./vendor/anydownload
+          anydownload --help | grep -E '\-\-proxy|\-\-cookie' || true
+          PROXY_ARGS=()
+          if [ -n "${SPINE_PROXY:-}" ]; then PROXY_ARGS+=(--proxy "$SPINE_PROXY"); fi
+          if [ -n "${EXTRA_COOKIE:-}" ]; then PROXY_ARGS+=(--cookie "$EXTRA_COOKIE"); fi
+          if [ -n "${EXTRA_UA:-}" ]; then PROXY_ARGS+=(--user-agent "$EXTRA_UA"); fi
+          echo "anydownload: прокси=${SPINE_PROXY:+да} куки=${EXTRA_COOKIE:+да}"
           i=0
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             i=$((i + 1))
@@ -109,7 +126,8 @@ jobs:
               rm -rf "$try"; mkdir -p "$try"
               echo "=== [$i] $url — попытка $a/$ATTEMPTS"
               printf 'n\n' | timeout --kill-after=30 "$TRY_TIMEOUT" anydownload "$url" \
-                --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" -v || true
+                --mode render --headless --wait "$WAIT_MS" --preset page -o "$try" \
+                "${PROXY_ARGS[@]}" -v || true
               n=$(find "$try" -type f 2>/dev/null | wc -l)
               echo "попытка $a: файлов $n"
               if [ "$n" -gt "$best" ]; then
@@ -243,9 +261,18 @@ jobs:
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
           MIN_FILES: ${{ inputs.min_files || '10' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+          EXTRA_COOKIE: ${{ inputs.extra_cookie || '' }}
+          EXTRA_UA: ${{ inputs.extra_ua || '' }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
-          npm install -g anydownload@2.3.9
+          # НАША сборка anydownload: добавлены флаги --proxy/--cookie/--user-agent
+          npm install -g ./vendor/anydownload
+          anydownload --help | grep -E '\-\-proxy|\-\-cookie' || true
+          PROXY_ARGS=()
+          if [ -n "${SPINE_PROXY:-}" ]; then PROXY_ARGS+=(--proxy "$SPINE_PROXY"); fi
+          if [ -n "${EXTRA_COOKIE:-}" ]; then PROXY_ARGS+=(--cookie "$EXTRA_COOKIE"); fi
+          if [ -n "${EXTRA_UA:-}" ]; then PROXY_ARGS+=(--user-agent "$EXTRA_UA"); fi
+          echo "anydownload: прокси=${SPINE_PROXY:+да} куки=${EXTRA_COOKIE:+да}"
           rm -rf artifacts/anydownload artifacts/anydownload.keep
           best=0
           for i in $(seq 1 "$ATTEMPTS"); do
@@ -258,6 +285,7 @@ jobs:
               --wait "$WAIT_MS" \
               --preset page \
               -o "$dir" \
+              "${PROXY_ARGS[@]}" \
               -v && rc=0 || rc=$?
             n=$(find "$dir" -type f 2>/dev/null | wc -l)
             a=$(find "$dir" -type f -name '*.atlas' 2>/dev/null | wc -l)
