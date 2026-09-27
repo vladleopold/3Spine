@@ -72,12 +72,16 @@ def http_head_ok(url: str, timeout: int = 20) -> bool:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 resp.read(1)
-                return 200 <= resp.status < 300
+                if 200 <= resp.status < 300:
+                    return True
         except urllib.error.HTTPError as e:
             if 200 <= e.code < 300:
                 return True
-        except Exception:
-            continue
+            if os.environ.get("FETCH_DEBUG"):
+                print("  проба %s: HTTP %d" % ("публикатор" if target != url else "напрямую", e.code))
+        except Exception as e:
+            if os.environ.get("FETCH_DEBUG"):
+                print("  проба %s: %s" % ("публикатор" if target != url else "напрямую", e))
     return False
 
 
