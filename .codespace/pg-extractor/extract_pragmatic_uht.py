@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
 import shutil
 import struct
@@ -100,24 +101,33 @@ def ktx2_to_png(path: Path) -> Path | None:
     KTX2 после декодирования отдаёт верхний mip-уровень без сжатия,
     поэтому пиксели копируются напрямую, только перестановка каналов BGR→RGB.
     """
+    def bail(why: str) -> None:
+        if os.environ.get("PG_DEBUG"):
+            print(f"  ktx2_to_png: {path.name} — {why}")
+
     data = path.read_bytes()
     if len(data) < 100 or data[:4] != b"\xabKTX":
+        bail("не KTX2")
         return None
     vk, _ts, w, h, _depth, _lay, _fac, levels, superc = struct.unpack_from("<9I", data, 12)
     if superc != 0 or w <= 0 or h <= 0:
+        bail(f"supercompression={superc} w={w} h={h}")
         return None
     dfd_off, _dfd_len, kvd_off, kvd_len = struct.unpack_from("<4I", data, 48)
     sgd_off, sgd_len = struct.unpack_from("<2Q", data, 64)
     lev_off, lev_len = struct.unpack_from("<2Q", data, 80)
     if lev_len < 24:
+        bail(f"level index пустой (len={lev_len})")
         return None
     byte_off, byte_len = struct.unpack_from("<2Q", data, int(lev_off))
     chunk = data[int(byte_off):int(byte_off) + int(byte_len)]
     if not chunk or len(chunk) < int(w) * int(h):
+        bail(f"данных {len(chunk)} байт, нужно ≥{int(w) * int(h)}")
         return None
 
     spec = VK_RGBA.get(vk) or VK_RGB.get(vk)
     if not spec:
+        bail(f"неизвестный vkFormat={vk}")
         return None
     mode, bgr = spec
     c = len(mode)
