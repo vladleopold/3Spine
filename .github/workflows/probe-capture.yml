@@ -30,15 +30,12 @@ jobs:
           ls -l t.ktx | awk '{print "ktx: " $5 " байт"}'
           try() { echo "--- пробую: $*"; "$@" >/dev/null 2>&1 || true; }
           if command -v ktx2ktx2 >/dev/null; then
-            try ktx2ktx2 --decode t.ktx
-            try ktx2ktx2 --decode --target png t.ktx
-            try ktx2ktx2 -d -f png t.ktx
+            echo "--- ktx2ktx2 --decode (в uncompressed KTX2):"
+            ktx2ktx2 --decode t.ktx -o t_dec.ktx2 2>&1 | tail -n 3 || true
+            ls -l t_dec.ktx2 2>/dev/null | awk '{print "  dec: " $5 " байт"}' || echo "  dec не получился"
+            echo "--- заголовок декодированного:"
+            python3 -c "import struct,sys;d=open('t_dec.ktx2','rb').read();vk,ts,w,h,dep,lay,fac,lev,sup=struct.unpack_from('<9I',d,12);print(f'  vkFormat={vk} w={w} h={h} supercompression={sup}');dfd,dfdl=struct.unpack_from('<2I',d,48);print(f'  dfd@{dfd}+{dfdl}');body=d[dfd:dfd+dfdl];print('  dfd:',body[:24].hex(' ')) if dfdl else None" || echo "  разбор не удался"
           fi
-          if command -v toktx >/dev/null; then try toktx --decode_raw t.ktx; fi
-          if command -v convert >/dev/null; then try convert t.ktx out_conv.png; fi
-          echo "--- PNG после всех попыток:"
-          ls -l *.png 2>/dev/null || echo "  ни одного PNG не получилось"
-          for f in *.png; do [ -f "$f" ] && head -c 4 "$f" | xxd | head -1; done
 
       - name: Прямой захват
         run: |
