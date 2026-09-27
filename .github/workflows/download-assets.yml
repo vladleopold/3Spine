@@ -127,6 +127,14 @@ jobs:
             python3 .codespace/hash_to_name/restore_names_cli.py "$d" || true
           done
 
+      - name: Вернуть .skel бинарникам, лежащим под .json
+        continue-on-error: true
+        run: |
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            python3 .codespace/fix_skeleton_ext.py "$d"
+          done
+
       - name: Собрать spine-паки
         run: |
           for d in artifacts/*/; do
@@ -252,6 +260,10 @@ jobs:
           # файлы приходят хеш-именами (кэш CDN) → возвращаем originals по манифестам игры
           python3 .codespace/hash_to_name/manifest_resolver.py artifacts/anydownload --apply
           python3 .codespace/hash_to_name/restore_names_cli.py artifacts/anydownload
+
+      - name: Вернуть .skel бинарникам, лежащим под .json
+        continue-on-error: true
+        run: python3 .codespace/fix_skeleton_ext.py artifacts/anydownload
 
       - name: Собрать spine-паки
         run: node scripts/spine-pack.mjs artifacts/anydownload artifacts/spine
