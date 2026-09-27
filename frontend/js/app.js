@@ -1016,6 +1016,7 @@
         job = await startConvertUrl(url);
         run.job = job;
         $("run-job").textContent = job;
+        loadHistory();
         log("> Задача: " + job + " (режим: ссылка)", "dim");
         setStatus("скачиваем и конвертируем…", "run");
         setRunStep("Проход идёт в GitHub Actions: выкачивание, компиляция .spine и превью…");
@@ -1042,6 +1043,7 @@
         job = await startConvert(blob);
         run.job = job;
         $("run-job").textContent = job;
+        loadHistory();
         log("> Задача: " + job, "dim");
         setStatus("конвертация…", "run");
       }
