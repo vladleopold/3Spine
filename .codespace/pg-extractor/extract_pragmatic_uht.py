@@ -125,6 +125,14 @@ def safe_name(name: str) -> str:
     return re.sub(r"[^\w.\-]+", "_", name).strip("_") or "unnamed"
 
 
+def sprite_list_to_atlas_multi(pages: list[tuple[str, int, int, dict]]) -> str:
+    """Классический .atlas на несколько страниц (Spine это поддерживает)."""
+    out: list[str] = []
+    for page_name, page_w, page_h, sprite_list in pages:
+        out.append(sprite_list_to_atlas(page_name, page_w, page_h, sprite_list))
+    return "\n".join(out)
+
+
 def sprite_list_to_atlas(page_name: str, page_w: int, page_h: int, sprite_list: dict) -> str:
     lines = [
         page_name,
@@ -283,24 +291,31 @@ def write_spine_projects(
             "ver": sp["skeleton"].get("skeleton", {}).get("spine", "?"),
         }
 
-        atlas_meta = None
+        # Атласов у проекта обычно несколько (страниц): берём все, что связаны,
+        # а если связки нет — подбираем по имени (tbdh_freegame_tbdh_freegame).
+        atlas_metas: list[dict] = []
         for ag in links.get(guid, set()):
             if ag in atlases:
-                atlas_meta = atlases[ag]
-                break
+                atlas_metas.append(atlases[ag])
+        if not atlas_metas:
+            base = name.lower()
+            for a in atlases.values():
+                if (a.get("name") or "").lower().startswith(base):
+                    atlas_metas.append(a)
+            atlas_metas.sort(key=lambda a: a.get("name") or "")
 
-        if atlas_meta:
-            tex_guid = atlas_meta.get("texture_guid") or ""
-            sprites = atlas_meta.get("sprite_list") or {}
-            page_w, page_h = 1, 1
-            png_name = f"{name}.png"
-            if tex_guid:
+        if atlas_metas:
+            pages: list[tuple[str, int, int, dict]] = []
+            for idx, meta in enumerate(atlas_metas, 1):
+                tex_guid = meta.get("texture_guid") or ""
+                sprites = meta.get("sprite_list") or {}
+                if not sprites:
+                    continue
                 cand = None
                 for c in tex_dir.glob(f"{tex_guid}.*"):
                     cand = c
                     break
-                if cand is None:
-                    # try CDN res/<guid>.png
+                if cand is None and tex_guid:
                     for ext in ("png", "jpg"):
                         url = f"{cdn_res(getattr(write_spine_projects, '_symbol', 'vs20olympgate'))}/{tex_guid}.{ext}"
                         try:
@@ -313,20 +328,25 @@ def write_spine_projects(
                                 break
                         except Exception:
                             pass
-                if cand is not None:
-                    dest = proj / f"{name}{cand.suffix}"
-                    dest.write_bytes(cand.read_bytes())
-                    info["png"] = True
-                    png_name = dest.name
-                    sz = png_size(dest.read_bytes())
-                    if sz:
-                        page_w, page_h = sz
-                    print(f"KEEP: spine/{name}/{dest.name} (Spine page PNG, {dest.stat().st_size} bytes)")
-            atlas_text = sprite_list_to_atlas(png_name, page_w, page_h, sprites)
-            ap = proj / f"{name}.atlas"
-            ap.write_text(atlas_text, encoding="utf-8")
-            info["atlas"] = True
-            print(f"KEEP: spine/{name}/{ap.name} (Spine atlas, {ap.stat().st_size} bytes, {len(sprites)} regions)")
+                if cand is None:
+                    continue                      # страница не нашлась — пропускаем
+                page_name = f"{name}.png" if idx == 1 else f"{name}{idx}.png"
+                dest = proj / page_name
+                dest.write_bytes(cand.read_bytes())
+                page_w, page_h = 1, 1
+                sz = png_size(dest.read_bytes())
+                if sz:
+                    page_w, page_h = sz
+                pages.append((page_name, page_w, page_h, sprites))
+                info["png"] = True
+                print(f"KEEP: spine/{name}/{page_name} (Spine page PNG, {dest.stat().st_size} bytes)")
+            if pages:
+                ap = proj / f"{name}.atlas"
+                ap.write_text(sprite_list_to_atlas_multi(pages), encoding="utf-8")
+                info["atlas"] = True
+                regions = sum(len(p[3]) for p in pages)
+                print(f"KEEP: spine/{name}/{ap.name} (Spine atlas, {ap.stat().st_size} bytes, "
+                      f"{regions} regions, {len(pages)} pages)")
 
         projects.append(info)
     return projects
