@@ -99,7 +99,7 @@ jobs:
           RC=$?
           tail -n 40 npm-install-log.txt
           if [ "$RC" = "0" ]; then
-            echo "node_modules и Chromium готовы" >> "$GITHUB_ENV"
+            echo "node_modules и Chromium готовы"
           else
             echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
           fi
