@@ -25,6 +25,18 @@ UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chr
 RESOURCE_SERIES = ("main_resources", "other_resources", "resources", "common")
 GAME_SUBDIR = "desktop/game/"
 
+# Пауза между запросами: origins не любит частые запросы подряд.
+DELAY = float(os.environ.get("FETCH_DELAY") or "1.2")
+_last_req = [0.0]
+
+
+def _throttle() -> None:
+    import time
+    gap = time.time() - _last_req[0]
+    if gap < DELAY:
+        time.sleep(DELAY - gap)
+    _last_req[0] = time.time()
+
 
 def http_get(url: str, timeout: int = 60) -> bytes:
     """Прямой запрос к origins."""
