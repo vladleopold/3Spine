@@ -181,6 +181,9 @@ jobs:
             mkdir -p "$dir"
             [ -f "$dir/url.txt" ] || echo "$url" > "$dir/url.txt"
             echo "=== $url → symbol=$SYM"
+            # transcoder KTX→PNG: чтобы страницы атласов были картинками,
+            # а не .ktx. Необязательный шаг, при отсутствии всё работает.
+            .codespace/pg-extractor/install-ktx-tools.sh || true
             OUT_DIR="$dir/pg_uht" MAIN_MAX="$MAIN_MAX" \
               .codespace/pg-extractor/find-uht-assets.sh "$SYM" || true
             OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-textures.sh "$SYM" || true

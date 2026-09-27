@@ -19,11 +19,117 @@ import argparse
 import base64
 import json
 import re
+import shutil
 import struct
+import subprocess
 import sys
 import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
+
+
+# ─── remote textures (isInline:false → res/<guid>.ktx) ─────────────
+
+def collect_remote_textures(files: list[Path]) -> dict[str, str]:
+    """guid -> относительный путь вида res/<guid>.ktx для не-inline текстур.
+
+    У части Spine-проектов страница атласа не inline, а отдельным .ktx-файлом.
+    Раньше такие страницы просто терялись — теперь мы их знаем и качаем.
+    """
+    out: dict[str, str] = {}
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for m in re.finditer(
+            r'"type"\s*:\s*"Texture"\s*,\s*"id"\s*:\s*"([0-9a-f]{32})"'
+            r'\s*,\s*"isInline"\s*:\s*false\s*,\s*"data"\s*:\s*"([^"]{4,160})"',
+            text,
+        ):
+            guid, rel = m.group(1), m.group(2)
+            if rel.lower().startswith(("res/", "./")):
+                out.setdefault(guid, rel)
+    return out
+
+
+def download_remote_textures(
+    remotes: dict[str, str],
+    base_urls: list[str],
+    tex_dir: Path,
+) -> dict[str, Path]:
+    """Скачивает не-inline текстуры. base_urls пробуются по очереди."""
+    got: dict[str, Path] = {}
+    for guid, rel in remotes.items():
+        dest = tex_dir / Path(rel).name
+        if dest.exists() and dest.stat().st_size > 32:
+            got[guid] = dest
+            continue
+        for base in base_urls:
+            url = base.rstrip("/") + "/" + rel.lstrip("./")
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CI-Bot"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                if len(data) > 32:
+                    dest.write_bytes(data)
+                    got[guid] = dest
+                    print(f"GET  remote texture {dest.name} ({len(data)} bytes) ← {base}")
+                    break
+            except Exception:
+                continue
+    return got
+
+
+def ktx_size(data: bytes) -> tuple[int, int] | None:
+    """Размер страницы из KTX/KTX2-заголовка.
+
+    Идентификатор у KTX1 и KTX2 одинаковый, поэтому пробуем обе раскладки
+    и берём ту, где ширина/высота правдоподобны.
+    """
+    if len(data) < 64 or data[:4] != b"\xabKTX":
+        return None
+    vals = struct.unpack_from("<16I", data, 12)
+
+    def ok(p: tuple[int, int]) -> bool:
+        return 16 <= p[0] <= 8192 and 16 <= p[1] <= 8192
+
+    cands = [(vals[6], vals[7]), (vals[2], vals[3])]   # KTX1- и KTX2-раскладка
+    for p in cands:
+        if ok(p):
+            return p
+    return None
+
+
+def transcode_ktx(path: Path) -> Path | None:
+    """KTX → PNG, если в раннере есть transcoder. Иначе None."""
+    out = path.with_suffix(".png")
+    if out.exists() and out.stat().st_size > 32:
+        return out
+    cmds = [
+        ["ktx2ktx2", "--decode", str(path)],                       # KTX-Software
+        ["ktx", "--decode", str(path)],                            # альтернативное имя
+        ["convert", str(path), str(out)],                          # ImageMagick
+    ]
+    for cmd in cmds:
+        try:
+            exe = shutil.which(cmd[0])
+            if not exe:
+                continue
+            if cmd[0] == "convert":
+                subprocess.run([exe, str(path), str(out)], check=True,
+                               capture_output=True, timeout=120)
+            else:
+                subprocess.run([exe] + cmd[1:], check=True, capture_output=True, timeout=120)
+                made = path.with_name(path.stem + ".png")
+                if not made.exists():
+                    continue
+                if made != out:
+                    out.write_bytes(made.read_bytes())
+                    made.unlink()
+            if out.exists() and out.stat().st_size > 32:
+                print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
+                return out
+        except Exception:
+            continue
+    return None
 
 
 def cdn_res(symbol: str) -> str:
@@ -330,11 +436,13 @@ def write_spine_projects(
                             pass
                 if cand is None:
                     continue                      # страница не нашлась — пропускаем
-                page_name = f"{name}.png" if idx == 1 else f"{name}{idx}.png"
+                ext = cand.suffix if cand.suffix.lower() in (".png", ".jpg", ".ktx") else ".png"
+                # .ktx отдаём как есть, но размер страницы всё равно нужен атласу
+                page_name = f"{name}{ext}" if idx == 1 else f"{name}{idx}{ext}"
                 dest = proj / page_name
                 dest.write_bytes(cand.read_bytes())
                 page_w, page_h = 1, 1
-                sz = png_size(dest.read_bytes())
+                sz = png_size(dest.read_bytes()) or ktx_size(dest.read_bytes())
                 if sz:
                     page_w, page_h = sz
                 pages.append((page_name, page_w, page_h, sprites))
@@ -375,6 +483,18 @@ def main() -> int:
     print("=== 1/3 TEXTURES (base64 → PNG) ===")
     tex_dir = args.out / "textures"
     textures = extract_textures(files, tex_dir)
+
+    # Не-inline страницы (res/<guid>.ktx|png): раньше они просто терялись
+    remotes = collect_remote_textures(files)
+    if remotes:
+        print(f"=== 1b/3 REMOTE PAGES (isInline:false → {len(remotes)}) ===")
+        game = f"https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games/vs/{args.symbol}"
+        bases = [f"{game}/desktop/game", f"{game}/mobile/game", f"{game}/desktop"]
+        fetched = download_remote_textures(remotes, bases, tex_dir)
+        print(f"Remote pages fetched: {len(fetched)}/{len(remotes)}")
+        for p in fetched.values():
+            if p.suffix.lower() == ".ktx":
+                transcode_ktx(p)
 
     print("")
     print("=== 2/3 SPINE JSON (UHTSpine.spineJSON base64) ===")
