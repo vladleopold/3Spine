@@ -22,7 +22,33 @@ if have apt-get; then
   fi
 fi
 
-# 2) Basis Universal: статический бинарь из релизов на GitHub
+# 2) KTX-Software от Khronos: готовые Linux-сборки, компилировать не нужно
+if have curl && have tar; then
+  log "качаю KTX-Software (готовые Linux-бинары)"
+  url=$(curl -sL --max-time 30 https://api.github.com/repos/KhronosGroup/KTX-Software/releases/latest |
+        sed -n 's/.*"browser_download_url": *"\([^"]*Linux-x86_64\.tar\.bz2\)".*/\1/p' | head -1)
+  if [ -n "$url" ]; then
+    tmp=$(mktemp -d)
+    if curl -sL --max-time 180 -o "$tmp/ktx.tar.bz2" "$url" && \
+       tar -xjf "$tmp/ktx.tar.bz2" -C "$tmp" 2>/dev/null; then
+      for b in ktx2ktx2 toktx ktx; do
+        bin=$(find "$tmp" -type f -name "$b" ! -name '*.txt' 2>/dev/null | head -1)
+        if [ -n "$bin" ]; then
+          sudo install -m 0755 "$bin" /usr/local/bin/"$b" 2>/dev/null || true
+        fi
+      done
+      for b in libktx.so.4 libktx.so; do
+        so=$(find "$tmp" -type f -name "$b" 2>/dev/null | head -1)
+        [ -n "$so" ] && sudo install -m 0755 "$so" /usr/local/lib/ 2>/dev/null
+      done
+      sudo ldconfig 2>/dev/null || true
+      have ktx2ktx2 && { log "поставил ktx2ktx2 из KTX-Software"; rm -rf "$tmp"; exit 0; }
+    fi
+    rm -rf "$tmp"
+  fi
+fi
+
+# 3) Basis Universal: статический бинарь из релизов на GitHub
 if have curl; then
   url=$(curl -sL --max-time 30 \
     https://api.github.com/repos/BinomialLLC/basis_universal/releases/latest |
@@ -42,13 +68,13 @@ if have curl; then
   fi
 fi
 
-# 3) ImageMagick — последний шанс (KTX поддержан не везде)
+# 4) ImageMagick — последний шанс (KTX поддержан не везде)
 if have apt-get; then
   log "пробую ImageMagick"
   sudo apt-get install -y -qq imagemagick >/dev/null 2>&1 || true
 fi
 
-# 4) Сборка basisu из исходников. Готовых бинарей в релиз��х нет, поэтому
+# 5) Сборка basisu из исходников. Готовых бинарей в релиз��х нет, поэтому
 #    только по запросу: занимает несколько минут.
 if [ "${KTX_BUILD_FROM_SOURCE:-0}" = "1" ] && ! have basisu; then
   if ! have git || ! have cmake || ! have g++; then

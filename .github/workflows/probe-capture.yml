@@ -13,15 +13,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Установка KTX-транскодера
+      - name: Установка KTX-транскодера и тест на реальном .ktx
         env:
-          KTX_BUILD_FROM_SOURCE: '1'
+          KTX_BUILD_FROM_SOURCE: '0'
         run: |
           .codespace/pg-extractor/install-ktx-tools.sh || true
-          echo "--- итог:"
+          echo "--- итог установки:"
           for t in ktx2ktx2 toktx ktx basisu convert; do
             command -v "$t" >/dev/null 2>&1 && echo "есть: $t ($(command -v $t))"
           done
+          # проверяем на настоящем файле из игры: какой вызов даёт PNG
+          G=694acf9f9578f7f47887ea81e8da87c9
+          B=https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games/vs/vs20bgdoghouse/desktop/game
+          mkdir -p /tmp/ktxtest && cd /tmp/ktxtest
+          curl -sL --max-time 60 -o t.ktx "$B/res/$G.ktx" || true
+          ls -l t.ktx | awk '{print "ktx: " $5 " байт"}'
+          try() { echo "--- пробую: $*"; "$@" >/dev/null 2>&1 || true; }
+          if command -v ktx2ktx2 >/dev/null; then
+            try ktx2ktx2 --decode t.ktx
+            try ktx2ktx2 --decode --target png t.ktx
+            try ktx2ktx2 -d -f png t.ktx
+          fi
+          if command -v toktx >/dev/null; then try toktx --decode_raw t.ktx; fi
+          if command -v convert >/dev/null; then try convert t.ktx out_conv.png; fi
+          echo "--- PNG после всех попыток:"
+          ls -l *.png 2>/dev/null || echo "  ни одного PNG не получилось"
+          for f in *.png; do [ -f "$f" ] && head -c 4 "$f" | xxd | head -1; done
 
       - name: Прямой захват
         run: |
