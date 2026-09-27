@@ -59,9 +59,10 @@ if [ "${KTX_BUILD_FROM_SOURCE:-0}" = "1" ] && ! have basisu; then
   if have git && have cmake && have g++; then
     log "собираю basisu из исходников (KTX_BUILD_FROM_SOURCE=1)"
     tmp=$(mktemp -d)
-    if git clone --depth 1 -q https://github.com/BinomialLLC/basis_universal.git "$tmp/basis" 2>/dev/null; then
-      ( cd "$tmp/basis" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 \
-        && cmake --build build --target basisu -j "$(nproc 2>/dev/null || echo 2)" >/dev/null 2>&1 )
+    if git clone --depth 1 -q https://github.com/BinomialLLC/basis_universal.git "$tmp/basis"; then
+      log "клон ok, конфигурирую cmake"
+      ( cd "$tmp/basis" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -n 15 )
+      ( cd "$tmp/basis" && cmake --build build --target basisu -j "$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -n 25 )
       bin=$(find "$tmp/basis/build" -type f -name 'basisu' ! -name '*.txt' 2>/dev/null | head -1)
       if [ -n "$bin" ]; then
         sudo install -m 0755 "$bin" /usr/local/bin/basisu 2>/dev/null || true
