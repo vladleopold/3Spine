@@ -35,6 +35,76 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  /* ---------------- панель текущего прохода ---------------- */
+
+  const run = { job: "", t0: 0, timer: 0, step: "" };
+
+  function setRunStep(text) {
+    run.step = text || "";
+    const el = $("run-step");
+    if (el) el.textContent = run.step;
+  }
+
+  function fmtElapsed(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    return s < 60 ? s + " c" : Math.floor(s / 60) + " мин " + (s % 60) + " c";
+  }
+
+  function startRunTicker() {
+    stopRunTicker();
+    run.t0 = Date.now();
+    run.timer = setInterval(() => {
+      const txt = fmtElapsed(Date.now() - run.t0);
+      const el = $("run-elapsed");
+      if (el) el.textContent = txt;
+      const m = document.querySelector("#history-list .history-item .h-meta");
+      if (m && run.job) m.textContent = "сейчас идёт · прошло " + txt;
+    }, 500);
+  }
+
+  function stopRunTicker() {
+    if (run.timer) { clearInterval(run.timer); run.timer = 0; }
+  }
+
+  // Панель прохода занимает место панели загрузки: drag-and-drop исчезает.
+  function showRunPanel(on, opts) {
+    const panel = $("run-panel");
+    const pick = document.querySelector("section.pick");
+    document.body.classList.toggle("running", !!on);
+    if (on) {
+      const o = opts || {};
+      run.job = o.job || run.job || "";
+      const j = $("run-job");
+      if (j) j.textContent = run.job;
+      const t = $("run-title");
+      if (t) t.textContent = o.title || "Проход запущен";
+      if (o.step) setRunStep(o.step);
+      panel.classList.remove("hidden");
+      if (pick) {
+        pick.style.transition = "opacity .3s ease, transform .3s ease";
+        pick.style.opacity = "0";
+        pick.style.transform = "translateY(-8px)";
+        setTimeout(() => pick.classList.add("hidden"), 320);
+      }
+      startRunTicker();
+    } else {
+      panel.classList.add("hidden");
+      if (pick) {
+        pick.classList.remove("hidden");
+        requestAnimationFrame(() => {
+          pick.style.opacity = "1";
+          pick.style.transform = "translateY(0)";
+        });
+      }
+      stopRunTicker();
+    }
+  }
+
+  function markRunDone() {
+    document.body.classList.remove("running");
+    stopRunTicker();
+  }
+
   /* ---------------- UI helpers ---------------- */
 
   function log(text, cls) {
@@ -436,9 +506,64 @@
     }) + (d.getHours() === undefined ? "" : ":" + p(d.getSeconds()));
   }
 
+  let activeJob = "";
+
+  // Открыть сохранённый проход: тянем его архив и показываем анимации.
+  async function openJobArchive(job) {
+    if (!job) return;
+    activeJob = job;
+    setStatus("открываю " + job + "…", "run");
+    try {
+      const r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job), { method: "GET" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const blob = await r.blob();
+      lastZip = blob;
+      els.download.href = BROKER + "/download?archive=" + encodeURIComponent(job);
+      els.download.classList.remove("hidden");
+      const okPv = await renderPreviews(blob);
+      if (!okPv) {
+        showFetchVerdict("В этом проходе нет превью анимаций — скачайте архив целиком.");
+        showPreviewsPanel(false);
+      }
+      setStatus("готово", "ok");
+      log("> Открыт проход " + job + (okPv ? ": анимаций " + $("previews-grid").children.length : ""), "ok");
+    } catch (e) {
+      log("Не удалось открыть проход " + job + ": " + e.message, "err");
+      setStatus("ошибка", "err");
+    }
+    loadHistory();
+  }
+
+  function renderRunningItem() {
+    if (!run.job) return null;
+    const row = document.createElement("div");
+    row.className = "history-item h-item-clickable h-item-active";
+    const job = document.createElement("div");
+    job.className = "h-job";
+    job.textContent = run.job;
+    job.title = "Текущий проход — клик покажет лог";
+    const tag = document.createElement("span");
+    tag.className = "h-tag in-progress";
+    tag.textContent = "in_progress";
+    const meta = document.createElement("div");
+    meta.className = "h-meta";
+    meta.textContent = "сейчас идёт · прошло " + fmtElapsed(Date.now() - run.t0);
+    row.appendChild(job);
+    row.appendChild(tag);
+    row.appendChild(meta);
+    row.addEventListener("click", () => {
+      showPreviewsPanel(false);
+      showRunPanel(true, { job: run.job, title: "Проход выполняется", step: run.step || "Идёт сборка в GitHub Actions…" });
+      els.log.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return row;
+  }
+
   function renderHistory(items) {
     els.histList.innerHTML = "";
-    if (!items.length) {
+    const running = renderRunningItem();
+    if (running) els.histList.appendChild(running);
+    if (!items.length && !running) {
       const d = document.createElement("div");
       d.className = "history-empty";
       d.textContent = "история пока пуста — архивы появятся после первой конвертации";
@@ -446,13 +571,15 @@
       return;
     }
     for (const it of items) {
+      if (it.job === run.job) continue;
       const row = document.createElement("div");
-      row.className = "history-item";
+      row.className = "history-item" + (it.job === activeJob ? " h-item-active" : "");
+      if (it.job === activeJob) row.classList.add("h-item-clickable");
 
       const job = document.createElement("div");
       job.className = "h-job";
       job.textContent = it.job;
-      job.title = it.file || it.job;
+      job.title = (it.file || it.job) + " — клик покажет анимации этого прохода";
 
       const meta = document.createElement("div");
       meta.className = "h-meta";
@@ -471,10 +598,14 @@
       const a = document.createElement("a");
       a.className = "btn ghost small";
       a.href = BROKER + "/download?archive=" + encodeURIComponent(it.job);
-      a.textContent = "Скачать";
+      a.textContent = "Весь пакет";
       a.setAttribute("download", "");
       row.appendChild(a);
 
+      row.addEventListener("click", (ev) => {
+        if (ev.target === a || a.contains(ev.target)) return;   // это ссылка на весь архив
+        openJobArchive(it.job);
+      });
       els.histList.appendChild(row);
     }
   }
@@ -875,14 +1006,19 @@
     els.log.textContent = "";
     let job = null;
     const t0 = Date.now();
+    showRunPanel(true, { title: "Запускаю проход…", step: "Отправляю задачу в GitHub Actions…" });
     try {
       if (url) {
         setStatus("скачиваем ассеты…", "run");
+        setRunStep("Скачиваю ассеты игры и тяну скелеты, атласы и текстуры…");
         log("> Ссылка: " + url, "dim");
         log("> Загружаю манифест игры и тяну скелеты, атласы и текстуры…", "dim");
         job = await startConvertUrl(url);
+        run.job = job;
+        $("run-job").textContent = job;
         log("> Задача: " + job + " (режим: ссылка)", "dim");
         setStatus("скачиваем и конвертируем…", "run");
+        setRunStep("Проход идёт в GitHub Actions: выкачивание, компиляция .spine и превью…");
       } else {
         setStatus("пакуем…", "run");
         let blob;
@@ -902,7 +1038,10 @@
         }
         const names = skeletonNames();
         log("> Отправляем " + files.length + " файлов, задач: " + names.length + "…", "dim");
+        setRunStep("Загрузил файлы, жду компиляцию…");
         job = await startConvert(blob);
+        run.job = job;
+        $("run-job").textContent = job;
         log("> Задача: " + job, "dim");
         setStatus("конвертация…", "run");
       }
@@ -936,6 +1075,7 @@
       }
       await logSummary();
       setStatus("готово", "ok");
+      markRunDone();
       els.download.classList.remove("hidden");
       let hasPreviews = false;
       try {
@@ -943,12 +1083,26 @@
       } catch (e) {
         log("Превью: " + e.message, "err");
       }
-      if (hasPreviews) log("… скриншотов компиляции: " + $("previews-grid").children.length, "dim");
+      if (hasPreviews) {
+        log("… анимаций в сборке: " + $("previews-grid").children.length, "dim");
+        setRunStep("Готово — анимации показаны ниже, нажми на блок чтобы скачать одну пару.");
+      } else {
+        showRunPanel(true, { title: "Проход завершён", step: "Скриншоты анимаций не собрались — архив можно скачать целиком." });
+        const badge = $("run-badge");
+        if (badge) badge.textContent = "готово";
+        document.body.classList.remove("running");
+        stopRunTicker();
+      }
       loadHistory();
       loadStats();
     } catch (e) {
       log("Ошибка: " + e.message, "err");
       setStatus("ошибка", "err");
+      document.body.classList.remove("running");
+      stopRunTicker();
+      const badge = $("run-badge");
+      if (badge) badge.textContent = "ошибка";
+      setRunStep("Проход не удался: " + e.message);
     } finally {
       els.start.disabled = false;
     }

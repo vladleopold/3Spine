@@ -1,12 +1,12 @@
 :root {
-  --bg: #161c24;
-  --panel: #1e2630;
-  --panel-2: #242e3a;
-  --border: #33404e;
+  --bg: #050506;
+  --panel: #0c0c0f;
+  --panel-2: #111116;
+  --border: #1e1e24;
   --text: #e6edf3;
   --muted: #8b98a7;
-  --accent: #4ea1ff;
-  --accent-2: #f2a65a;
+  --accent: #ff8a1f;
+  --accent-2: #ffa94d;
   --ok: #3fb950;
   --danger: #f85149;
   --mono: "SF Mono", Menlo, monospace;
@@ -21,8 +21,9 @@ body {
   margin: 0;
   font-family: var(--sans);
   background:
-    radial-gradient(1200px 600px at 70% -10%, #212c3a 0%, transparent 60%),
+    radial-gradient(1100px 520px at 70% -12%, #14100b 0%, transparent 62%),
     var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   display: flex;
   flex-direction: column;
@@ -535,4 +536,137 @@ footer {
   color: #ffd9d9;
   font-size: 13px;
   line-height: 1.4;
+}
+
+
+/* ---------- бегущий оранжевый градиент во время прохода ---------- */
+body.running::before {
+  content: "";
+  position: fixed;
+  inset: -20% -30%;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 38%,
+    rgba(255,138,31,.10) 47%,
+    rgba(255,169,77,.20) 50%,
+    rgba(255,138,31,.10) 53%,
+    transparent 62%);
+  background-size: 220% 100%;
+  animation: sweep 2.6s linear infinite;
+}
+
+@keyframes sweep {
+  from { background-position: 130% 0; }
+  to   { background-position: -30% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.running::before { animation: none; }
+}
+
+/* ---------- панель текущего прохода ---------- */
+.runpanel {
+  border: 1px solid #26262e;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #0d0d11, #08080a);
+  padding: 18px 20px 20px;
+  margin-bottom: 18px;
+}
+
+.runpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.run-spin {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255,138,31,.22);
+  border-top-color: var(--accent);
+  animation: spin .85s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.run-title { font-weight: 700; font-size: 15px; }
+.run-badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  color: #0a0a0a;
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.run-job {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.run-step {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  color: #d6cfc6;
+}
+
+.run-bar {
+  position: relative;
+  height: 7px;
+  border-radius: 999px;
+  background: #16161b;
+  overflow: hidden;
+  border: 1px solid #23232b;
+}
+
+.run-bar i {
+  position: absolute;
+  inset: 0;
+  width: 34%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ff6a00, #ffb05a);
+  animation: slide 1.5s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(320%); }
+}
+
+.run-foot {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-foot b { color: var(--accent-2); font-weight: 600; }
+
+/* карточки анимаций на чёрном */
+.pv-card {
+  background: #0a0a0d;
+  border-color: #24242c;
+}
+
+.pv-name { color: #ffd7a8; }
+
+.h-item-clickable { cursor: pointer; }
+.h-item-active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(255,138,31,.35) inset; }
+
+.h-tag.in-progress {
+  background: rgba(255,138,31,.16);
+  border-color: rgba(255,138,31,.55);
+  color: var(--accent-2);
 }
