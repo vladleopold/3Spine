@@ -176,31 +176,26 @@ def transcode_ktx(path: Path) -> Path | None:
     if out.exists() and out.stat().st_size > 32:
         return out
     # 1) готовые transcoder'ы с явным выходным файлом
-    # ktx2ktx2: выходной файл не позиционный, он получается сам
-    # (то же имя, расширение .ktx2) — это распакованный KTX2 без сжатия.
-    exe = shutil.which("ktx2ktx2")
+    # 1) `ktx transcode` (KTX-Software) распаковывает BasisLZ в обычный KTX2.
+    #    У ktx2ktx2 в этой версии такой опции нет — он печатает usage и выходит.
+    exe = shutil.which("ktx")
     if exe:
+        dec = path.with_name(path.stem + "_dec.ktx2")
         try:
-            proc = subprocess.run([exe, "--decode", str(path)],
-                                  capture_output=True, text=True, timeout=180)
-            if proc.returncode != 0:
-                print(f"ktx2ktx2 не справился с {path.name}: "
-                      f"{(proc.stdout or proc.stderr or '').strip()[:160]}")
+            proc = subprocess.run([exe, "transcode", str(path), str(dec)],
+                                  capture_output=True, text=True, timeout=300)
+            if proc.returncode != 0 and not dec.exists():
+                print(f"ktx transcode не справился с {path.name}: "
+                      f"{(proc.stderr or proc.stdout or '').strip()[:140]}")
         except Exception as e:
-            print(f"ktx2ktx2 исключение на {path.name}: {e}")
-        dec = path.with_suffix(".ktx2")
-        # ktx2ktx2 пишет результат рядом с входом, но иногда в текущий каталог
-        if not dec.exists():
-            alt = Path.cwd() / (path.stem + ".ktx2")
-            if alt.exists():
-                alt.replace(dec)
+            print(f"ktx transcode исключение на {path.name}: {e}")
         if dec.exists() and dec.stat().st_size > 32:
             made = ktx2_to_png(dec)
+            dec.unlink()
             if made and made.stat().st_size > 32:
                 out.write_bytes(made.read_bytes())
                 print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
                 return out
-            dec.unlink()
 
     for cmd in (
         ["ktx", "--decode", str(path)],
