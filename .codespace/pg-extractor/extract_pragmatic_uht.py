@@ -181,11 +181,19 @@ def transcode_ktx(path: Path) -> Path | None:
     exe = shutil.which("ktx2ktx2")
     if exe:
         try:
-            subprocess.run([exe, "--decode", str(path)], check=True,
-                           capture_output=True, timeout=180)
-        except Exception:
-            pass
+            proc = subprocess.run([exe, "--decode", str(path)],
+                                  capture_output=True, text=True, timeout=180)
+            if proc.returncode != 0:
+                print(f"ktx2ktx2 не справился с {path.name}: "
+                      f"{(proc.stdout or proc.stderr or '').strip()[:160]}")
+        except Exception as e:
+            print(f"ktx2ktx2 исключение на {path.name}: {e}")
         dec = path.with_suffix(".ktx2")
+        # ktx2ktx2 пишет результат рядом с входом, но иногда в текущий каталог
+        if not dec.exists():
+            alt = Path.cwd() / (path.stem + ".ktx2")
+            if alt.exists():
+                alt.replace(dec)
         if dec.exists() and dec.stat().st_size > 32:
             made = ktx2_to_png(dec)
             if made and made.stat().st_size > 32:
