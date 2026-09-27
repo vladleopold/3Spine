@@ -45,25 +45,39 @@ def proxy_get(url: str, timeout: int) -> bytes:
     """
     import subprocess
     import tempfile
+    import time
     target = re.sub(r"^https://", "http://", url)
-    _throttle()
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-        out = tmp.name
-    try:
-        proc = subprocess.run(
-            ["curl", "-sS", "--max-time", str(timeout), "-x", CAPTURE_PROXY,
-             "-A", UA, "-o", out, "-w", "%{http_code}", target],
-            capture_output=True, text=True, timeout=timeout + 20)
-        code = (proc.stdout or "").strip()
-        if proc.returncode != 0 or not code.isdigit() or not code.startswith("2"):
-            raise RuntimeError("curl %s (rc=%s)" % (code or "нет кода", proc.returncode))
-        with open(out, "rb") as fh:
-            return fh.read()
-    finally:
+    tries = int(os.environ.get("CAPTURE_PROXY_TRIES") or "4")
+    last = ""
+    for attempt in range(1, tries + 1):
+        _throttle()
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+            out = tmp.name
         try:
-            os.unlink(out)
-        except OSError:
-            pass
+            proc = subprocess.run(
+                ["curl", "-sS", "--max-time", str(timeout), "-x", CAPTURE_PROXY,
+                 "-A", UA, "-o", out, "-w", "%{http_code}", target],
+                capture_output=True, text=True, timeout=timeout + 20)
+            code = (proc.stdout or "").strip()
+            if proc.returncode == 0 and code.isdigit() and code.startswith("2"):
+                with open(out, "rb") as fh:
+                    return fh.read()
+            last = "%s (rc=%s)" % (code or "нет кода", proc.returncode)
+            if code in ("404", "410"):
+                # файла нет — это ответ origins, повторять и пробовать дальше бессмысленно
+                raise urllib.error.HTTPError(target, int(code), "Not Found", None, None)
+            if code == "403":
+                raise RuntimeError("прокси: 403")
+        except subprocess.TimeoutExpired:
+            last = "таймаут"
+        finally:
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+        # прокси периодически не отвечает (000), поэтому пробуем ещё раз
+        time.sleep(2.0 * attempt)
+    raise RuntimeError("прокси не отдал файл: %s" % last)
 
 
 def relay_headers() -> dict:
@@ -109,6 +123,9 @@ def http_get(url: str, timeout: int = 60) -> bytes:
             data = proxy_get(url, timeout)
             print("  взято через прокси")
             return data
+        except urllib.error.HTTPError as e:
+            # 404/410 — это честный ответ origins, файл кончился
+            raise
         except Exception as proxy_err:
             print("  прокси не помог (%s)" % proxy_err)
 

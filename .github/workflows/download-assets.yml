@@ -99,7 +99,34 @@ jobs:
 
       - run: npm ci
 
+      # Прямой захват PG Soft идёт первым: браузер для него не нужен, а его
+      # установка (Chromium ~115 МБ) занимает почти 5 минут.
+      - name: Прямой захват PG Soft по каждому URL
+        id: pgsoft_pre
+        env:
+          URLS: ${{ inputs.urls }}
+          FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
+          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
+          CAPTURE_PROXY: ${{ inputs.capture_proxy || 'http://65.21.201.149:8081' }}
+        run: |
+          echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
+            case "$url" in
+              *html5Game.do*)
+                slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
+                dir="artifacts/$slug"
+                mkdir -p "$dir"
+                echo "=== прямой захват: $url"
+                python3 .codespace/capture_pgsoft.py "$url" "$dir" --max-index 60 || true
+                echo "прямой захват: $(find "$dir/images" -type f 2>/dev/null | wc -l) картинок"
+                ;;
+            esac
+          done
+          N=$(find artifacts -path '*/images/*' -type f 2>/dev/null | wc -l)
+          echo "всего картинок после прямого захвата: $N"
+          if [ "$N" -ge 10 ]; then echo "captured=true" >> "$GITHUB_OUTPUT"; fi
+
       - name: Скачать через AnyDownload (render) по каждому URL
+        if: ${{ steps.pgsoft_pre.outputs.captured != 'true' }}
         env:
           URLS: ${{ inputs.urls }}
           WAIT_MS: ${{ inputs.spa_wait || '8000' }}
@@ -130,13 +157,6 @@ jobs:
             slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
             dir="artifacts/$slug"
             mkdir -p "$dir"
-            case "$url" in
-              *html5Game.do*)
-                echo "=== [$i] прямой захват: $url"
-                python3 .codespace/capture_pgsoft.py "$url" "$dir" --max-index 60 || true
-                echo "прямой захват: $(find "$dir/images" -type f 2>/dev/null | wc -l) картинок"
-                ;;
-            esac
             best=0
             for a in $(seq 1 "$ATTEMPTS"); do
               [ "$(find "$dir/images" -type f 2>/dev/null | wc -l)" -ge 10 ] && break
