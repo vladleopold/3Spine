@@ -29,6 +29,21 @@ jobs:
           curl -sL --max-time 60 -o t.ktx "$B/res/$G.ktx" || true
           ls -l t.ktx | awk '{print "ktx: " $5 " байт"}'
           try() { echo "--- пробую: $*"; "$@" >/dev/null 2>&1 || true; }
+          # 1) какие подкоманды есть у нового CLI `ktx`
+          if command -v ktx >/dev/null; then
+            echo "=== ktx --help:"
+            ktx --help 2>&1 | head -n 30 | cut -c1-110
+          fi
+          # 2) пробуем Basis-транскодирование подкомандами
+          for sub in "extract-basis t.ktx t_basis.ktx2" "transcode t.ktx t_tc.ktx2"; do
+            set -- $sub
+            out=$2
+            echo "=== пробую: ktx $1 t.ktx $out"
+            ktx "$1" t.ktx "$out" >ktxsub.txt 2>&1 || true
+            head -n 4 ktxsub.txt | cut -c1-110
+            [ -f "$out" ] && echo "  создан $out: $(wc -c < "$out" | tr -d ' ') байт" || echo "  файла нет"
+          done
+
           if command -v ktx2ktx2 >/dev/null; then
             echo "--- ktx2ktx2 --decode (в uncompressed KTX2):"
             ktx2ktx2 --decode t.ktx t_dec.ktx2 > ktxlog.txt 2>&1 || true
