@@ -91,7 +91,6 @@ jobs:
       # установка (Chromium ~115 МБ) занимает почти 5 минут.
       - name: Прямой захват PG Soft по каждому URL
         id: pgsoft_pre
-        env:
         run: |
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             case "$url" in
@@ -303,7 +302,6 @@ jobs:
       - name: "Прямой захват PG Soft (html5Game.do)"
         id: pgsoft
         continue-on-error: true
-        env:
         run: |
           mkdir -p artifacts/anydownload
           case "$URL" in
