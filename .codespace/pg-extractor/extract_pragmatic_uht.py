@@ -115,11 +115,13 @@ def ktx2_to_png(path: Path) -> Path | None:
         return None
     dfd_off, _dfd_len, kvd_off, kvd_len = struct.unpack_from("<4I", data, 48)
     sgd_off, sgd_len = struct.unpack_from("<2Q", data, 64)
-    lev_off, lev_len = struct.unpack_from("<2Q", data, 80)
-    if lev_len < 24:
-        bail(f"level index пустой (len={lev_len})")
+    # В KTX2 индекса уровней нет «указателя»: массив записей идёт сразу
+    # за заголовком, начиная со смещения 80. Запись — 24 байта:
+    # byteOffset, byteLength, uncompressedByteLength.
+    if len(data) < 80 + 24:
+        bail("файл короче заголовка с индексом уровней")
         return None
-    byte_off, byte_len = struct.unpack_from("<2Q", data, int(lev_off))
+    byte_off, byte_len, _unc = struct.unpack_from("<3Q", data, 80)
     chunk = data[int(byte_off):int(byte_off) + int(byte_len)]
     if not chunk or len(chunk) < int(w) * int(h):
         bail(f"данных {len(chunk)} байт, нужно ≥{int(w) * int(h)}")
