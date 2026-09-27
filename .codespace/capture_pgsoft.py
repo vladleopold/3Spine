@@ -53,21 +53,23 @@ def http_get(url: str, timeout: int = 60) -> bytes:
 
 
 def http_head_ok(url: str, timeout: int = 20) -> bool:
-    req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 300
-    except urllib.error.HTTPError as e:
-        if e.code == 403 and RELAY:
-            rreq = urllib.request.Request(_relay_url(url), headers={"User-Agent": UA}, method="HEAD")
-            try:
-                with urllib.request.urlopen(rreq, timeout=timeout + 30) as resp:
-                    return 200 <= resp.status < 300
-            except Exception:
-                return False
-        return 200 <= e.code < 300
-    except Exception:
-        return False
+    """Проверка существования обычным GET с чтением 1 байта.
+
+    HEAD не годится: публикатор (воркер) держит только GET и на HEAD
+    отвечает ошибкой, из-за чего все файлы считались отсутствующими.
+    """
+    for target in ((url, _relay_url(url)) if RELAY else (url,)):
+        req = urllib.request.Request(target, headers={"User-Agent": UA, "Accept": "*/*"})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read(1)
+                return 200 <= resp.status < 300
+        except urllib.error.HTTPError as e:
+            if 200 <= e.code < 300:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def extract_game_config(html: str) -> dict:
