@@ -160,6 +160,39 @@ jobs:
             fi
           done
 
+      # Полный экстрактор extractor-ci для любой игры PragmaticPlay:
+      # find-uht-assets.sh сам качает packs (desktop+mobile, main 0..MAIN_MAX)
+      # и зовёт extract_pragmatic_uht.py; сверху find-textures/find-spine.
+      - name: Прагматик Play — универсальный экстрактор UHT
+        continue-on-error: true
+        env:
+          URLS: ${{ inputs.urls }}
+          MAIN_MAX: ${{ inputs.pg_main_max || '50' }}
+        run: |
+          set -uo pipefail
+          echo "$URLS:" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
+            SYM=$(printf '%s' "$url" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
+            case "$SYM" in
+              vs*) ;;
+              *) echo "=== не игра PragmaticPlay, пропускаю: $url"; continue ;;
+            esac
+            slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
+            dir="artifacts/$slug"
+            mkdir -p "$dir"
+            [ -f "$dir/url.txt" ] || echo "$url" > "$dir/url.txt"
+            echo "=== $url → symbol=$SYM"
+            OUT_DIR="$dir/pg_uht" MAIN_MAX="$MAIN_MAX" \
+              .codespace/pg-extractor/find-uht-assets.sh "$SYM" || true
+            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-textures.sh "$SYM" || true
+            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh "$SYM" || true
+            for sub in spine textures; do
+              [ -d "$dir/pg_uht/extracted/$sub" ] || continue
+              mkdir -p "$dir/pg_$sub"
+              find "$dir/pg_uht/extracted/$sub" -type f -exec cp {} "$dir/pg_$sub/" \;
+            done
+            echo "=== $SYM: Spine-проектов $(find "$dir/pg_spine" -name '*.json' 2>/dev/null | wc -l), текстур $(find "$dir/pg_textures" -type f 2>/dev/null | wc -l)"
+          done
+
       - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
         continue-on-error: true
         run: |
@@ -372,6 +405,39 @@ jobs:
           WAIT_MS: ${{ inputs.wait_ms || '35000' }}
           HEADLESS: 'true'
         run: node scripts/download-resources.mjs
+
+      # Полный экстрактор extractor-ci для любой игры PragmaticPlay:
+      # find-uht-assets.sh сам качает packs (desktop+mobile, main 0..MAIN_MAX)
+      # и зовёт extract_pragmatic_uht.py; сверху find-textures/find-spine.
+      - name: Прагматик Play — универсальный экстрактор UHT
+        continue-on-error: true
+        env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+          MAIN_MAX: ${{ inputs.pg_main_max || '50' }}
+        run: |
+          set -uo pipefail
+          echo "$URL:" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
+            SYM=$(printf '%s' "$url" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
+            case "$SYM" in
+              vs*) ;;
+              *) echo "=== не игра PragmaticPlay, пропускаю: $url"; continue ;;
+            esac
+            slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
+            dir="artifacts/$slug"
+            mkdir -p "$dir"
+            [ -f "$dir/url.txt" ] || echo "$url" > "$dir/url.txt"
+            echo "=== $url → symbol=$SYM"
+            OUT_DIR="$dir/pg_uht" MAIN_MAX="$MAIN_MAX" \
+              .codespace/pg-extractor/find-uht-assets.sh "$SYM" || true
+            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-textures.sh "$SYM" || true
+            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh "$SYM" || true
+            for sub in spine textures; do
+              [ -d "$dir/pg_uht/extracted/$sub" ] || continue
+              mkdir -p "$dir/pg_$sub"
+              find "$dir/pg_uht/extracted/$sub" -type f -exec cp {} "$dir/pg_$sub/" \;
+            done
+            echo "=== $SYM: Spine-проектов $(find "$dir/pg_spine" -name '*.json' 2>/dev/null | wc -l), текстур $(find "$dir/pg_textures" -type f 2>/dev/null | wc -l)"
+          done
 
       - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
         continue-on-error: true

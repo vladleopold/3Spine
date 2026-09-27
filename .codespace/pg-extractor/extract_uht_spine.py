@@ -23,10 +23,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterator
 
-CDN_RES = (
-    "https://demogamesfree.pragmaticplay.net"
-    "/gs2c/common/v3/games-html5/games/vs/vs20olympgate/desktop/game/res"
-)
+def cdn_res(symbol: str) -> str:
+    return (
+        "https://demogamesfree.pragmaticplay.net"
+        f"/gs2c/common/v3/games-html5/games/vs/{symbol}/desktop/game/res"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +205,50 @@ def sprite_list_to_atlas(
 # ---------------------------------------------------------------------------
 # Collect phase: scan all files
 # ---------------------------------------------------------------------------
+
+def extract_all_base64_images(files: list[Path], tex_dir: Path) -> dict[str, Path]:
+    """
+    Scan raw JSON text for every data:image/*;base64 blob tied to an id.
+    Returns guid -> saved Path. This is the primary image source in UHT packs.
+    """
+    tex_dir.mkdir(parents=True, exist_ok=True)
+    saved: dict[str, Path] = {}
+    # Patterns covering common UHT orderings
+    patterns = [
+        re.compile(
+            r'"type"\s*:\s*"Texture"\s*,\s*"id"\s*:\s*"([a-f0-9]{32})"\s*,\s*"isInline"\s*:\s*true\s*,\s*"data"\s*:\s*"(data:image/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]+)"',
+            re.I,
+        ),
+        re.compile(
+            r'"type"\s*:\s*"Texture"\s*,\s*"id"\s*:\s*"([a-f0-9]{32})"\s*,\s*"data"\s*:\s*"(data:image/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]+)"',
+            re.I,
+        ),
+        re.compile(
+            r'"id"\s*:\s*"([a-f0-9]{32})"\s*,\s*"isInline"\s*:\s*true\s*,\s*"data"\s*:\s*"(data:image/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]+)"',
+            re.I,
+        ),
+        re.compile(
+            r'"id"\s*:\s*"([a-f0-9]{32})"\s*,\s*"data"\s*:\s*"(data:image/(?:png|jpeg|jpg);base64,[A-Za-z0-9+/=]{100,})"',
+            re.I,
+        ),
+    ]
+    for path in files:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for pat in patterns:
+            for m in pat.finditer(raw):
+                guid, uri = m.group(1), m.group(2)
+                if guid in saved:
+                    continue
+                out = save_data_uri(uri, tex_dir / guid)
+                if out:
+                    saved[guid] = out
+                    print(f"  TEXTURE   {out.name}  ({out.stat().st_size} bytes, base64)")
+    return saved
+
+
 def collect(files: list[Path]) -> tuple[dict, dict, dict, dict]:
     """
     Returns:
@@ -380,7 +425,13 @@ def main() -> int:
     ap.add_argument("inputs", nargs="+", type=Path)
     ap.add_argument("-o", "--out", type=Path, default=Path("./uht-extracted"))
     ap.add_argument("--fetch-cdn", action="store_true")
+    ap.add_argument("--symbol", default="vs20olympgate",
+                    help="Pragmatic game symbol for CDN res/ path")
     args = ap.parse_args()
+
+    global CDN_RES
+    CDN_RES = cdn_res(args.symbol)
+    print(f"Symbol: {args.symbol}  CDN: {CDN_RES}")
 
     files: list[Path] = []
     for p in args.inputs:
@@ -403,22 +454,20 @@ def main() -> int:
     projects_dir.mkdir(parents=True, exist_ok=True)
     tex_cache.mkdir(parents=True, exist_ok=True)
 
-    # dump all inline textures into cache first
+    # Primary image source: every data:image base64 Texture in the packs
+    print("Extracting base64 textures (bitmap)…")
+    saved_tex = extract_all_base64_images(files, tex_cache)
+    # also keep collect()'s map
     for guid, uri in textures_inline.items():
-        save_data_uri(uri, tex_cache / guid)
+        if guid not in saved_tex and isinstance(uri, str) and uri.startswith("data:image"):
+            out = save_data_uri(uri, tex_cache / guid)
+            if out:
+                saved_tex[guid] = out
+                print(f"  TEXTURE   {out.name}  ({out.stat().st_size} bytes, base64)")
 
-    # known big sheets
-    if args.fetch_cdn:
-        for g in (
-            "b7a45c001e18b9f41b59da0652632f32",
-            "3237267f46a865641ac884e77a2aca49",
-            "7aa944b7a495d17439223872fbbf8906",
-            "932c6349ed296644fa2c4a7c7bcf1acd",
-            "ca6d2c57026ca09449ba8a8c911ac27f",
-        ):
-            download_cdn(g, tex_cache / g)
+    print(f"Base64 textures on disk: {len(list(tex_cache.glob('*')))}")
 
-    # also try CDN for every atlas texture guid
+    # CDN fallback for atlas texture guids + known sheets
     if args.fetch_cdn:
         for a in atlases.values():
             g = a.get("texture_guid") or ""

@@ -1,0 +1,29 @@
+name: pragmatic-uht-extract
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        symbol: [vs20olympgate, vs20chestcol, vs20swbonsup, vs10luckybnz]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Extract UHT assets
+        run: MAIN_MAX=40 ./find-uht-assets.sh ${{ matrix.symbol }}
+        env:
+          OUT_DIR: artifacts/${{ matrix.symbol }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uht-${{ matrix.symbol }}
+          path: |
+            artifacts/${{ matrix.symbol }}/extracted/textures/
+            artifacts/${{ matrix.symbol }}/extracted/spine/
+            artifacts/${{ matrix.symbol }}/extracted/extract-report.txt
+          if-no-files-found: warn

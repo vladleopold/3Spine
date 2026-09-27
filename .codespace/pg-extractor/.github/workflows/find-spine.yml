@@ -1,0 +1,60 @@
+name: Find Spine in Gates of Olympus
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
+  push:
+    paths:
+      - 'find-spine.sh'
+      - 'extract_uht_spine.py'
+      - '.github/workflows/find-spine.yml'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq curl grep coreutils
+
+      - name: Run UHT Spine unpacker
+        id: scan
+        run: |
+          chmod +x find-spine.sh extract_uht_spine.py
+          ./find-spine.sh
+        env:
+          OUT_DIR: ./olympus-assets
+        continue-on-error: true
+
+      - name: Upload report + skeletons
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: olympus-spine-scan
+          path: |
+            olympus-assets/spine-report.txt
+            olympus-assets/urls.txt
+            olympus-assets/logs/
+            olympus-assets/extracted/spine_projects/
+            olympus-assets/extracted/textures/
+            olympus-assets/extracted/atlases_meta/
+            olympus-assets/extracted/extract-report.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Fail if no skeletons
+        if: steps.scan.outcome == 'failure'
+        run: |
+          echo "::error::No UHTSpine skeletons extracted"
+          cat olympus-assets/spine-report.txt || true
+          exit 1

@@ -1,0 +1,18 @@
+extract-uht:
+  image: python:3.12-slim
+  parallel:
+    matrix:
+      - SYMBOL: [vs20olympgate, vs20chestcol, vs20swbonsup, vs10luckybnz]
+  variables:
+    MAIN_MAX: "40"
+  before_script:
+    - apt-get update && apt-get install -y curl
+  script:
+    - OUT_DIR=artifacts/$SYMBOL ./find-uht-assets.sh $SYMBOL
+  artifacts:
+    paths:
+      - artifacts/$SYMBOL/extracted/
+    when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
