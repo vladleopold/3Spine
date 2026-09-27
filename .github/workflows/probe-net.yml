@@ -1,0 +1,28 @@
+name: Probe net
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL для проверки'
+        required: true
+        type: string
+      proxy:
+        description: 'HTTP-прокси (host:port)'
+        required: false
+        type: string
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Прямо
+        run: |
+          echo "== напрямую:"
+          curl -sS -o /dev/null -w "HTTP %{http_code}, %{size_download} байт\n" --max-time 30 "${{ inputs.url }}" || echo "прямой запрос не прошёл"
+      - name: Через прокси
+        if: ${{ inputs.proxy != '' }}
+        run: |
+          echo "== через прокси ${{ inputs.proxy }} (схема http):"
+          U="$(printf '%s' '${{ inputs.url }}' | sed 's|^https://|http://|')"
+          curl -sS -o /dev/null -w "HTTP %{http_code}, %{size_download} байт\n" --max-time 40 -x "${{ inputs.proxy }}" "$U" || echo "прокси не ответил"
