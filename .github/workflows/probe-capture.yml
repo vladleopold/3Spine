@@ -1,0 +1,30 @@
+name: Probe capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'URL игры для прямого захвата'
+        required: true
+        type: string
+      proxy:
+        description: 'HTTP-прокси (host:port)'
+        required: false
+        type: string
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Прямой захват
+        env:
+          CAPTURE_PROXY: ${{ inputs.proxy }}
+          FETCH_RELAY: 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}'
+          FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
+        run: |
+          mkdir -p out
+          python3 .codespace/capture_pgsoft.py "${{ inputs.url }}" out --max-index 20 || true
+          echo "--- итог:"
+          echo "файлов: $(ls out/*.json 2>/dev/null | wc -l), картинок: $(find out/images -type f 2>/dev/null | wc -l)"
+          du -sh out 2>/dev/null | tail -1
