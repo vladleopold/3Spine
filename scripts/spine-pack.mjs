@@ -47,15 +47,22 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-// Spine-скелет в JSON: есть skeleton/bones/animations — обычные json не берём
+// Spine-скелет в JSON: маркеры skeleton/bones/slots/animations.
+// Читаем только начало файла — скелеты бывают мегабайтными, а json.parse
+// всего файла ещё и падает на бинарнике с расширением .json.
 function isSpineSkeleton(p) {
+  let head = '';
   try {
-    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-    return !!(j && typeof j === 'object' && !Array.isArray(j)
-      && (j.skeleton || j.bones || j.animations || j.slots));
+    const fd = fs.openSync(p, 'r');
+    const buf = Buffer.alloc(65536);
+    const n = fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    head = buf.subarray(0, n).toString('utf8');
   } catch {
     return false;
   }
+  if (!head.trimStart().startsWith('{')) return false;
+  return /"\s*(skeleton|bones|slots|animations)\s*":/.test(head);
 }
 
 // Текстуры из .atlas: строки вида "  name.png" / "page.png" (без отступа = page)
@@ -114,11 +121,19 @@ export function packSpine(srcDir, outDir, opts = {}) {
 
   const atlases = [];
   const skels = [];
+  const atlasNames = new Set();
   for (const p of all) {
-    if (/\.atlas$/i.test(p)) atlases.push(p);
-    else if (/\.(skel|bin)$/i.test(p)) skels.push(p);
-    // скелеты бывают и в формате Spine JSON (.json) — отличаем их по содержимому
-    else if (/\.json$/i.test(p) && isSpineSkeleton(p)) skels.push(p);
+    if (/\.atlas$/i.test(p)) { atlases.push(p); atlasNames.add(stripExt(stripQuerySuffix(path.basename(p)))); }
+  }
+  for (const p of all) {
+    if (/\.atlas$/i.test(p)) continue;
+    if (/\.(skel|bin)$/i.test(p)) { skels.push(p); continue; }
+    // PG Soft и подобные отдают скелеты Spine как .json (main_resources011.json).
+    // Считаем скелетом либо по маркерам Spine, либо если рядом есть одноимённый .atlas
+    if (/\.json$/i.test(p)) {
+      const key = stripExt(stripQuerySuffix(path.basename(p)));
+      if (isSpineSkeleton(p) || atlasNames.has(key)) skels.push(p);
+    }
   }
 
   // сопоставление по basename БЕЗ суффикса -<10 символов>
@@ -136,8 +151,20 @@ export function packSpine(srcDir, outDir, opts = {}) {
     if (taken.has(name)) continue;
     const matches = (skelKeys.get(name) || []).filter((s) => !usedSkels.has(s));
     if (!matches.length) {
-      result.incomplete.push({ atlas: a, reason: 'нет пары .skel/.bin' });
+      // ничего не выбрасываем: неполную пару тоже раскладываем в _incomplete
+      const dir = path.join(out, 'res', 'spine', '_incomplete', setName(name));
+      const files = [];
+      const sibs = all.filter((q) => stripExt(stripQuerySuffix(path.basename(q))) === name);
+      for (const q of sibs) {
+        const dst = path.join(dir, path.basename(stripQuerySuffix(q)));
+        if (exists(dst)) continue;
+        files.push(copy(q, dst));
+      }
+      if (!files.length) files.push(copy(a, path.join(dir, path.basename(stripQuerySuffix(a)))));
+      result.files += files.length;
+      result.incomplete.push({ atlas: a, reason: 'нет пары скелета', dir, files: files.length });
       result.skipped++;
+      taken.add(name);
       continue;
     }
     matches.sort();
@@ -179,10 +206,12 @@ export function packSpine(srcDir, outDir, opts = {}) {
 
   for (const [key, list] of skelKeys) {
     for (const s of list) {
-      if (!usedSkels.has(s)) {
-        result.incomplete.push({ skel: s, reason: `нет пары .atlas (ключ ${key})` });
-        result.skipped++;
-      }
+      if (usedSkels.has(s)) continue;
+      const dir = path.join(out, 'res', 'spine', '_incomplete', setName(key));
+      const dst = path.join(dir, path.basename(stripQuerySuffix(s)));
+      if (!exists(dst)) { copy(s, dst); result.files++; }
+      result.incomplete.push({ skel: s, reason: `нет пары .atlas (ключ ${key})`, dir });
+      result.skipped++;
     }
   }
 
