@@ -7,10 +7,13 @@ log() { echo "[ktx-tools] $*"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
-if have ktx2ktx2 || have toktx || have ktx || have basisu; then
-  log "transcoder уже есть: $(command -v ktx2ktx2 || command -v toktx || command -v ktx || command -v basisu)"
-  exit 0
-fi
+works() { command -v "$1" >/dev/null 2>&1 && "$1" --help >/dev/null 2>&1; }
+for t in ktx2ktx2 toktx ktx basisu; do
+  if works "$t"; then
+    log "transcoder уже есть: $t ($(command -v "$t"))"
+    exit 0
+  fi
+done
 
 # 1) KTX-Software из apt (если пакет есть в дистрибутиве)
 if have apt-get; then
@@ -22,7 +25,9 @@ if have apt-get; then
   fi
 fi
 
-# 2) KTX-Software от Khronos: готовые Linux-сборки, компилировать не нужно
+# 2) KTX-Software от Khronos: готовые Linux-сборки, компилировать не нужно.
+#    Кладём дерево в /opt и делаем обёртки с LD_LIBRARY_PATH — так надёжнее,
+#    чем полагаться на ldconfig.
 if have curl && have tar; then
   log "качаю KTX-Software (готовые Linux-бинары)"
   url=$(curl -sL --max-time 30 https://api.github.com/repos/KhronosGroup/KTX-Software/releases/latest |
@@ -31,18 +36,34 @@ if have curl && have tar; then
     tmp=$(mktemp -d)
     if curl -sL --max-time 180 -o "$tmp/ktx.tar.bz2" "$url" && \
        tar -xjf "$tmp/ktx.tar.bz2" -C "$tmp" 2>/dev/null; then
-      for b in ktx2ktx2 toktx ktx; do
-        bin=$(find "$tmp" -type f -name "$b" ! -name '*.txt' 2>/dev/null | head -1)
-        if [ -n "$bin" ]; then
-          sudo install -m 0755 "$bin" /usr/local/bin/"$b" 2>/dev/null || true
+      root=$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -1)
+      if [ -n "$root" ] && [ -d "$root/lib" ]; then
+        sudo rm -rf /opt/ktx-software
+        sudo mkdir -p /opt/ktx-software
+        sudo cp -R "$root/lib" /opt/ktx-software/ 2>/dev/null || true
+        sudo mkdir -p /opt/ktx-software/bin
+        for b in ktx2ktx2 toktx ktx ktxinfo ktx2check; do
+          [ -f "$root/bin/$b" ] || continue
+          sudo cp "$root/bin/$b" /opt/ktx-software/bin/
+          sudo chmod 0755 /opt/ktx-software/bin/"$b"
+          printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/ktx-software/lib exec /opt/ktx-software/bin/%s "$@"\n' "$b" \
+            | sudo tee /usr/local/bin/"$b" >/dev/null
+          sudo chmod 0755 /usr/local/bin/"$b"
+        done
+        if ktx2ktx2 --help >/dev/null 2>&1; then
+          log "поставил ktx2ktx2 из KTX-Software (в /opt/ktx-software)"
+          rm -rf "$tmp"
+          exit 0
         fi
-      done
-      for b in libktx.so.4 libktx.so; do
-        so=$(find "$tmp" -type f -name "$b" 2>/dev/null | head -1)
-        [ -n "$so" ] && sudo install -m 0755 "$so" /usr/local/lib/ 2>/dev/null
-      done
-      sudo ldconfig 2>/dev/null || true
-      have ktx2ktx2 && { log "поставил ktx2ktx2 из KTX-Software"; rm -rf "$tmp"; exit 0; }
+        log "бинарь не запускается, пробую ldconfig"
+        sudo install -m 0755 "$root"/lib/libktx.so* /usr/local/lib/ 2>/dev/null || true
+        sudo ldconfig 2>/dev/null || true
+        if ktx2ktx2 --help >/dev/null 2>&1; then
+          log "починил через ldconfig"
+          rm -rf "$tmp"
+          exit 0
+        fi
+      fi
     fi
     rm -rf "$tmp"
   fi
