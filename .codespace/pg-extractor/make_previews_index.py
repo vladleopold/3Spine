@@ -12,27 +12,43 @@ import sys
 
 
 def build(root: str) -> int:
-    proj = os.path.join(root, "spine")
-    if not os.path.isdir(proj):
-        return 0
+    """Собирает карточки по парам из каталогов spine/ и spine_projects/.
+
+    Раскладка может быть любой: и с подпапками на пару (spine/<имя>/…),
+    и плоской (spine/<имя>.json рядом с <имя>.atlas) — группируем по имени.
+    """
     prev = os.path.join(root, "previews")
+    stems: dict[str, dict] = {}
+
+    for sub in ("spine", "spine_projects"):
+        base_dir = os.path.join(root, sub)
+        if not os.path.isdir(base_dir):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(base_dir):
+            for fn in filenames:
+                stem, ext = os.path.splitext(fn)
+                rec = stems.setdefault(stem, {})
+                if ext in (".json", ".atlas", ".png", ".jpg"):
+                    rec.setdefault(ext, os.path.join(dirpath, fn))
+
+    if not stems:
+        return 0
+
     os.makedirs(prev, exist_ok=True)
     items = []
-    for name in sorted(os.listdir(proj)):
-        d = os.path.join(proj, name)
-        js = os.path.join(d, name + ".json")
-        if not os.path.isdir(d) or not os.path.isfile(js):
+    for name in sorted(stems):
+        rec = stems[name]
+        if ".json" not in rec or not os.path.isfile(rec[".json"]):
             continue
         page = None
         for ext in (".png", ".jpg"):
-            cand = os.path.join(d, name + ext)
-            if os.path.isfile(cand):
+            if ext in rec and os.path.isfile(rec[ext]):
                 page = "previews/%s%s" % (name, ext)
-                shutil.move(cand, os.path.join(root, page))
+                shutil.move(rec[ext], os.path.join(root, page))
                 break
         if page is None:
             continue
-        with open(js, encoding="utf-8", errors="ignore") as f:
+        with open(rec[".json"], encoding="utf-8", errors="ignore") as f:
             head = f.read(8192)
         spine = "previews/%s.spine" % name
         with open(os.path.join(root, spine), "w", encoding="utf-8") as f:
