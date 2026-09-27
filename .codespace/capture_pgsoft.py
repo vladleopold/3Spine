@@ -180,11 +180,19 @@ def main() -> int:
     base = datapath + "/" + GAME_SUBDIR
     found = []
     for series in RESOURCE_SERIES:
+        # Индексы идут подряд, поэтому на двух пропусках подряд серию бросаем:
+        # иначе перебор до 60 упирается в лимиты публикатора (600 запросов/IP).
+        miss = 0
         for i in range(args.max_index + 1):
             name = "%s%03d.json" % (series, i)
             url = base + name
             if not http_head_ok(url):
+                miss += 1
+                if miss >= 2:
+                    print("  %s: дальше нет (с %d)" % (series, i))
+                    break
                 continue
+            miss = 0
             try:
                 raw = http_get(url, timeout=120)
             except Exception as e:
