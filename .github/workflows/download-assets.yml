@@ -200,6 +200,9 @@ jobs:
               mkdir -p "$dst"
               find "$src" -type f -exec cp {} "$dst/" \;
             done
+            # Блоки анимаций для сайта: previews/index.json + .spine.
+            # Сайт рисует карточку на каждую пару и качает её поштучно.
+            python3 .codespace/pg-extractor/make_previews_index.py "$dir" || true
             echo "=== $SYM: Spine-проектов $(find "$dir/spine" "$dir/spine_projects" -name '*.json' 2>/dev/null | wc -l), атласов $(find "$dir/spine" "$dir/spine_projects" -name '*.atlas' 2>/dev/null | wc -l), текстур $(find "$dir/textures" -type f 2>/dev/null | wc -l)"
           done
 
