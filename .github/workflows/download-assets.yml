@@ -98,8 +98,9 @@ jobs:
           ATTEMPTS: ${{ inputs.attempts || '3' }}
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
           MIN_FILES: ${{ inputs.min_files || '10' }}
-          # бесплатный воркер-публикатор из репозитория; переопределяется input'ом
-          FETCH_PROXY: ${{ inputs.fetch_proxy || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
+          # публикатор выключен по умолчанию: на проверенной игре он давал 0 файлов
+          # (страница не отдаётся через relay). Включается input'ом fetch_proxy.
+          FETCH_PROXY: ${{ inputs.fetch_proxy || '' }}
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
