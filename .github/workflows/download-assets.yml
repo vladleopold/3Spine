@@ -109,7 +109,6 @@ jobs:
           FETCH_RELAY: ${{ inputs.fetch_relay || 'https://spine-broker.leopolds2010.workers.dev/proxy?url={url}' }}
           # Токен публикатора: лимит запросов считается по нему, а не по IP
           FETCH_RELAY_TOKEN: ${{ secrets.SPINE_PROXY_TOKEN }}
-          FETCH_DEBUG: '1'
           SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
           FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
