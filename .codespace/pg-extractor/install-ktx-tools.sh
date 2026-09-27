@@ -61,9 +61,17 @@ if [ "${KTX_BUILD_FROM_SOURCE:-0}" = "1" ] && ! have basisu; then
     tmp=$(mktemp -d)
     if git clone --depth 1 -q https://github.com/BinomialLLC/basis_universal.git "$tmp/basis"; then
       log "клон ok, конфигурирую cmake"
-      ( cd "$tmp/basis" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release 2>&1 | tail -n 15 )
-      ( cd "$tmp/basis" && cmake --build build --target basisu -j "$(nproc 2>/dev/null || echo 2)" 2>&1 | tail -n 25 )
-      bin=$(find "$tmp/basis/build" -type f -name 'basisu' ! -name '*.txt' 2>/dev/null | head -1)
+      # Один поток и без SSE/примеров: на 2-ядерном раннере тяжёлая сборка
+      # C++ с -j 2 упирается в память и падает где-то на середине.
+      ( cd "$tmp/basis" && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          -DBASISU_SSE=OFF -DBASISU_OPENCL=OFF -DBASISU_EXAMPLES=OFF \
+          -DBASISU_TESTS=OFF 2>&1 | tail -n 12 )
+      ( cd "$tmp/basis" && cmake --build build --target basisu -j 1 2>&1 | tail -n 30 )
+      bin=$(find "$tmp/basis/build" -type f -name 'basisu' -perm -u+x ! -name '*.txt' 2>/dev/null | head -1)
+      if [ -z "$bin" ]; then
+        log "бинарь не найден, ищем собранные объекты:"
+        find "$tmp/basis/build" -type f -name 'basisu*' 2>/dev/null | head -n 5
+      fi
       if [ -n "$bin" ]; then
         sudo install -m 0755 "$bin" /usr/local/bin/basisu 2>/dev/null || true
         have basisu && { log "собрал basisu из исходников"; rm -rf "$tmp"; exit 0; }
