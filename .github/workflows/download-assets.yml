@@ -50,6 +50,11 @@ on:
         required: false
         default: '480'
         type: string
+      min_files:
+        description: 'Минимум файлов, иначе считаем что игра не загрузилась'
+        required: false
+        default: '10'
+        type: string
 
 jobs:
   tests:
@@ -113,8 +118,16 @@ jobs:
             mkdir -p "$dir"
             [ -d "$dir.keep" ] && mv "$dir.keep"/* "$dir"/ 2>/dev/null || true
             rm -rf "$dir.keep"
-            echo "$url -> $dir ($(find "$dir" -type f | wc -l) файлов)"
+            got=$(find "$dir" -type f | wc -l)
+            echo "$url -> $dir ($got файлов)"
             echo "$url" > "$dir/url.txt"
+            if [ "$got" -lt "$MIN_FILES" ]; then
+              echo "::warning::$url — AnyDownload взял $got файлов, пробуем свой захват с прокси"
+              rm -rf "$dir"; mkdir -p "$dir"
+              OUTPUT_DIR="$dir" URL="$url" PROXY="$SPINE_PROXY" WAIT_MS="$FB_WAIT_MS" HEADLESS=true \
+                node scripts/download-resources.mjs || true
+              echo "фолбэк: $url -> $(find "$dir" -type f | wc -l) файлов"
+            fi
           done
 
       - name: Восстановить имена файлов (hash_to_name)
@@ -128,6 +141,7 @@ jobs:
           done
 
       - name: Вернуть .skel бинарникам, лежащим под .json
+        if: always()
         continue-on-error: true
         run: |
           for d in artifacts/*/; do
@@ -218,11 +232,15 @@ jobs:
       - run: npm ci
 
       - name: Скачать через AnyDownload (render)
+        id: anydownload
         env:
           URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
           WAIT_MS: ${{ inputs.spa_wait || '8000' }}
           ATTEMPTS: ${{ inputs.attempts || '3' }}
           TRY_TIMEOUT: ${{ inputs.try_timeout || '480' }}
+          MIN_FILES: ${{ inputs.min_files || '10' }}
+          SPINE_PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+          FB_WAIT_MS: ${{ inputs.wait_ms || '35000' }}
         run: |
           npm install -g anydownload@2.3.9
           rm -rf artifacts/anydownload artifacts/anydownload.keep
@@ -252,7 +270,23 @@ jobs:
           mkdir -p artifacts/anydownload
           if [ -d artifacts/anydownload.keep ]; then mv artifacts/anydownload.keep/* artifacts/anydownload/ 2>/dev/null || true; fi
           rm -rf artifacts/anydownload.keep artifacts/try-* 2>/dev/null || true
-          echo "файлов AnyDownload: $(find artifacts/anydownload -type f | wc -l)"
+          GOT=$(find artifacts/anydownload -type f | wc -l)
+          echo "файлов AnyDownload: $GOT"
+          if [ "$GOT" -lt "$MIN_FILES" ]; then
+            echo "::error::AnyDownload сохранил всего $GOT файлов — игра не загрузилась (ссылка/сессия/гео?)"
+            exit 1
+          fi
+
+      - name: "Фолбэк: свой захват с прокси"
+        if: failure() && steps.anydownload.outcome == 'failure'
+        continue-on-error: true
+        env:
+          URL: ${{ inputs.full == 'true' && inputs.urls || matrix.url }}
+          OUTPUT_DIR: ./artifacts/anydownload
+          PROXY: ${{ secrets.SPINE_PROXY_SERVER }}
+          WAIT_MS: ${{ inputs.wait_ms || '35000' }}
+          HEADLESS: 'true'
+        run: node scripts/download-resources.mjs
 
       - name: Восстановить имена файлов (hash_to_name)
         continue-on-error: true
@@ -262,13 +296,17 @@ jobs:
           python3 .codespace/hash_to_name/restore_names_cli.py artifacts/anydownload
 
       - name: Вернуть .skel бинарникам, лежащим под .json
+        if: always()
         continue-on-error: true
         run: python3 .codespace/fix_skeleton_ext.py artifacts/anydownload
 
       - name: Собрать spine-паки
+        if: always()
+        continue-on-error: true
         run: node scripts/spine-pack.mjs artifacts/anydownload artifacts/spine
 
       - name: Распаковать спрайты из атласов
+        if: always()
         continue-on-error: true
         run: |
           python3 -m pip install --quiet Pillow
