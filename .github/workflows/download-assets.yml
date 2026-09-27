@@ -161,6 +161,35 @@ jobs:
             fi
           done
 
+      - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            # UHT-ресурсы лежат рядом с картинками; если их нет — игра не PG
+            N=$(find "$d" -maxdepth 2 -type f \( -name 'main_resources*.json' \
+                -o -name 'other_resources*.json' -o -name 'game*.json' \
+                -o -name 'GUI*.json' -o -name 'resources*.json' \) | wc -l)
+            if [ "$N" -eq 0 ]; then
+              echo "=== $d: UHT-ресурсов нет, пропускаю"
+              continue
+            fi
+            echo "=== $d: UHT-ресурсов $N, запускаю экстрактор"
+            python3 .codespace/pg-extractor/extract_uht_spine.py "$d" \
+              -o "$d/pg_extracted" --fetch-cdn || true
+            P=$(find "$d/pg_extracted/spine_projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+            echo "$d: Spine-пар из UHT: $P"
+            # готовые .json + .atlas + .png кладём рядом, чтобы spine-pack их собрал
+            if [ "$P" -gt 0 ]; then
+              mkdir -p "$d/pg_spine"
+              find "$d/pg_extracted/spine_projects" -mindepth 2 -maxdepth 2 -type f \
+                \( -name '*.json' -o -name '*.atlas' -o -name '*.png' \) \
+                -exec cp {} "$d/pg_spine/" \;
+              echo "$d: в pg_spine $(find "$d/pg_spine" -type f | wc -l) файлов"
+            fi
+          done
+
       - name: Восстановить имена файлов (hash_to_name)
         continue-on-error: true
         run: |
@@ -345,6 +374,35 @@ jobs:
           WAIT_MS: ${{ inputs.wait_ms || '35000' }}
           HEADLESS: 'true'
         run: node scripts/download-resources.mjs
+
+      - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          for d in artifacts/*/; do
+            [ -f "$d/url.txt" ] || continue
+            # UHT-ресурсы лежат рядом с картинками; если их нет — игра не PG
+            N=$(find "$d" -maxdepth 2 -type f \( -name 'main_resources*.json' \
+                -o -name 'other_resources*.json' -o -name 'game*.json' \
+                -o -name 'GUI*.json' -o -name 'resources*.json' \) | wc -l)
+            if [ "$N" -eq 0 ]; then
+              echo "=== $d: UHT-ресурсов нет, пропускаю"
+              continue
+            fi
+            echo "=== $d: UHT-ресурсов $N, запускаю экстрактор"
+            python3 .codespace/pg-extractor/extract_uht_spine.py "$d" \
+              -o "$d/pg_extracted" --fetch-cdn || true
+            P=$(find "$d/pg_extracted/spine_projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l)
+            echo "$d: Spine-пар из UHT: $P"
+            # готовые .json + .atlas + .png кладём рядом, чтобы spine-pack их собрал
+            if [ "$P" -gt 0 ]; then
+              mkdir -p "$d/pg_spine"
+              find "$d/pg_extracted/spine_projects" -mindepth 2 -maxdepth 2 -type f \
+                \( -name '*.json' -o -name '*.atlas' -o -name '*.png' \) \
+                -exec cp {} "$d/pg_spine/" \;
+              echo "$d: в pg_spine $(find "$d/pg_spine" -type f | wc -l) файлов"
+            fi
+          done
 
       - name: Восстановить имена файлов (hash_to_name)
         continue-on-error: true

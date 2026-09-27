@@ -24,6 +24,9 @@ from collections import Counter
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0 Safari/537.36"
 RESOURCE_SERIES = ("main_resources", "other_resources", "resources", "common")
 GAME_SUBDIR = "desktop/game/"
+# Casino-CDN (например *.wxxrkjglyf.net) режет IP раннеров с 403,
+# официальный хост PragmaticPlay отдаёт те же файлы без блокировки.
+MIRROR_HOST = "demogamesfree.pragmaticplay.net"
 
 # Пауза между запросами: origins не любит частые запросы подряд.
 DELAY = float(os.environ.get("FETCH_DELAY") or "1.2")
@@ -126,46 +129,8 @@ def save_inline_textures(raw: bytes, out_dir: str, name: str, manifest: list, st
             manifest.append({"source": name, "id": rid, "type": rtype, "file": "json/" + fname})
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("url")
-    ap.add_argument("out")
-    ap.add_argument("--max-index", type=int, default=60)
-    args = ap.parse_args()
-
-    os.makedirs(args.out, exist_ok=True)
-    stats = Counter()
-    manifest: list = []
-
-    # 1) пробуем лобби — там лежит gameConfig с datapath
-    html = ""
-    try:
-        print("Загружаю лобби: %s" % args.url)
-        html = http_get(args.url, timeout=90).decode("utf-8", errors="ignore")
-        with open(os.path.join(args.out, "lobby.html"), "w", encoding="utf-8") as fh:
-            fh.write(html)
-    except Exception as e:
-        # лобби может отдавать 403 по IP раннера; datapath тогда строим из symbol
-        print("лобби недоступен (%s) — строим datapath из symbol" % e)
-
-    cfg = extract_game_config(html) if html else {}
-    datapath = (cfg.get("datapath") or "").rstrip("/")
-
-    if not datapath:
-        qs = parse_qs(urlparse(args.url).query)
-        symbol = (qs.get("symbol") or [""])[0]
-        if not symbol:
-            print("не нашли ни datapath, ни symbol — захват невозможен")
-            return 2
-        p = urlparse(args.url)
-        datapath = "%s://%s/gs2c/common/v3/games-html5/games/vs/%s" % (p.scheme, p.netloc, symbol)
-        print("datapath собран из symbol=%s: %s" % (symbol, datapath))
-    else:
-        print("datapath: %s" % datapath)
-    if cfg.get("mgckey"):
-        print("в конфиге есть mgckey (сессия), для статики он не нужен")
-
-    base = datapath + "/" + GAME_SUBDIR
+def collect_series(base, args, manifest, stats):
+    """Скачивает все серии ресурсов (main_resources, other_resources, ...)."""
     found = []
     for series in RESOURCE_SERIES:
         # Индексы идут подряд, поэтому на двух пропусках подряд серию бросаем:
@@ -193,6 +158,65 @@ def main() -> int:
             save_inline_textures(raw, args.out, name, manifest, stats)
             print("  %s: %d КБ, картинок +%d" % (name, len(raw) // 1024, stats["images"] - before))
             found.append(name)
+    return found
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("url")
+    ap.add_argument("out")
+    ap.add_argument("--max-index", type=int, default=60)
+    args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    stats = Counter()
+    manifest: list = []
+
+    # 1) пробуем лобби — там лежит gameConfig с datapath
+    html = ""
+    try:
+        print("Загружаю лобби: %s" % args.url)
+        html = http_get(args.url, timeout=90).decode("utf-8", errors="ignore")
+        with open(os.path.join(args.out, "lobby.html"), "w", encoding="utf-8") as fh:
+            fh.write(html)
+    except Exception as e:
+        # лобби может отдавать 403 по IP раннера; datapath тогда строим из symbol
+        print("лобби недоступен (%s) — строим datapath из symbol" % e)
+
+    cfg = extract_game_config(html) if html else {}
+    datapath = (cfg.get("datapath") or "").rstrip("/")
+
+    # html5Game.do даёт symbol, openGame.do — gameSymbol
+    qs = parse_qs(urlparse(args.url).query)
+    symbol = (qs.get("symbol") or qs.get("gameSymbol") or [""])[0]
+    if not datapath:
+        if not symbol:
+            print("не нашли ни datapath, ни symbol — захват невозможен")
+            return 2
+        p = urlparse(args.url)
+        datapath = "%s://%s/gs2c/common/v3/games-html5/games/vs/%s" % (p.scheme, p.netloc, symbol)
+        print("datapath собран из symbol=%s: %s" % (symbol, datapath))
+    else:
+        print("datapath: %s" % datapath)
+    if cfg.get("mgckey"):
+        print("в конфиге есть mgckey (сессия), для статики он не нужен")
+
+    bases = [datapath + "/" + GAME_SUBDIR]
+    if symbol and MIRROR_HOST not in urlparse(args.url).netloc:
+        mirror = "https://%s/gs2c/common/v3/games-html5/games/vs/%s/%s" % (MIRROR_HOST, symbol, GAME_SUBDIR)
+        bases.append(mirror)
+        print("при 403 переключимся на зеркало: %s" % MIRROR_HOST)
+
+    found = []
+    for bi, base in enumerate(bases):
+        found = collect_series(base, args, manifest, stats)
+        if found:
+            print("файлы взяты с: %s" % base)
+            break
+        if bi + 1 < len(bases):
+            print("с %s ничего не пришло — пробуем зеркало" % base)
+    if not found:
+        print("не скачалось ни одного файла ресурсов")
 
     # рядом могут лежать скелеты/атласы отдельными файлами
     for extra in ("game.js", "index.html", "config.json", "settings.json", "version.json"):
