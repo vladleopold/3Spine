@@ -17,6 +17,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qs, urlparse
 from collections import Counter
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0 Safari/537.36"
@@ -118,16 +119,31 @@ def main() -> int:
     stats = Counter()
     manifest: list = []
 
-    print("Загружаю лобби: %s" % args.url)
-    html = http_get(args.url, timeout=90).decode("utf-8", errors="ignore")
-    with open(os.path.join(args.out, "lobby.html"), "w", encoding="utf-8") as fh:
-        fh.write(html)
-    cfg = extract_game_config(html)
+    # 1) пробуем лобби — там лежит gameConfig с datapath
+    html = ""
+    try:
+        print("Загружаю лобби: %s" % args.url)
+        html = http_get(args.url, timeout=90).decode("utf-8", errors="ignore")
+        with open(os.path.join(args.out, "lobby.html"), "w", encoding="utf-8") as fh:
+            fh.write(html)
+    except Exception as e:
+        # лобби может отдавать 403 по IP раннера; datapath тогда строим из symbol
+        print("лобби недоступен (%s) — строим datapath из symbol" % e)
+
+    cfg = extract_game_config(html) if html else {}
     datapath = (cfg.get("datapath") or "").rstrip("/")
+
     if not datapath:
-        print("в лобби не найден gameConfig.datapath — это не html5Game.do-игра")
-        return 2
-    print("datapath: %s" % datapath)
+        qs = parse_qs(urlparse(args.url).query)
+        symbol = (qs.get("symbol") or [""])[0]
+        if not symbol:
+            print("не нашли ни datapath, ни symbol — захват невозможен")
+            return 2
+        p = urlparse(args.url)
+        datapath = "%s://%s/gs2c/common/v3/games-html5/games/vs/%s" % (p.scheme, p.netloc, symbol)
+        print("datapath собран из symbol=%s: %s" % (symbol, datapath))
+    else:
+        print("datapath: %s" % datapath)
     if cfg.get("mgckey"):
         print("в конфиге есть mgckey (сессия), для статики он не нужен")
 
