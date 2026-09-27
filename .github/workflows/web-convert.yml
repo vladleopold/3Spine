@@ -42,6 +42,30 @@ jobs:
             echo "ссылки нет — берём input.zip, Node-захват пропускаем"
           fi
 
+      - name: Setup Node (URL-режим)
+        if: steps.mode.outputs.mode == 'url'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node deps + Playwright Chromium (URL-режим)
+        if: steps.mode.outputs.mode == 'url'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # install не должен утащить весь job: 7 минут потолок на оба шага
+          timeout -k 10 420 bash -c 'npm ci --no-audit --no-fund && npx playwright install chromium --with-deps' \
+            > npm-install-log.txt 2>&1
+          RC=$?
+          tail -n 40 npm-install-log.txt
+          if [ "$RC" = "0" ]; then
+            echo "node_modules и Chromium готовы"
+          else
+            echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
+          fi
+          exit 0
+
       - name: Fetch game assets by URL (если пришла ссылка)
         run: |
           set -euo pipefail
@@ -81,30 +105,6 @@ jobs:
       # ── Node-захват (URL-режим) ────────────────────────────────────────────
       # Python-путь выше не трогаем: его бюджеты (55с/75с) — предел здоровья.
       # Это запасной headless-сейвер, он только дополняет выборку и отчёт.
-      - name: Setup Node (URL-режим)
-        if: steps.mode.outputs.mode == 'url'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Node deps + Playwright Chromium (URL-режим)
-        if: steps.mode.outputs.mode == 'url'
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          # install не должен утащить весь job: 7 минут потолок на оба шага
-          timeout -k 10 420 bash -c 'npm ci --no-audit --no-fund && npx playwright install chromium --with-deps' \
-            > npm-install-log.txt 2>&1
-          RC=$?
-          tail -n 40 npm-install-log.txt
-          if [ "$RC" = "0" ]; then
-            echo "node_modules и Chromium готовы"
-          else
-            echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
-          fi
-          exit 0
-
       - name: Headless saver → ZIP + saver-report.json (URL-режим)
         if: steps.mode.outputs.mode == 'url'
         continue-on-error: true
