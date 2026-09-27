@@ -103,33 +103,40 @@ def transcode_ktx(path: Path) -> Path | None:
     out = path.with_suffix(".png")
     if out.exists() and out.stat().st_size > 32:
         return out
-    cmds = [
-        ["ktx2ktx2", "--decode", str(path)],                       # KTX-Software
-        ["ktx", "--decode", str(path)],                            # альтернативное имя
-        ["convert", str(path), str(out)],                          # ImageMagick
-        ["basisu", "-ktx", str(path), "-png_file", str(out)],      # Basis Universal
-    ]
-    for cmd in cmds:
+    # 1) готовые transcoder'ы с явным выходным файлом
+    for cmd in (
+        ["ktx2ktx2", "--decode", str(path)],                  # KTX-Software
+        ["ktx", "--decode", str(path)],
+        ["convert", str(path), str(out)],                     # ImageMagick
+        ["basisu", "-ktx", str(path), "-file_out", str(out)], # Basis Universal
+    ):
+        exe = shutil.which(cmd[0])
+        if not exe:
+            continue
         try:
-            exe = shutil.which(cmd[0])
-            if not exe:
-                continue
-            if cmd[0] == "convert":
-                subprocess.run([exe, str(path), str(out)], check=True,
-                               capture_output=True, timeout=120)
-            else:
-                subprocess.run([exe] + cmd[1:], check=True, capture_output=True, timeout=120)
-                made = path.with_name(path.stem + ".png")
-                if not made.exists():
-                    continue
-                if made != out:
-                    out.write_bytes(made.read_bytes())
-                    made.unlink()
-            if out.exists() and out.stat().st_size > 32:
-                print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
-                return out
+            subprocess.run([exe] + cmd[1:], check=True, capture_output=True, timeout=180)
         except Exception:
             continue
+        if out.exists() and out.stat().st_size > 32:
+            print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
+            return out
+
+    # 2) basisu без указания выхода: он кладёт .png рядом с исходником
+    exe = shutil.which("basisu")
+    if exe:
+        try:
+            subprocess.run([exe, "-ktx", str(path), "-y_flip"], check=True,
+                           capture_output=True, timeout=180, cwd=path.parent)
+        except Exception:
+            pass
+        for cand in (path.with_suffix(".png"), out):
+            if cand.exists() and cand.stat().st_size > 32:
+                if cand != out:
+                    out.write_bytes(cand.read_bytes())
+                    if cand != path.with_suffix(".png"):
+                        cand.unlink()
+                print(f"KTX→PNG: {path.name} → {out.name} ({out.stat().st_size} bytes)")
+                return out
     return None
 
 

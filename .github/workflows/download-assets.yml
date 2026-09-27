@@ -168,6 +168,8 @@ jobs:
         env:
           URLS: ${{ inputs.urls }}
           MAIN_MAX: ${{ inputs.pg_main_max || '50' }}
+          # 1 = собирать basisu из исходников, чтобы .ktx превращались в .png
+          KTX_BUILD_FROM_SOURCE: ${{ inputs.ktx_build || '1' }}
         run: |
           set -uo pipefail
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
