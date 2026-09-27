@@ -15,7 +15,7 @@
 # =============================================================================
 set -euo pipefail
 
-SYMBOL="vs20olympgate"
+SYMBOL="${SYMBOL:-vs20olympgate}"     # переопределяется из CI для любой игры
 BASE="https://demogamesfree.pragmaticplay.net"
 GAME_PATH="/gs2c/common/v3/games-html5/games/vs/${SYMBOL}/desktop"
 OUT_DIR="${OUT_DIR:-./olympus-assets}"

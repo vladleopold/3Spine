@@ -170,7 +170,7 @@ jobs:
           MAIN_MAX: ${{ inputs.pg_main_max || '50' }}
         run: |
           set -uo pipefail
-          echo "$URLS:" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
+          echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             SYM=$(printf '%s' "$url" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
             case "$SYM" in
               vs*) ;;
@@ -184,13 +184,17 @@ jobs:
             OUT_DIR="$dir/pg_uht" MAIN_MAX="$MAIN_MAX" \
               .codespace/pg-extractor/find-uht-assets.sh "$SYM" || true
             OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-textures.sh "$SYM" || true
-            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh "$SYM" || true
-            for sub in spine textures; do
-              [ -d "$dir/pg_uht/extracted/$sub" ] || continue
-              mkdir -p "$dir/pg_$sub"
-              find "$dir/pg_uht/extracted/$sub" -type f -exec cp {} "$dir/pg_$sub/" \;
+            SYMBOL="$SYM" OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh --scan-only || true
+            # spine_projects (find-spine.sh) и textures (find-textures.sh)
+            # лежат рядом с extracted/, поэтому забираем всё, что нашли
+            for sub in extracted/spine extracted/spine_projects textures extracted/textures; do
+              src="$dir/pg_uht/$sub"
+              [ -d "$src" ] || continue
+              dst="$dir/$(basename "$sub")"
+              mkdir -p "$dst"
+              find "$src" -type f -exec cp {} "$dst/" \;
             done
-            echo "=== $SYM: Spine-проектов $(find "$dir/pg_spine" -name '*.json' 2>/dev/null | wc -l), текстур $(find "$dir/pg_textures" -type f 2>/dev/null | wc -l)"
+            echo "=== $SYM: Spine-проектов $(find "$dir/spine" "$dir/spine_projects" -name '*.json' 2>/dev/null | wc -l), атласов $(find "$dir/spine" "$dir/spine_projects" -name '*.atlas' 2>/dev/null | wc -l), текстур $(find "$dir/textures" -type f 2>/dev/null | wc -l)"
           done
 
       - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
@@ -430,13 +434,17 @@ jobs:
             OUT_DIR="$dir/pg_uht" MAIN_MAX="$MAIN_MAX" \
               .codespace/pg-extractor/find-uht-assets.sh "$SYM" || true
             OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-textures.sh "$SYM" || true
-            OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh "$SYM" || true
-            for sub in spine textures; do
-              [ -d "$dir/pg_uht/extracted/$sub" ] || continue
-              mkdir -p "$dir/pg_$sub"
-              find "$dir/pg_uht/extracted/$sub" -type f -exec cp {} "$dir/pg_$sub/" \;
+            SYMBOL="$SYM" OUT_DIR="$dir/pg_uht" .codespace/pg-extractor/find-spine.sh --scan-only || true
+            # spine_projects (find-spine.sh) и textures (find-textures.sh)
+            # лежат рядом с extracted/, поэтому забираем всё, что нашли
+            for sub in extracted/spine extracted/spine_projects textures extracted/textures; do
+              src="$dir/pg_uht/$sub"
+              [ -d "$src" ] || continue
+              dst="$dir/$(basename "$sub")"
+              mkdir -p "$dst"
+              find "$src" -type f -exec cp {} "$dst/" \;
             done
-            echo "=== $SYM: Spine-проектов $(find "$dir/pg_spine" -name '*.json' 2>/dev/null | wc -l), текстур $(find "$dir/pg_textures" -type f 2>/dev/null | wc -l)"
+            echo "=== $SYM: Spine-проектов $(find "$dir/spine" "$dir/spine_projects" -name '*.json' 2>/dev/null | wc -l), атласов $(find "$dir/spine" "$dir/spine_projects" -name '*.atlas' 2>/dev/null | wc -l), текстур $(find "$dir/textures" -type f 2>/dev/null | wc -l)"
           done
 
       - name: Прагматик Play — собрать Spine-пары из UHT-ресурсов
