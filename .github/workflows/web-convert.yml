@@ -43,7 +43,6 @@ jobs:
           fi
 
       - name: Fetch game assets by URL (если пришла ссылка)
-        env:
         run: |
           set -euo pipefail
           if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
@@ -92,7 +91,6 @@ jobs:
       - name: Install Node deps + Playwright Chromium (URL-режим)
         if: steps.mode.outputs.mode == 'url'
         continue-on-error: true
-        env:
         run: |
           set -uo pipefail
           # install не должен утащить весь job: 7 минут потолок на оба шага
