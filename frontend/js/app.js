@@ -709,9 +709,9 @@
     live.textContent = text;
   }
 
-  function showPreviewsPanel(on) {
+  function showPreviewsPanel(on, keepPick) {
     const panel = $("previews-panel");
-    const pick = document.querySelector("section.pick");
+    const pick = keepPick ? null : document.querySelector("section.pick");
     if (panelTimer) { clearTimeout(panelTimer); panelTimer = 0; }
     if (on) {
       panel.classList.remove("hidden", "out");
@@ -1002,7 +1002,7 @@
     resultZip = null;
     $("previews-grid").innerHTML = "";
     revokePreviewUrls();
-    showPreviewsPanel(false);
+    showPreviewsPanel(false, true);
     els.log.textContent = "";
     let job = null;
     const t0 = Date.now();
@@ -1076,6 +1076,7 @@
       await logSummary();
       setStatus("готово", "ok");
       markRunDone();
+      els.download.href = BROKER + "/download?job=" + encodeURIComponent(job);
       els.download.classList.remove("hidden");
       let hasPreviews = false;
       try {
