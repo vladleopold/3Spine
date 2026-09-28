@@ -528,6 +528,11 @@ def main() -> None:
                     known_corrupt = {ln.strip().replace("\\", "/") for ln in f if ln.strip()}
 
             skels = []
+            # Диагностика: сколько .skel реально дошло до этого шага
+            _n_skel = sum(1 for _r, _d, _fs in os.walk(src) for _f in _fs if _f.lower().endswith(".skel"))
+            _n_jso = sum(1 for _r, _d, _fs in os.walk(src) for _f in _fs if _f.lower().endswith(".json"))
+            say(f"compile-block: в архиве .skel={_n_skel} .json={_n_jso}, "
+                f"corrupt-list={len(known_corrupt)}")
             for root, _, files in os.walk(src):
                 for f in sorted(files):
                     if not f.lower().endswith(".skel"):
