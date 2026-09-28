@@ -113,6 +113,21 @@ def atlas_pages(atlas: bytes) -> list[tuple[str, int, int]]:
     return pages
 
 
+def retarget_atlas(atlas: bytes, pages: list[str]) -> bytes:
+    """Имена страниц → '../../textures/<имя>': пара в spine/<имя>/, лист в textures/."""
+    text = atlas.decode("utf-8", "ignore")
+    out = []
+    lines = text.split("\n")
+    for i, ln in enumerate(lines):
+        st = ln.strip()
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if st in pages and nxt.startswith("size:"):
+            out.append("../../textures/" + st)
+            continue
+        out.append(ln)
+    return "\n".join(out).encode("utf-8")
+
+
 def spine_kind(data: bytes) -> str | None:
     """'json' | 'skel' | None — формат скелета Spine.
 
@@ -219,18 +234,20 @@ def build(url: str, out: Path) -> dict:
             d = spine_root / name
             d.mkdir(parents=True, exist_ok=True)
             (d / (name + "." + kind)).write_bytes(skel)
-            (d / (name + ".atlas")).write_bytes(atlas_bytes)
-            for pn, blob in page_blobs:          # имена страниц из атласа
-                (d / pn).write_bytes(blob)
+            # Общие листы кладём ОДИН раз в textures/, а в атласе правим строку
+            # страницы на относительный путь. Иначе 39 пар × 5 листов дают
+            # 167 МБ архива, и GitHub его не примет (лимит 100 МБ).
+            for pn, blob in page_blobs:
                 (textures / pn).write_bytes(blob)
+            (d / (name + ".atlas")).write_bytes(
+                retarget_atlas(atlas_bytes, [pn for pn, _ in page_blobs]))
             pairs.append({"name": name, "kind": kind,
                           "atlas_source": atlas_files,
                           "pages": [pn for pn, _ in page_blobs],
                           "skeleton_source": fpath, "bytes": len(page)})
             done.add(name)
-            print("  KEEP: spine/%s/%s.%s + .atlas + %s (%d КБ)"
-                  % (name, name, kind, ", ".join(pn for pn, _ in page_blobs),
-                     len(page) // 1024))
+            print("  KEEP: spine/%s/%s.%s + .atlas → textures/%s"
+                  % (name, name, kind, ", ".join(pn for pn, _ in page_blobs)))
 
     # Манифест в том же виде, что ждёт hash_to_name/manifest_resolver.py:
     # пары "files"/"path" из launcher.<hash>.js. Он построит карту

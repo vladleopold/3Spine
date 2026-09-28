@@ -947,9 +947,18 @@
         const old = withImg.textContent;
         withImg.textContent = "Собираем…";
         try {
-          const out = await collectBundle(it);
-          saveBlob(out, label + "-spine.zip");
-          log("… превью: комплект " + label + " собран", "dim");
+          // У Playson CI уже собирает готовый zip пары (скелет+атлас+лист) —
+          // берём его, иначе собираем комплект в браузере.
+          const ready = it.zip && resultZip ? resultZip.file(it.zip) : null;
+          if (ready) {
+            const blob = await ready.async("blob");
+            saveBlob(blob, label + ".zip");
+            log("… превью: готовая пара " + label + " скачана", "dim");
+          } else {
+            const out = await collectBundle(it);
+            saveBlob(out, label + "-spine.zip");
+            log("… превью: комплект " + label + " собран", "dim");
+          }
         } catch (e) {
           log("Превью: " + e.message, "err");
         } finally {

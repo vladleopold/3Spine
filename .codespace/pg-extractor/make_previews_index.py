@@ -55,12 +55,19 @@ def build(root: str) -> int:
             with open(rec[".atlas"], encoding="utf-8", errors="ignore") as f:
                 lines = [ln.strip() for ln in f.read().split("\n")]
             for i, ln in enumerate(lines[:-1]):
-                if ln and lines[i + 1].startswith("size:"):
-                    cand = os.path.join(os.path.dirname(rec[".atlas"]), ln)
-                    if os.path.isfile(cand):
-                        page = "previews/%s" % ln
-                        shutil.move(cand, os.path.join(root, page))
+                if not (ln and lines[i + 1].startswith("size:")):
+                    continue
+                cand = os.path.normpath(os.path.join(os.path.dirname(rec[".atlas"]), ln))
+                if not os.path.isfile(cand):
                     break
+                # Общий лист лежит в textures/ и используется многими парами —
+                # не переносим, а просто ссылаемся на него из карточки.
+                if os.path.dirname(cand) == os.path.join(root, "textures"):
+                    page = "textures/%s" % os.path.basename(cand)
+                else:
+                    page = "previews/%s" % os.path.basename(cand)
+                    shutil.copyfile(cand, os.path.join(root, page))
+                break
         if page is None:
             continue
         # .spine для поштучного скачивания: у JSON-скелетов — начало файла,
@@ -78,9 +85,37 @@ def build(root: str) -> int:
             "png": page,
             "spine": spine,
             "name": name, "skeleton": skel_ext,
-            "bytes": os.path.getsize(os.path.join(root, page)),
+            "bytes": os.path.getsize(os.path.normpath(os.path.join(root, page))),
             "kind": "atlas",
         })
+    # Поштучные архивы пар: сайт отдаёт один zip на клик, ему не нужно
+    # собирать пару в браузере (у Playson лист лежит в textures/, а не рядом).
+    import zipfile
+    pairs_dir = os.path.join(root, "pairs")
+    os.makedirs(pairs_dir, exist_ok=True)
+    for it in items:
+        rec = stems[it["name"]]
+        skel = rec.get(".skel") or rec.get(".json")
+        atlas = rec.get(".atlas")
+        if not (skel and atlas):
+            continue
+        zp = os.path.join(pairs_dir, it["name"] + ".zip")
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(skel, os.path.basename(skel))
+            z.write(atlas, os.path.basename(atlas))
+            with open(atlas, encoding="utf-8", errors="ignore") as f:
+                lines = [l.strip() for l in f.read().split("\n")]
+            for i, ln in enumerate(lines[:-1]):
+                if ln and lines[i + 1].startswith("size:"):
+                    # ../textures/x.png -> x.png внутри архива пары
+                    cand = os.path.join(root, "textures", ln.rsplit("/", 1)[-1])
+                    if not os.path.isfile(cand):
+                        cand = os.path.join(os.path.dirname(atlas), ln.rsplit("/", 1)[-1])
+                    if os.path.isfile(cand):
+                        z.write(cand, ln.rsplit("/", 1)[-1])
+                    break
+        it["zip"] = "pairs/%s.zip" % it["name"]
+
     with open(os.path.join(prev, "index.json"), "w", encoding="utf-8") as f:
         json.dump({"items": items}, f, ensure_ascii=False, indent=1)
     return len(items)

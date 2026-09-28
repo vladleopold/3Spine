@@ -143,8 +143,10 @@ jobs:
           # (unpack → convert → .spine → превью → публикация в history).
           rm -f input.zip
           mkdir -p pg_out
-          find "$OUT/spine" -mindepth 1 -maxdepth 1 -type d -exec cp -R {} pg_out/ \;
+          cp -R "$OUT/spine" pg_out/
+          cp -R "$OUT/textures" pg_out/ 2>/dev/null || true
           cp "$OUT/playson-manifest.json" pg_out/ 2>/dev/null || true
+          # карточки для сайта + готовый zip на каждую пару
           python3 .codespace/pg-extractor/make_previews_index.py "$PWD/pg_out" || true
           ( cd pg_out && zip -qr "$GITHUB_WORKSPACE/input.zip" . )
           echo "input.zip собран из Playson-пар: $(unzip -l input.zip | tail -1)"
@@ -263,6 +265,7 @@ jobs:
           python3 .codespace/prepare_input.py input.zip input.zip
 
       - name: Unpack block → /images (atlases → subfolders, параллельно)
+        if: ${{ env.PLAYSAON != '1' }}
         run: |
           set -euo pipefail
           python3 -m pip install --quiet Pillow
