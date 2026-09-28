@@ -142,6 +142,10 @@
       var x = sk.data.x, y = sk.data.y, w = sk.data.width, h = sk.data.height;
       return w + "x" + h + "@" + x + "," + y;
     })();
+    st.root = (function () {
+      var b = sk.data.bones && sk.data.bones[0];
+      return b ? Math.round(b.x) + "," + Math.round(b.y) : "?";
+    })();
     st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
     st.renderer = new ns.SkeletonRenderer(st.g2);
     return sk;
@@ -339,7 +343,23 @@
   }
 
   function debug() {
+    if (st.skeleton && !st.world) {
+      var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, n = 0;
+      st.skeleton.slots.forEach(function (sl) {
+        var at = sl.attachment; if (!at) return;
+        var a = Array.isArray(at.worldVertices) ? at.worldVertices : at.worldVerticesLength ? null : null;
+        if (sl.worldVertices) {
+          for (var i = 0; i < sl.worldVertices.length; i++) {
+            var vx = sl.worldVertices[i], vy = sl.worldVertices[i + 1];
+            if (vx < minx) minx = vx; if (vx > maxx) maxx = vx;
+            if (vy < miny) miny = vy; if (vy > maxy) maxy = vy; n++;
+          }
+        }
+      });
+      st.world = n ? [Math.round(minx), Math.round(miny), Math.round(maxx), Math.round(maxy)].join(",") : "нет вершин";
+    }
     return {
+      мира_слот: st.world,
       трек: st.state && st.state.getCurrent(0)
         ? st.state.getCurrent(0).animation.name
         : (st.anims && st.anims[0] ? st.anims[0].name : null),
@@ -353,7 +373,7 @@
       слотов: st.slots,
       прикреплено: st.attached,
       картинок: st.imgs,
-      границы: st.bounds
+      границы: st.bounds, корень: st.root, мира: st.world
     };
   }
 
