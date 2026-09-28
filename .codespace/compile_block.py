@@ -85,6 +85,40 @@ def run_all(fn, items, workers, label):
             run_all(fn, items[mid:], workers, label + " (2/2)")
 
 
+def _web_index(src: str, web_dir: str) -> None:
+    """Проставляет в previews/index.json путь к web-JSON, если он выгружен."""
+    idx_path = os.path.join(src, "previews", "index.json")
+    if not os.path.exists(idx_path):
+        return
+    try:
+        with open(idx_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"compile-block: previews/index.json не читается: {e}")
+        return
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return
+    added = 0
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name") or os.path.splitext(os.path.basename(str(it.get("spine", ""))))[0]
+        if not name:
+            continue
+        cand = os.path.join(web_dir, name + ".json")
+        if os.path.exists(cand):
+            it["web"] = "previews/web/" + name + ".json"
+            added += 1
+    if added:
+        try:
+            with open(idx_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            say(f"compile-block: web-JSON прописан в {added} карточек")
+        except Exception as e:                              # noqa: BLE001
+            print(f"compile-block: не записал web-JSON в index.json: {e}")
+
+
 def main() -> None:
     zin, zout = sys.argv[1], sys.argv[2]
     spine = os.environ.get("SPINE_EDITOR") or "Spine"
@@ -763,6 +797,58 @@ def main() -> None:
                         say(msg)
                 say(f"compile-block: итого скомпилировано .spine: {compiled} из {len(jobs)}, "
                     f"время {time.time() - started:.1f}s")
+
+            # ── ЭТАП 3: web-JSON 4.3 для нативного проигрывания в браузере ──────
+            # Опубликованные сборки рантайма Spine для 3.5-3.8 неполные, а 4.3
+            # не читает таймлайны 3.8. Поэтому для веба отдаём тот же проект,
+            # выгруженный редактором 4.3: рантайм 4.3 играет его нативно,
+            # а .spine и версия 3.8.99 в архиве остаются нетронутыми.
+            web_ver = os.environ.get("SPINE_WEB_VERSION", "4.3.13")
+            web_dir = os.path.join(src, "previews", "web")
+            if jobs and os.environ.get("SPINE_WEB_JSON", "1") == "1":
+                wjobs = []
+                used = set()
+                for (p, out_spine, ver, rel) in jobs:
+                    if ver and str(ver).split(".")[0] == "4":
+                        continue                      # 4.x рантайм и так подходит
+                    stem = os.path.splitext(os.path.basename(p))[0]
+                    if stem in used:
+                        stem = rel[:-5].replace("/", "_")
+                    used.add(stem)
+                    wjobs.append((p, ver, rel, stem))
+                if wjobs:
+                    workers3 = parallel_limit(len(wjobs))
+                    say(f"compile-block: ЭТАП 3 (web-JSON {web_ver}): "
+                        f"{len(wjobs)} файлов, параллельно {workers3}")
+                    if not editor_installed(web_ver) and web_ver not in retried_versions:
+                        # один прогрев: редактор 4.3 скачивается и кешируется
+                        retried_versions.add(web_ver)
+                        warm = wjobs[0]
+                        say(f"compile-block: загружаю редактор Spine {web_ver}")
+                        run(base_cmd() + ["-u", web_ver, "-i", warm[0],
+                                          "-o", os.path.join(web_dir, warm[3] + ".json"), "-e", "json"])
+                    if editor_broken(web_ver):
+                        say(f"compile-block: ЭТАП 3 пропущен: редактор Spine {web_ver} не запускается")
+                    else:
+                        os.makedirs(web_dir, exist_ok=True)
+
+                        def to_web_json(job):
+                            p, ver, rel, stem = job
+                            out = os.path.join(web_dir, stem + ".json")
+                            for attempt in range(2):
+                                rc = run(base_cmd() + ["-u", web_ver, "-i", p,
+                                                       "-o", out, "-e", "json"])
+                                if os.path.exists(out) and os.path.getsize(out) > 0:
+                                    return rel, True, out
+                                if attempt == 0:
+                                    time.sleep(1.5)
+                            return rel, False, out
+
+                        res3 = run_all(to_web_json, wjobs, workers3, "ЭТАП 3")
+                        ok3 = sum(1 for _r, ok, _o in res3 if ok)
+                        say(f"compile-block: ЭТАП 3 итог: {ok3}/{len(wjobs)} web-JSON, "
+                            f"время {time.time() - started:.1f}s")
+                        _web_index(src, web_dir)
 
             with open(os.path.join(src, "compile-log.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(loglines) + "\n")

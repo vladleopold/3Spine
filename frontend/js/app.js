@@ -835,11 +835,13 @@
   async function collectSpineAssets(item) {
     const idx = buildIndexes();
     const label = item.name || stemOf(item.spine);
+    // web-JSON — та же анимация, выгруженная редактором 4.3: её играет рантайм 4.3.
+    // Атлас и страницы берём у исходного скелета, web-JSON лежит в отдельной папке.
+    let skel = item.web && idx.byPath.has(item.web) ? item.web : null;
     const dirs = [dirOf(item.spine), "spine/" + label, ""].filter(
       (d, i, a) => a.indexOf(d) === i
     );
-    let skel = null;
-    for (const d of dirs) {
+    if (!skel) for (const d of dirs) {
       const p = (d ? d + "/" : "") + label + ".json";
       if (idx.byPath.has(p)) { skel = p; break; }
     }
@@ -849,7 +851,8 @@
       );
     }
     if (!skel) throw new Error("в архиве нет " + label + ".json");
-    const dir = dirOf(skel);
+    const srcDir = dirs.find((d) => idx.byPath.has((d ? d + "/" : "") + label + ".json")) || dirOf(item.spine);
+    const dir = srcDir || "";
     const atlases = Object.keys(idx.byPath).filter(
       (n) => dirOf(n) === dir && /\.(atlas|atlas\.txt)$/i.test(n)
     );
@@ -857,12 +860,13 @@
     if (!atlas) throw new Error("в архиве нет атласа");
     const pages = await atlasPagePaths(atlas, idx);
     if (!pages.length) throw new Error("в архиве нет листов атласа");
-    const [json, atlasText, pageBlob] = await Promise.all([
+    if (pages.length > 8) throw new Error("в атласе слишком много листов");
+    const [json, atlasText, pageBlobs] = await Promise.all([
       idx.byPath.get(skel).async("string"),
       idx.byPath.get(atlas).async("string"),
-      idx.byPath.get(pages[0]).async("blob"),
+      Promise.all(pages.map((n) => idx.byPath.get(n).async("blob"))),
     ]);
-    return { json, atlas: atlasText, page: pageBlob, version: window.SpineCardPlayer ? window.SpineCardPlayer.version(json) : "3.8" };
+    return { json, atlas: atlasText, pages: pageBlobs, version: window.SpineCardPlayer ? window.SpineCardPlayer.version(json) : "3.8" };
   }
 
   function saveBlob(blob, filename) {

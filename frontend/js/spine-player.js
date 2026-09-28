@@ -1,32 +1,32 @@
 /* Нативный проигрыватель Spine в карточках превью.
  *
  * Рантаймы лежат локально в frontend/vendor — сайт не ходит за ними в интернет.
- * Поддерживаются линии 3.5, 3.6, 3.7, 3.8, 4.0, 4.1, 4.2, 4.3: версия выбирается
- * из поля skeleton.spine в JSON скелета, рантайм грузится один раз и переиспользуется.
- * Одновременно живёт только один WebGL-контекст и один canvas: карточка под курсором
- * одна, а лимит браузеров на GL-контексты лучше не расходовать на все 39 карточек.
- * Если что-то не получилось — карточка молча остаётся со статичной картинкой.
+ * Версия скелета читается из skeleton.spine, под неё подбирается сборка.
+ * Основной путь — 2D-канвас: он не ест WebGL-контексты (их у браузера штук 16
+ * на всю страницу, а карточек бывает 39) и рисует в одном общем canvas.
+ * Если рантайм не справился или первый кадр пустой — карточка остаётся
+ * со статичным превью, хуже не становится.
  */
 (function () {
   "use strict";
 
   var RUNTIMES = {
-    "3.5": "vendor/spine-webgl-3.5.js",
-    "3.6": "vendor/spine-webgl-3.6.js",
-    "3.7": "vendor/spine-webgl-3.7.js",
-    "3.8": "vendor/spine-webgl-3.8.js",
-    "4.0": "vendor/spine-webgl-4.0.31.js",
-    "4.1": "vendor/spine-webgl-4.1.55.js",
-    "4.2": "vendor/spine-webgl-4.2.120.js",
-    "4.3": "vendor/spine-webgl-4.3.13.js"
+    "3.5": ["vendor/spine-canvas-3.5.js", "vendor/spine-webgl-3.5.js"],
+    "3.6": ["vendor/spine-canvas-3.6.js", "vendor/spine-webgl-3.6.js"],
+    "3.7": ["vendor/spine-canvas-3.7.js", "vendor/spine-webgl-3.7.js"],
+    "3.8": ["vendor/spine-canvas-3.8.js", "vendor/spine-webgl-3.8.js"],
+    "4.0": ["vendor/spine-canvas-4.0.31.js"],
+    "4.1": ["vendor/spine-canvas-4.1.55.js"],
+    "4.2": ["vendor/spine-canvas-4.2.120.js"],
+    "4.3": ["vendor/spine-canvas-4.3.13.js"]
   };
   var ORDER = ["3.5", "3.6", "3.7", "3.8", "4.0", "4.1", "4.2", "4.3"];
 
-  var nsCache = {};      // ключ рантайма -> его namespace spine
-  var loadQueue = {};    // ключ рантайма -> промис загрузки скрипта
+  var nsCache = {};      // ключ -> namespace spine
+  var loadQueue = {};    // ключ -> промис загрузки скрипта
 
-  // «3.8.99» -> «3.8»; если такой линии нет, берём ближайшую старшую в семействе,
-  // а если версия новее всех — самый свежий из имеющихся.
+  // «3.8.99» -> «3.8»; если такой линии нет, берём ближайшую старшую,
+  // а если версия новее всех — самую свежую из имеющихся.
   function pickRuntime(version) {
     var m = /^\s*(\d+)\.(\d+)/.exec(String(version || ""));
     if (!m) return "3.8";
@@ -47,123 +47,147 @@
     return 0;
   }
 
-  function loadRuntime(key) {
-    if (nsCache[key]) return Promise.resolve(nsCache[key]);
-    if (loadQueue[key]) return loadQueue[key];
-    loadQueue[key] = new Promise(function (resolve, reject) {
+  function loadRuntime(url) {
+    if (loadQueue[url]) return loadQueue[url];
+    loadQueue[url] = new Promise(function (resolve, reject) {
       var s = document.createElement("script");
-      s.src = RUNTIMES[key];
-      s.onload = function () {
-        var ns = window.spine;
-        if (!ns || !ns.webgl) { reject(new Error("рантайм " + key + " без webgl")); return; }
-        nsCache[key] = ns;
-        resolve(ns);
-      };
-      s.onerror = function () { reject(new Error("не скачался рантайм Spine " + key)); };
+      s.src = url;
+      s.onload = function () { resolve(window.spine); };
+      s.onerror = function () { reject(new Error("не скачался " + url)); };
       document.head.appendChild(s);
-    }).catch(function (e) { delete loadQueue[key]; throw e; });
-    return loadQueue[key];
+    });
+    loadQueue[url] = loadQueue[url].catch(function (e) { delete loadQueue[url]; throw e; });
+    return loadQueue[url];
   }
 
   var st = {
     host: null,     // .pv-shot, в котором сейчас играет анимация
     canvas: null,
-    gl: null,
+    g2: null,
     skeleton: null,
+    state: null,    // AnimationState
     renderer: null,
-    track: null,
-    state: null,     // AnimationState
     anims: null,
-    nsKey: "",      // какой рантайм сейчас задействован
-    image: null,    // HTMLImageElement с листом атласа
     raf: 0,
-    dirty: true
+    last: 0,
+    dt: 0.016,
+    cssW: 0,
+    cssH: 0,
+    checked: false  // первый кадр проверили — дальше не тратим время на чтение пикселей
   };
 
-  function dropCanvas() {
+  function drop() {
     if (st.raf) { cancelAnimationFrame(st.raf); st.raf = 0; }
     if (st.canvas && st.canvas.parentNode) st.canvas.parentNode.removeChild(st.canvas);
     st.canvas = null;
-    st.gl = null;
+    st.g2 = null;
     st.skeleton = null;
-    st.renderer = null;
-    st.track = null;
     st.state = null;
+    st.renderer = null;
+    st.checked = false;
   }
 
-  function makeCanvas() {
-    var c = document.createElement("canvas");
-    c.width = 512;
-    c.height = 512;
-    c.className = "pv-live";
-    var gl = c.getContext("webgl", { alpha: true, antialias: true, premultipliedAlpha: true, preserveDrawingBuffer: true }) ||
-             c.getContext("experimental-webgl");
-    if (!gl) return null;
-    st.canvas = c;
-    st.gl = gl;
-    return c;
+  // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
+  // поэтому рисуем с запасом под devicePixelRatio, иначе картинка мылится.
+  function sizeCanvas() {
+    var rect = st.host.getBoundingClientRect();
+    var w = Math.max(64, Math.round(rect.width) || 300);
+    var h = Math.max(64, Math.round(rect.height) || 150);
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    st.canvas.width = Math.round(w * dpr);
+    st.canvas.height = Math.round(h * dpr);
+    st.cssW = w;
+    st.cssH = h;
+    st.g2 = st.canvas.getContext("2d");
+    st.g2.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function loadImage(blob) {
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(blob);
       var img = new Image();
-      img.onload = function () { resolve({ img: img, url: url }); };
+      img.onload = function () { resolve(img); };
       img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("не читается лист атласа")); };
       img.src = url;
     });
   }
 
-  // Собираем скелет. У всех восьми сборок один и тот же современный API:
-  // рендерер принимает WebGL-контекст, а не canvas, и своего GLContext класса
-  // в сборке нет — чистим буфер сами через gl. В 3.x классы лежат в spine.webgl,
-  // в 4.x — прямо в spine, поэтому берём по наличию.
-  function build(ns, key, jsonText, atlasText, image) {
-    var w = ns.webgl || ns;
-    var data = JSON.parse(jsonText);
-    var gl = st.gl;
-    var TexClass = ns.GLTexture || w.GLTexture || ns.Texture;   // в 3.x GLTexture живёт в spine.webgl
-    var glTex = new TexClass(gl, image);
-    if (typeof glTex.load === "function") glTex.load();
-    else if (typeof glTex.upload === "function") glTex.upload();
-    // TextureAtlas ждёт функцию-загрузчик листа, а не сам Texture
-    var atlas = new ns.TextureAtlas(atlasText, function () { return glTex; });
-    // SkeletonJson во всех этих сборках принимает ровно один аргумент и ждёт
-    // загрузчик вложений; если дать ему атлас, разбор падает на первом регионе
+  // Канвас-API: TextureAtlas(atlasText) без загрузчика, текстуры вешаются
+  // на страницы через page.setTexture(), а вложения грузит AtlasAttachmentLoader.
+  function buildCanvas(ns, assets, images) {
+    if (!ns.SkeletonRenderer || !ns.CanvasTexture) throw new Error("в сборке нет канвас-рендерера");
+    var atlas = new ns.TextureAtlas(assets.atlas);
+    var pages = atlas.pages || [];
+    if (pages.length > images.length) throw new Error("в атласе " + pages.length + " листов, а есть " + images.length);
+    pages.forEach(function (page, i) { page.setTexture(new ns.CanvasTexture(images[i])); });
     var loader = new ns.AtlasAttachmentLoader(atlas);
-    var sd = new ns.SkeletonJson(loader).readSkeletonData(data);
-    var skeleton = new ns.Skeleton(sd);
-    st.skeleton = skeleton;
-    st.renderer = new w.SkeletonRenderer(gl);
-    st.v4 = key.charAt(0) === "4";
-    // в этих сборках у Skeleton нет setAnimation: анимации ведутся через AnimationState
-    st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
+    var sd = new ns.SkeletonJson(loader).readSkeletonData(JSON.parse(assets.json));
+    var sk = new ns.Skeleton(sd);
+    sk.setToSetupPose();
+    sk.setSkin(0);
+    sk.setSlotsToSetupPose();
+    st.skeleton = sk;
     st.anims = sd.animations || [];
-    return skeleton;
+    st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
+    st.renderer = new ns.SkeletonRenderer(st.g2);
+    return sk;
+  }
+
+  // Запасной путь для сборок 3.x, где канвас-рендерера нет: WebGL.
+  function buildWebgl(ns, assets, images) {
+    var w = ns.webgl || ns;
+    if (!w.SkeletonRenderer) throw new Error("в сборке нет webgl-рендерера");
+    var Tex = ns.GLTexture || w.GLTexture;
+    if (!Tex) throw new Error("в сборке нет GLTexture");
+    var Managed = ns.ManagedWebGLRenderingContext || w.ManagedWebGLRenderingContext;
+    var Scene = ns.SceneRenderer || w.SceneRenderer;
+    if (!Managed || !Scene) throw new Error("в сборке нет webgl-сцены");
+    var glc = new Managed(st.canvas);
+    var gl = glc.gl;
+    var tex = new Tex(gl, images[0]);
+    if (typeof tex.update === "function") tex.update();
+    else if (typeof tex.load === "function") tex.load();
+    var atlas = new ns.TextureAtlas(assets.atlas, function () { return tex; });
+    var sd = new ns.SkeletonJson(new ns.AtlasAttachmentLoader(atlas)).readSkeletonData(JSON.parse(assets.json));
+    var sk = new ns.Skeleton(sd);
+    sk.setToSetupPose();
+    sk.setSkin(0);
+    sk.setSlotsToSetupPose();
+    st.skeleton = sk;
+    st.anims = sd.animations || [];
+    st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
+    st.scene = new Scene(st.canvas, glc, true);
+    st.renderer = { draw: function (s) { st.scene.begin(); st.scene.drawSkeleton(s); st.scene.end(); } };
+    return sk;
   }
 
   function fit(skeleton) {
     var b = skeleton.data.bounds;
-    if (!b || b.width <= 0 || b.height <= 0) return;
-    var pad = 8;
-    var scale = Math.min((st.canvas.width - pad * 2) / b.width, (st.canvas.height - pad * 2) / b.height);
+    if (!b || !(b.width > 0) || !(b.height > 0)) return;
+    var pad = 10;
+    var w = st.cssW || st.canvas.width, h = st.cssH || st.canvas.height;
+    var scale = Math.min((w - pad * 2) / b.width, (h - pad * 2) / b.height);
     if (!isFinite(scale) || scale <= 0) return;
     skeleton.scaleX = scale;
     skeleton.scaleY = scale;
-    skeleton.x = (st.canvas.width - b.width * scale) / 2 - b.x * scale;
-    skeleton.y = (st.canvas.height - b.height * scale) / 2 - b.y * scale;
+    skeleton.x = (w - b.width * scale) / 2 - b.x * scale;
+    skeleton.y = (h - b.height * scale) / 2 - b.y * scale;
   }
 
-  function draw() {
-    var sk = st.skeleton;
-    if (!sk) return;
-    if (st.state) st.state.apply(sk);
-    sk.update(st.dt || 0.016);
-    st.dt = 0.016;
-    var gl = st.gl;
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    st.renderer.draw(sk);
+  // Пустой кадр — значит рантайм не тянет эти данные. Лучше статичное
+  // превью, чем пустая карточка под курсором.
+  function firstFrameEmpty() {
+    if (st.checked) return false;
+    st.checked = true;
+    try {
+      var d = st.g2.getImageData(0, 0, st.canvas.width, st.canvas.height).data;
+      for (var i = 3; i < d.length; i += 4 * 29) {
+        if (d[i] > 8) return false;
+      }
+      return true;
+    } catch (e) {
+      return false;                       // не смогли прочитать — не мешаем
+    }
   }
 
   function loop(now) {
@@ -171,40 +195,80 @@
     if (!st.host || !st.skeleton) return;
     st.dt = Math.min(0.05, st.last ? (now - st.last) / 1000 : 0.016);
     st.last = now;
-    draw();
+    // apply() только применяет позу; время двигает update()
+    if (st.state) { st.state.update(st.dt); st.state.apply(st.skeleton); }
+    st.skeleton.update(st.dt);
+    st.skeleton.updateWorldTransform(0);
+    st.g2.clearRect(0, 0, st.cssW || st.canvas.width, st.cssH || st.canvas.height);
+    st.renderer.draw(st.skeleton);
+    if (firstFrameEmpty()) { stop(); return; }
     st.raf = requestAnimationFrame(loop);
   }
 
-  // assets: { json: string, atlas: string, page: Blob }
-  function play(host, assets) {
+  // assets: { json, atlas, pages: [Blob, ...] }
+  function play(host, assetsPromise) {
     stop();
     st.host = host;
-    Promise.resolve(assets).then(function (a) {
-      if (!a || st.host !== host) return;      // курсор уже ушёл
-      var key = pickRuntime(readVersion(a.json));
-      return loadRuntime(key).then(function (ns) {
+    Promise.resolve(assetsPromise).then(function (assets) {
+      if (!assets || st.host !== host) return;
+      var key = pickRuntime(readVersion(assets.json));
+      return Promise.all((assets.pages || []).map(loadImage)).then(function (images) {
         if (st.host !== host) return;
-        if (st.nsKey !== key) { dropCanvas(); st.nsKey = key; }
-        if (!st.canvas && !makeCanvas()) throw new Error("нет WebGL");
-        return loadImage(a.page).then(function (r) {
-          if (st.host !== host) return;
-          st.image = r.img;
-          var sk = build(ns, key, a.json, a.atlas, r.img);
-          fit(sk);
-          sk.setToSetupPose();
-          var anims = st.anims && st.anims.length ? st.anims : sk.data.animations;
-          if (st.state && anims && anims.length) {
-            st.state.setAnimation(0, anims[0].name, true);
-          } else if (sk.setAnimation && anims && anims.length) {
-            st.track = sk.setAnimation(0, anims[0].name, true);   // старый API, если вдруг
+        if (!images.length) throw new Error("нет листов атласа");
+        // canvas должен быть в DOM с размерами: SceneRenderer/рендерер
+        // берут размеры из clientWidth, иначе вьюпорт нулевой
+        var canvas = document.createElement("canvas");
+        canvas.className = "pv-live";
+        host.appendChild(canvas);
+        st.canvas = canvas;
+        sizeCanvas();
+        // 3.x-сборки у Esoteric неполные (в canvas нет рендерера, в webgl
+        // нечем рисовать), а 4.0-4.2 таймлайны 3.8 читают. Поэтому для 3.x
+        // пробуем свою сборку, затем 4.0 -> 4.1 -> 4.2. 4.3 не подходит:
+        // он таймлайны 3.8 не понимает.
+        var list = (RUNTIMES[key] || []).slice();
+        if (key.charAt(0) === "3") {
+          list = list.concat(RUNTIMES["4.0"], RUNTIMES["4.1"], RUNTIMES["4.2"]);
+        }
+        var lastErr = null;
+        return list.reduce(function (chain, url) {
+          return chain.then(function (done) {
+            if (done) return true;
+            return loadRuntime(url).then(function (ns) {
+              if (!ns || !ns.Skeleton) throw new Error("пустая сборка");
+              try {
+                st.scene = null;
+                var sk = (ns.SkeletonRenderer && ns.CanvasTexture)
+                  ? buildCanvas(ns, assets, images)
+                  : buildWebgl(ns, assets, images);
+                fit(sk);
+                if (st.state && st.anims.length) {
+                  st.state.setAnimation(0, st.anims[0].name, true);
+                }
+                for (var f = 0; f < 20; f++) {                 // промотка до видимого кадра
+                  if (st.state) { st.state.update(0.016); st.state.apply(sk); }
+                  sk.update(0.016);
+                  sk.updateWorldTransform(0);
+                }
+                st.last = 0;
+                st.raf = requestAnimationFrame(loop);
+                return true;
+              } catch (e) {
+                lastErr = e;
+                return false;
+              }
+            });
+          });
+        }, Promise.resolve(false)).then(function (ok) {
+          if (!ok && st.host === host) {
+            if (window.console && console.warn) {
+              console.warn("spine-player:", key, (lastErr && lastErr.message) || "не удалось");
+            }
+            stop();
           }
-          host.appendChild(st.canvas);
-          st.last = 0;
-          st.raf = requestAnimationFrame(loop);
         });
       });
     }).catch(function (e) {
-      // не получилось — карточка остаётся со статичным превью
       if (window.console && console.warn) console.warn("spine-player:", (e && e.message) || e);
       if (st.host === host) stop();
     });
@@ -213,7 +277,7 @@
   function stop() {
     st.host = null;
     st.last = 0;
-    dropCanvas();
+    drop();
   }
 
   function readVersion(jsonText) {
@@ -224,5 +288,17 @@
     return "3.8";
   }
 
-  window.SpineCardPlayer = { play: play, stop: stop, version: readVersion };
+  function debug() {
+    return {
+      трек: st.state && st.state.getCurrent(0)
+        ? st.state.getCurrent(0).animation.name
+        : (st.anims && st.anims[0] ? st.anims[0].name : null),
+      время: st.state && st.state.getCurrent(0)
+        ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
+        : null,
+      dt: Math.round(st.dt * 1000) / 1000, идёт: !!st.raf
+    };
+  }
+
+  window.SpineCardPlayer = { play: play, stop: stop, version: readVersion, pick: pickRuntime, debug: debug };
 })();
