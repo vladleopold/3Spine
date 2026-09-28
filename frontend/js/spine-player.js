@@ -278,9 +278,10 @@
         var slot = att[slotName] || {};
         Object.keys(slot).forEach(function (key) {
           var a = slot[key] || {};
-          // В 3.8 у region-вложения путь не пишется вовсе: он равен ключу.
-          // У mesh-вложения путь в поле path, у region старше 3.6 — в image.
-          var path = a.path || a.image || (a.type === "region" ? key : null);
+          // У Playson (и вообще в 3.8) у region-вложения нет ни path, ни image,
+          // а у части записей нет и type: путь равен ключу. Mesh-вложение ищет
+          // регион по тому же имени, поэтому подмена одна на оба типа.
+          var path = a.path || a.image || key;
           if (path) want[path] = true;
         });
       });
