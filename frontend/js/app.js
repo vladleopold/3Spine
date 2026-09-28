@@ -936,21 +936,25 @@
 
       // Наведение курсора на карточку проигрывает анимацию нативно.
       if (window.SpineCardPlayer) {
+        let filled = false;
+        const fillAnims = (names) => {
+          if (filled || !names || !names.length) return;
+          filled = true;
+          anim.querySelectorAll("option").forEach((o) => o.remove());
+          names.forEach((n, k) => {
+            const o = document.createElement("option");
+            o.value = String(k);
+            o.textContent = n;
+            anim.appendChild(o);
+          });
+          anim.disabled = false;
+          anim.value = String(window.SpineCardPlayer.current());
+        };
         card.addEventListener("mouseenter", () => {
-          window.SpineCardPlayer.play(shot, collectSpineAssets(it));
+          window.SpineCardPlayer.play(shot, collectSpineAssets(it), fillAnims);
         });
         card.addEventListener("mouseleave", () => window.SpineCardPlayer.stop());
       }
-
-      const tip = document.createElement("div");
-      tip.className = "pv-tip";
-      [label + ".spine", "путь: " + it.spine,
-       "кадр: " + (it.kind === "atlas" ? "текстура атласа" : "рендер Spine"),
-       "размер: " + fmtSize(it.bytes)].forEach((line, n) => {
-        if (n) tip.appendChild(document.createElement("br"));
-        tip.appendChild(document.createTextNode(line));
-      });
-      shot.appendChild(tip);
 
       const pngFile = z.file(it.png);
       if (pngFile) {
@@ -969,6 +973,31 @@
           shot.appendChild(img);
         }).catch(() => { /* карточка останется без картинки */ });
       }
+
+      // бывшие строки из тултипа — теперь мелким текстом внизу карточки
+      const info = document.createElement("div");
+      info.className = "pv-info";
+      [it.spine,
+       (it.kind === "atlas" ? "кадр: текстура атласа" : "кадр: рендер Spine") +
+         " · " + fmtSize(it.bytes)].forEach((line) => {
+        const d = document.createElement("div");
+        d.textContent = line;
+        info.appendChild(d);
+      });
+
+      const anim = document.createElement("select");
+      anim.className = "pv-anim";
+      anim.setAttribute("aria-label", "Анимация " + label);
+      anim.disabled = true;
+      const ph = document.createElement("option");
+      ph.textContent = "наведи на карточку";
+      ph.value = "";
+      anim.appendChild(ph);
+      anim.addEventListener("change", () => {
+        if (anim.value !== "" && window.SpineCardPlayer) window.SpineCardPlayer.select(anim.value);
+      });
+      anim.addEventListener("click", (e) => e.stopPropagation());
+      info.appendChild(anim);
 
       const meta = document.createElement("div");
       meta.className = "pv-meta";
@@ -1036,6 +1065,7 @@
       actions.appendChild(full);
       card.appendChild(shot);
       card.appendChild(meta);
+      card.appendChild(info);
       card.appendChild(actions);
       frag.appendChild(card);
     }

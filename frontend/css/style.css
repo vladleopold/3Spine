@@ -427,29 +427,37 @@ canvas.pv-live {
   padding: 6px 8px;
 }
 
-.pv-tip {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  top: 8px;
-  padding: 7px 9px;
-  border-radius: 8px;
-  background: rgba(8, 11, 18, .93);
-  border: 1px solid var(--border);
-  color: #d6deee;
+/* бывший тултип: те же строки теперь мелким текстом внизу карточки */
+.pv-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px 0;
   font-size: 11px;
-  line-height: 1.45;
-  opacity: 0;
-  transform: translateY(-4px);
-  pointer-events: none;
-  transition: opacity .2s ease, transform .2s ease;
-  z-index: 2;
+  line-height: 1.35;
+  color: #6f7889;
 }
 
-.pv-card:hover .pv-tip,
-.pv-shot:hover .pv-tip,
-.pv-card:focus-within .pv-tip,
-.pv-card:active .pv-tip { opacity: 1; transform: translateY(0); }
+.pv-info > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-anim {
+  margin-top: 4px;
+  max-width: 100%;
+  padding: 4px 6px;
+  font-size: 11px;
+  color: #b9c2d0;
+  background: #161c28;
+  border: 1px solid #2a3344;
+  border-radius: 6px;
+}
+
+.pv-anim:disabled { color: #5b6474; }
+
+.pv-anim:focus-visible { outline: 2px solid #ff8a3d; outline-offset: 1px; }
 
 .previews-note {
   margin-top: 12px;
@@ -492,8 +500,7 @@ canvas.pv-live {
 @media (prefers-reduced-motion: reduce) {
   .previews,
   .pick,
-  .pv-card,
-  .pv-tip {
+  .pv-card {
     transition: none !important;
     animation: none !important;
     opacity: 1 !important;

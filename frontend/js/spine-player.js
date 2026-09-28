@@ -73,6 +73,7 @@
     dt: 0.016,
     cssW: 0,
     cssH: 0,
+    current: 0,       // индекс играемой анимации
     checked: false  // первый кадр проверили — дальше не тратим время на чтение пикселей
   };
 
@@ -206,7 +207,7 @@
   }
 
   // assets: { json, atlas, pages: [Blob, ...] }
-  function play(host, assetsPromise) {
+  function play(host, assetsPromise, onReady) {
     stop();
     st.host = host;
     Promise.resolve(assetsPromise).then(function (assets) {
@@ -242,8 +243,12 @@
                   ? buildCanvas(ns, assets, images)
                   : buildWebgl(ns, assets, images);
                 fit(sk);
+                st.current = 0;
                 if (st.state && st.anims.length) {
                   st.state.setAnimation(0, st.anims[0].name, true);
+                }
+                if (onReady) {
+                  try { onReady(st.anims.map(function (a) { return a.name; })); } catch (e) { /* не критично */ }
                 }
                 for (var f = 0; f < 20; f++) {                 // промотка до видимого кадра
                   if (st.state) { st.state.update(0.016); st.state.apply(sk); }
@@ -274,6 +279,26 @@
     });
   }
 
+  // Переключение анимации на лету: значение — индекс или имя.
+  function select(value) {
+    if (!st.skeleton || !st.anims || !st.anims.length) return false;
+    var idx = typeof value === "number" ? value : -1;
+    if (idx < 0) {
+      for (var i = 0; i < st.anims.length; i++) {
+        if (st.anims[i].name === value || String(i) === String(value)) { idx = i; break; }
+      }
+    }
+    if (idx < 0 || idx >= st.anims.length) return false;
+    st.current = idx;
+    if (st.state) st.state.setAnimation(0, st.anims[idx].name, true);
+    else if (st.skeleton.setAnimation) st.track = st.skeleton.setAnimation(0, st.anims[idx].name, true);
+    return true;
+  }
+
+  function current() {
+    return st.current;
+  }
+
   function stop() {
     st.host = null;
     st.last = 0;
@@ -300,5 +325,5 @@
     };
   }
 
-  window.SpineCardPlayer = { play: play, stop: stop, version: readVersion, pick: pickRuntime, debug: debug };
+  window.SpineCardPlayer = { play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug };
 })();
