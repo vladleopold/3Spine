@@ -833,10 +833,47 @@ def main() -> None:
                         say(f"compile-block: ЭТАП 3 пропущен: редактор Spine {web_ver} не запускается")
                     else:
                         os.makedirs(web_dir, exist_ok=True)
+                        nf_mod = None
+                        try:
+                            import importlib.util as _ilu
+                            _spec = _ilu.spec_from_file_location("nf_web", norm_script)
+                            nf_mod = _ilu.module_from_spec(_spec)
+                            _spec.loader.exec_module(nf_mod)
+                        except Exception as e:                       # noqa: BLE001
+                            print(f"compile-block: конвертер 4.x-кривых недоступен: {e}")
 
                         def to_web_json(job):
                             p, ver, rel, stem = job
                             out = os.path.join(web_dir, stem + ".json")
+                            # 4.3 не берёт часть 3.8-кривых: если прямой импорт
+                            # не вышел, переводим кривые в формат 4.x и пробуем снова
+                            sources = [p]
+                            if nf_mod is not None:
+                                v4src = os.path.join(web_dir, "_" + stem + ".v4.json")
+                                try:
+                                    if nf_mod.to_4x_curves(p, v4src) and os.path.isfile(v4src):
+                                        sources.append(v4src)
+                                except Exception as e:               # noqa: BLE001
+                                    print(f"compile-block: {rel}: кривые не переведены: {e}")
+                                finally:
+                                    pass
+                            for src in sources:
+                                r = _export_web(src, out, web_dir, stem)
+                                if r == out:
+                                    if src is not sources[0]:
+                                        try:
+                                            os.remove(src)
+                                        except OSError:
+                                            pass
+                                    return rel, True, out
+                                if src is not sources[0]:
+                                    try:
+                                        os.remove(src)
+                                    except OSError:
+                                        pass
+                            return rel, False, out
+
+                        def _export_web(src, out, web_dir, stem):
                             # -o у редактора это ПАПКА выгрузки, а имя файла он
                             # берёт из имени скелета. Поэтому выгружаем в свою
                             # временную папку и переносим файл под своим именем.
@@ -844,18 +881,18 @@ def main() -> None:
                             for attempt in range(2):
                                 shutil.rmtree(tmpd, ignore_errors=True)
                                 os.makedirs(tmpd, exist_ok=True)
-                                rc = run(base_cmd() + ["-u", web_ver, "-i", p,
+                                rc = run(base_cmd() + ["-u", web_ver, "-i", src,
                                                        "-o", tmpd, "-e", "json"])
                                 made = sorted(f for f in os.listdir(tmpd) if f.endswith(".json"))
                                 if made:
                                     shutil.move(os.path.join(tmpd, made[0]), out)
                                     shutil.rmtree(tmpd, ignore_errors=True)
                                     if os.path.isfile(out) and os.path.getsize(out) > 0:
-                                        return rel, True, out
+                                        return out
                                 if attempt == 0:
                                     time.sleep(1.5)
                             shutil.rmtree(tmpd, ignore_errors=True)
-                            return rel, False, out
+                            return None
 
                         res3 = run_all(to_web_json, wjobs, workers3, "ЭТАП 3")
                         ok3 = sum(1 for _r, ok, _o in res3 if ok)
