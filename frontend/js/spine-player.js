@@ -179,8 +179,46 @@
     return sk;
   }
 
+  // Границы по факту отрисованного: у части скелетов data.bounds пустой или
+  // вырожденный (0x0, 2x2), а координаты костей уходят в минус — без нормального
+  // фита картинка рисуется за пределами канваса и карточка остаётся пустой.
+  function contentBounds(skeleton) {
+    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, any = false;
+    function take(x, y, w, h) {
+      any = true;
+      if (x - w < minx) minx = x - w;
+      if (y - h < miny) miny = y - h;
+      if (x + w > maxx) maxx = x + w;
+      if (y + h > maxy) maxy = y + h;
+    }
+    skeleton.bones.forEach(function (bone) {
+      take(bone.worldX, bone.worldY, 0, 0);
+    });
+    skeleton.slots.forEach(function (sl) {
+      var a = sl.attachment; if (!a) return;
+      var reg = a.region;
+      var rw = (reg && reg.region && reg.region.width) || a.width || 0;
+      var rh = (reg && reg.region && reg.region.height) || a.height || 0;
+      if (sl.bone) take(sl.bone.worldX, sl.bone.worldY, rw / 2, rh / 2);
+    });
+    if (!any) return null;
+    if (maxx - minx < 4) { minx -= 12; maxx += 12; }
+    if (maxy - miny < 4) { miny -= 12; maxy += 12; }
+    return { x: minx, y: miny, width: maxx - minx, height: maxy - miny };
+  }
+
+  function pickBounds(skeleton) {
+    var d = skeleton.data;
+    if (d.bounds && d.bounds.width > 1 && d.bounds.height > 1) return d.bounds;
+    if (d.width > 1 && d.height > 1) {
+      return { x: d.x, y: d.y, width: d.width, height: d.height };
+    }
+    return contentBounds(skeleton);
+  }
+
   function fit(skeleton) {
-    var b = skeleton.data.bounds;
+    if (skeleton.updateWorldTransform) skeleton.updateWorldTransform(0);
+    var b = pickBounds(skeleton);
     if (!b || !(b.width > 0) || !(b.height > 0)) return;
     var pad = 10;
     var w = st.cssW || st.canvas.width, h = st.cssH || st.canvas.height;
@@ -284,6 +322,9 @@
                   sk.update(0.016);
                   sk.updateWorldTransform(0);
                 }
+                // Фитим по позе после промотки: в покое геометрия может лежать
+                // в нуле, а в кадре анимации — далеко за пределами канваса.
+                fit(sk);
                 st.last = 0;
                 st.raf = requestAnimationFrame(loop);
                 return true;
