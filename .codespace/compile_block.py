@@ -107,7 +107,7 @@ def _web_index(src: str, web_dir: str) -> None:
         if not name:
             continue
         cand = os.path.join(web_dir, name + ".json")
-        if os.path.exists(cand):
+        if os.path.isfile(cand):
             it["web"] = "previews/web/" + name + ".json"
             added += 1
     if added:
@@ -825,8 +825,10 @@ def main() -> None:
                         retried_versions.add(web_ver)
                         warm = wjobs[0]
                         say(f"compile-block: загружаю редактор Spine {web_ver}")
-                        run(base_cmd() + ["-u", web_ver, "-i", warm[0],
-                                          "-o", os.path.join(web_dir, warm[3] + ".json"), "-e", "json"])
+                        wtmp = os.path.join(web_dir, "_warm")
+                        os.makedirs(wtmp, exist_ok=True)
+                        run(base_cmd() + ["-u", web_ver, "-i", warm[0], "-o", wtmp, "-e", "json"])
+                        shutil.rmtree(wtmp, ignore_errors=True)
                     if editor_broken(web_ver):
                         say(f"compile-block: ЭТАП 3 пропущен: редактор Spine {web_ver} не запускается")
                     else:
@@ -835,13 +837,24 @@ def main() -> None:
                         def to_web_json(job):
                             p, ver, rel, stem = job
                             out = os.path.join(web_dir, stem + ".json")
+                            # -o у редактора это ПАПКА выгрузки, а имя файла он
+                            # берёт из имени скелета. Поэтому выгружаем в свою
+                            # временную папку и переносим файл под своим именем.
+                            tmpd = os.path.join(web_dir, "_" + stem)
                             for attempt in range(2):
+                                shutil.rmtree(tmpd, ignore_errors=True)
+                                os.makedirs(tmpd, exist_ok=True)
                                 rc = run(base_cmd() + ["-u", web_ver, "-i", p,
-                                                       "-o", out, "-e", "json"])
-                                if os.path.exists(out) and os.path.getsize(out) > 0:
-                                    return rel, True, out
+                                                       "-o", tmpd, "-e", "json"])
+                                made = sorted(f for f in os.listdir(tmpd) if f.endswith(".json"))
+                                if made:
+                                    shutil.move(os.path.join(tmpd, made[0]), out)
+                                    shutil.rmtree(tmpd, ignore_errors=True)
+                                    if os.path.isfile(out) and os.path.getsize(out) > 0:
+                                        return rel, True, out
                                 if attempt == 0:
                                     time.sleep(1.5)
+                            shutil.rmtree(tmpd, ignore_errors=True)
                             return rel, False, out
 
                         res3 = run_all(to_web_json, wjobs, workers3, "ЭТАП 3")
