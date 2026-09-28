@@ -175,10 +175,30 @@ jobs:
           set -uo pipefail
           echo "$URLS" | tr ',' '\n' | sed '/^[[:space:]]*$/d' | while read -r url; do
             SYM=$(printf '%s' "$url" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
+            GAME=$(printf '%s' "$url" | sed -n 's/.*[?&]gameName=\([^&]*\).*/\1/p' | head -1)
             case "$SYM" in
-              vs*) ;;
-              *) echo "=== не игра PragmaticPlay, пропускаю: $url"; continue ;;
+              vs*) VENDOR="pg" ;;
+              *)
+                case "$GAME$url" in
+                  *gameName=*|*box-int*|*playson*) VENDOR="playson" ;;
+                  *) echo "=== не PragmaticPlay и не Playson, пропускаю: $url"; continue ;;
+                esac
+                ;;
             esac
+            echo "=== $url → вендор=$VENDOR ${SYM:+$SYM}${GAME:+ game=$GAME}"
+            slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
+            dir="artifacts/$slug"
+            mkdir -p "$dir"
+            [ -f "$dir/url.txt" ] || echo "$url" > "$dir/url.txt"
+
+            if [ "$VENDOR" = "playson" ]; then
+              # Playson: манифест внутри game.<hash>.js, скелеты бинарные .skel
+              python3 .codespace/pg-extractor/extract_playson.py "$url" -o "$dir" || true
+              python3 .codespace/pg-extractor/make_previews_index.py "$dir" || true
+              echo "=== Playson: пар $(find "$dir/spine" -name '*.skel' -o -name '*.json' 2>/dev/null | wc -l), страниц $(find "$dir/spine" -name '*.png' 2>/dev/null | wc -l)"
+              continue
+            fi
+
             slug=$(printf '%s' "$url" | md5sum | cut -c1-8)
             dir="artifacts/$slug"
             mkdir -p "$dir"
