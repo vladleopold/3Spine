@@ -130,6 +130,26 @@
     sk.setSlotsToSetupPose();
     st.skeleton = sk;
     st.anims = sd.animations || [];
+    st.pages = pages.length;
+    st.regions = (function () {
+      var n = 0;
+      pages.forEach(function (p) { n += (p.regions || []).length; });
+      return n;
+    })();
+    st.textured = (function () {
+      var ok = 0, all = 0;
+      pages.forEach(function (p) { (p.regions || []).forEach(function (r) {
+        all++; if (r.texture) ok++;
+      }); });
+      return ok + "/" + all;
+    })();
+    st.slots = (sd.slots || []).length;
+    st.attached = sk.slots.filter(function (s) { return !!s.attachment; }).length;
+    st.imgs = images.map(function (i) { return i.naturalWidth + "x" + i.naturalHeight; }).join(",");
+    st.bounds = (function () {
+      var x = sk.data.x, y = sk.data.y, w = sk.data.width, h = sk.data.height;
+      return w + "x" + h + "@" + x + "," + y;
+    })();
     st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
     st.renderer = new ns.SkeletonRenderer(st.g2);
     return sk;
@@ -334,7 +354,14 @@
       время: st.state && st.state.getCurrent(0)
         ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
         : null,
-      dt: Math.round(st.dt * 1000) / 1000, идёт: !!st.raf
+      dt: Math.round(st.dt * 1000) / 1000, идёт: !!st.raf,
+      страниц: st.pages,
+      регионов: st.regions,
+      стекстур: st.textured,
+      слотов: st.slots,
+      прикреплено: st.attached,
+      картинок: st.imgs,
+      границы: st.bounds
     };
   }
 
