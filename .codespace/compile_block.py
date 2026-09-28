@@ -798,120 +798,65 @@ def main() -> None:
                 say(f"compile-block: итого скомпилировано .spine: {compiled} из {len(jobs)}, "
                     f"время {time.time() - started:.1f}s")
 
-            # ── ЭТАП 3: web-JSON 4.3 для нативного проигрывания в браузере ──────
-            # Опубликованные сборки рантайма Spine для 3.5-3.8 неполные, а 4.3
-            # не читает таймлайны 3.8. Поэтому для веба отдаём тот же проект,
-            # выгруженный редактором 4.3: рантайм 4.3 играет его нативно,
-            # а .spine и версия 3.8.99 в архиве остаются нетронутыми.
-            web_ver = os.environ.get("SPINE_WEB_VERSION", "4.3.13")
+            # ── ЭТАП 3: web-JSON для нативного проигрывания в браузере ──────────
+            # Браузер играет скелеты рантаймом 4.x: опубликованные сборки 3.5-3.8
+            # неполные (в spine-canvas 3.x нет класса рендерера), а редактор 4.3
+            # на 3.8-кривых падает с "Invalid curve". Поэтому конвертируем сами.
+            # Единственное расхождение форматов 3.8 и 4.x в таймлайнах слотов —
+            # цвет: в 3.8 он называется "color", в 4.x "rgba". Рантайм 4.x читает
+            # только "rgba", "color" отбрасывает молча, слоты остаются с альфой
+            # из setup-позы (у наших скелетов часто 0) — кадр пустой, картинки нет.
+            # Правило одно на все игры; .spine и исходный 3.8 JSON не трогаем.
             web_dir = os.path.join(src, "previews", "web")
             if jobs and os.environ.get("SPINE_WEB_JSON", "1") == "1":
+                web_mod = None
+                try:
+                    import importlib.util as _ilu
+                    _spec = _ilu.spec_from_file_location(
+                        "spine_web_json",
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "to_web_json.py"))
+                    web_mod = _ilu.module_from_spec(_spec)
+                    _spec.loader.exec_module(web_mod)
+                except Exception as e:                       # noqa: BLE001
+                    print(f"compile-block: конвертер web-JSON недоступен: {e}")
+
                 wjobs = []
                 used = set()
-                # 3.x скелеты в 4.3 не выгружаются: редактор 4.3 не берёт часть
-                # 3.8-кривых ("Invalid curve"), и это не лечится нашей правкой.
-                # Такие данные браузер играет рантаймом 4.0-4.2, который 3.8 читает,
-                # поэтому гонять их через редактор 4.3 смысла нет.
-                force3x = os.environ.get("SPINE_WEB_FORCE_3X", "0") == "1"
-                skipped = 0
                 for (p, out_spine, ver, rel) in jobs:
-                    if ver and str(ver).split(".")[0] == "4":
-                        skipped += 1                 # 4.x рантайм и так подходит
-                        continue
-                    if not force3x:
-                        skipped += 1
-                        continue
+                    if str(ver or "").startswith("4"):
+                        continue          # 4.x рантайм играет свои данные как есть
                     stem = os.path.splitext(os.path.basename(p))[0]
                     if stem in used:
                         stem = rel[:-5].replace("/", "_")
                     used.add(stem)
-                    wjobs.append((p, ver, rel, stem))
-                if skipped:
-                    say(f"compile-block: ЭТАП 3: {skipped} скелетов 3.x пропущены "
-                        f"(4.3 не читает их кривые, браузер играет их рантаймом 4.0-4.2)")
-                if wjobs:
-                    workers3 = parallel_limit(len(wjobs))
-                    say(f"compile-block: ЭТАП 3 (web-JSON {web_ver}): "
-                        f"{len(wjobs)} файлов, параллельно {workers3}")
-                    if not editor_installed(web_ver) and web_ver not in retried_versions:
-                        # один прогрев: редактор 4.3 скачивается и кешируется
-                        retried_versions.add(web_ver)
-                        warm = wjobs[0]
-                        say(f"compile-block: загружаю редактор Spine {web_ver}")
-                        wtmp = os.path.join(web_dir, "_warm")
-                        os.makedirs(wtmp, exist_ok=True)
-                        run(base_cmd() + ["-u", web_ver, "-i", warm[0], "-o", wtmp, "-e", "json"])
-                        shutil.rmtree(wtmp, ignore_errors=True)
-                    if editor_broken(web_ver):
-                        say(f"compile-block: ЭТАП 3 пропущен: редактор Spine {web_ver} не запускается")
-                    else:
-                        os.makedirs(web_dir, exist_ok=True)
-                        nf_mod = None
+                    wjobs.append((p, rel, stem))
+
+                if wjobs and web_mod is not None:
+                    os.makedirs(web_dir, exist_ok=True)
+
+                    def make_web(job):
+                        p, rel, stem = job
+                        out = os.path.join(web_dir, stem + ".json")
                         try:
-                            import importlib.util as _ilu
-                            _spec = _ilu.spec_from_file_location("nf_web", norm_script)
-                            nf_mod = _ilu.module_from_spec(_spec)
-                            _spec.loader.exec_module(nf_mod)
-                        except Exception as e:                       # noqa: BLE001
-                            print(f"compile-block: конвертер 4.x-кривых недоступен: {e}")
-
-                        def to_web_json(job):
-                            p, ver, rel, stem = job
-                            out = os.path.join(web_dir, stem + ".json")
-                            # 4.3 не берёт часть 3.8-кривых: если прямой импорт
-                            # не вышел, переводим кривые в формат 4.x и пробуем снова
-                            sources = [p]
-                            if nf_mod is not None:
-                                v4src = os.path.join(web_dir, "_" + stem + ".v4.json")
-                                try:
-                                    if nf_mod.to_4x_curves(p, v4src) and os.path.isfile(v4src):
-                                        sources.append(v4src)
-                                except Exception as e:               # noqa: BLE001
-                                    print(f"compile-block: {rel}: кривые не переведены: {e}")
-                                finally:
-                                    pass
-                            for src in sources:
-                                r = _export_web(src, out, web_dir, stem)
-                                if r == out:
-                                    if src is not sources[0]:
-                                        try:
-                                            os.remove(src)
-                                        except OSError:
-                                            pass
-                                    return rel, True, out
-                                if src is not sources[0]:
-                                    try:
-                                        os.remove(src)
-                                    except OSError:
-                                        pass
+                            stats = web_mod.convert_file(p, out)
+                        except (OSError, ValueError) as e:      # noqa: BLE001
                             return rel, False, out
+                        if not os.path.isfile(out) or os.path.getsize(out) == 0:
+                            return rel, False, out
+                        say(f"compile-block: ✓ {rel} → web/{stem}.json "
+                            f"({web_mod.WEB_VERSION}, цветовых кадров "
+                            f"{stats['кадров_цвета_в_3x']}, слотов {stats['слотов']})")
+                        return rel, True, out
 
-                        def _export_web(src, out, web_dir, stem):
-                            # -o у редактора это ПАПКА выгрузки, а имя файла он
-                            # берёт из имени скелета. Поэтому выгружаем в свою
-                            # временную папку и переносим файл под своим именем.
-                            tmpd = os.path.join(web_dir, "_" + stem)
-                            for attempt in range(2):
-                                shutil.rmtree(tmpd, ignore_errors=True)
-                                os.makedirs(tmpd, exist_ok=True)
-                                rc = run(base_cmd() + ["-u", web_ver, "-i", src,
-                                                       "-o", tmpd, "-e", "json"])
-                                made = sorted(f for f in os.listdir(tmpd) if f.endswith(".json"))
-                                if made:
-                                    shutil.move(os.path.join(tmpd, made[0]), out)
-                                    shutil.rmtree(tmpd, ignore_errors=True)
-                                    if os.path.isfile(out) and os.path.getsize(out) > 0:
-                                        return out
-                                if attempt == 0:
-                                    time.sleep(1.5)
-                            shutil.rmtree(tmpd, ignore_errors=True)
-                            return None
-
-                        res3 = run_all(to_web_json, wjobs, workers3, "ЭТАП 3")
-                        ok3 = sum(1 for _r, ok, _o in res3 if ok)
-                        say(f"compile-block: ЭТАП 3 итог: {ok3}/{len(wjobs)} web-JSON, "
-                            f"время {time.time() - started:.1f}s")
-                        _web_index(src, web_dir)
+                    workers3 = parallel_limit(len(wjobs))
+                    say(f"compile-block: ЭТАП 3 (web-JSON {web_mod.WEB_VERSION}): "
+                        f"{len(wjobs)} файлов, параллельно {workers3}")
+                    res3 = run_all(make_web, wjobs, workers3, "ЭТАП 3")
+                    ok3 = sum(1 for _r, ok, _o in res3 if ok)
+                    say(f"compile-block: ЭТАП 3 итог: {ok3}/{len(wjobs)} web-JSON, "
+                        f"время {time.time() - started:.1f}s")
+                    _web_index(src, web_dir)
 
             with open(os.path.join(src, "compile-log.txt"), "w", encoding="utf-8") as f:
                 f.write("\n".join(loglines) + "\n")
