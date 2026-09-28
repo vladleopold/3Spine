@@ -46,6 +46,16 @@ def per_batch() -> int:
     return raw
 
 
+# Журнал шага. run_all() определён выше main(), поэтому say() должен быть
+# доступен на уровне модуля — иначе NameError и весь блок падает на старте.
+_LOG: list[str] = []
+
+
+def say(msg: str) -> None:
+    print(msg)
+    _LOG.append(msg)
+
+
 def run_all(fn, items, workers, label):
     """Все файлы одновременно; при падении — автоматически делим пополам.
 
@@ -82,12 +92,8 @@ def main() -> None:
     xmx = os.environ.get("SPINE_XMX", "") or "768"
     stdin = (license_code + "\n") if license_code else None
     tmp = tempfile.mkdtemp()
-    loglines: list[str] = []
+    loglines: list[str] = _LOG          # say() на уровне модуля пишет сюда
     started = time.time()
-
-    def say(msg: str) -> None:
-        print(msg)
-        loglines.append(msg)
 
     def run(cmd: list[str], timeout: int = 1800) -> int:
         try:
