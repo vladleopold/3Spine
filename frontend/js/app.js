@@ -829,6 +829,42 @@
     });
   }
 
+  // Ассеты для нативного проигрывания: skeleton JSON, его атлас и первая страница.
+  // Пути ищем по имени карточки, потому что it.spine у Playson указывает на
+  // превью, а сам скелет лежит в spine/<имя>/<имя>.json.
+  async function collectSpineAssets(item) {
+    const idx = buildIndexes();
+    const label = item.name || stemOf(item.spine);
+    const dirs = [dirOf(item.spine), "spine/" + label, ""].filter(
+      (d, i, a) => a.indexOf(d) === i
+    );
+    let skel = null;
+    for (const d of dirs) {
+      const p = (d ? d + "/" : "") + label + ".json";
+      if (idx.byPath.has(p)) { skel = p; break; }
+    }
+    if (!skel) {
+      skel = Object.keys(idx.byPath).find(
+        (n) => /\.json$/i.test(n) && stemOf(n) === label && !/index|manifest|report/i.test(n)
+      );
+    }
+    if (!skel) throw new Error("в архиве нет " + label + ".json");
+    const dir = dirOf(skel);
+    const atlases = Object.keys(idx.byPath).filter(
+      (n) => dirOf(n) === dir && /\.(atlas|atlas\.txt)$/i.test(n)
+    );
+    const atlas = atlases.find((n) => stemOf(n) === label) || atlases[0];
+    if (!atlas) throw new Error("в архиве нет атласа");
+    const pages = await atlasPagePaths(atlas, idx);
+    if (!pages.length) throw new Error("в архиве нет листов атласа");
+    const [json, atlasText, pageBlob] = await Promise.all([
+      idx.byPath.get(skel).async("string"),
+      idx.byPath.get(atlas).async("string"),
+      idx.byPath.get(pages[0]).async("blob"),
+    ]);
+    return { json, atlas: atlasText, page: pageBlob, version: window.SpineCardPlayer ? window.SpineCardPlayer.version(json) : "3.8" };
+  }
+
   function saveBlob(blob, filename) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -893,6 +929,14 @@
 
       const shot = document.createElement("div");
       shot.className = "pv-shot";
+
+      // Наведение курсора на карточку проигрывает анимацию нативно.
+      if (window.SpineCardPlayer) {
+        card.addEventListener("mouseenter", () => {
+          window.SpineCardPlayer.play(shot, collectSpineAssets(it));
+        });
+        card.addEventListener("mouseleave", () => window.SpineCardPlayer.stop());
+      }
 
       const tip = document.createElement("div");
       tip.className = "pv-tip";
