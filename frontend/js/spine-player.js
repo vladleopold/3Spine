@@ -85,7 +85,8 @@
     st.skeleton = null;
     st.state = null;
     st.renderer = null;
-    st.checked = false;
+    st.saw = false;
+    st.frames = 0;
   }
 
   // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
@@ -175,11 +176,11 @@
     skeleton.y = (h - b.height * scale) / 2 - b.y * scale;
   }
 
-  // Пустой кадр — значит рантайм не тянет эти данные. Лучше статичное
-  // превью, чем пустая карточка под курсором.
-  function firstFrameEmpty() {
-    if (st.checked) return false;
-    st.checked = true;
+  // Пустой кадр — значит рантайм не тянет эти данные: лучше статичное
+  // превью, чем пустая карточка под курсором. Проверять надо не на первом
+  // кадре, а после прогрева: у многих анимаций (00_start, activation)
+  // первый кадр пуст по определению — они появляются из прозрачности.
+  function frameEmpty() {
     try {
       var d = st.g2.getImageData(0, 0, st.canvas.width, st.canvas.height).data;
       for (var i = 3; i < d.length; i += 4 * 29) {
@@ -189,6 +190,18 @@
     } catch (e) {
       return false;                       // не смогли прочитать — не мешаем
     }
+  }
+
+  var WARMUP = 45;                        // кадров до первого вывода
+
+  function tooEmpty() {
+    if (st.saw) return false;             // хоть раз что-то нарисовалось
+    st.frames = (st.frames || 0) + 1;
+    if (st.frames < WARMUP) return false;
+    if (!frameEmpty()) { st.saw = true; return false; }
+    // пусто на всём прогреве — анимация в этих данных не играется
+    if (st.frames < WARMUP + 90) return false;
+    return true;
   }
 
   function loop(now) {
@@ -202,7 +215,7 @@
     st.skeleton.updateWorldTransform(0);
     st.g2.clearRect(0, 0, st.cssW || st.canvas.width, st.cssH || st.canvas.height);
     st.renderer.draw(st.skeleton);
-    if (firstFrameEmpty()) { stop(); return; }
+    if (tooEmpty()) { stop(); return; }
     st.raf = requestAnimationFrame(loop);
   }
 
