@@ -16,7 +16,9 @@ CONVERTER = os.path.join(HERE, "..", "backend", "converter", "SpineSkeletonDataC
 RESTORE = os.path.join(HERE, "spine_restore", "spine_restore.py")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 # готовые проекты Spine и сопутствующие данные — пробрасываем как есть
-PASSTHROUGH_EXTS = {".spine", ".bytes", ".atlas", ".xml", ".txt", ".css", ".mp3", ".wav", ".ogg", ".ttf", ".woff"}
+PASSTHROUGH_EXTS = {".spine", ".bytes", ".atlas", ".xml", ".txt", ".css", ".mp3", ".wav",
+                   ".ogg", ".ttf", ".woff",
+                   ".zip"}   # .zip — готовые комплекты пар (pairs/<имя>.zip) для сайта
 
 
 def pretty_json(path: str) -> None:
