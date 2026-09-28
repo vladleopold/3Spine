@@ -16,9 +16,10 @@ CONVERTER = os.path.join(HERE, "..", "backend", "converter", "SpineSkeletonDataC
 RESTORE = os.path.join(HERE, "spine_restore", "spine_restore.py")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 # готовые проекты Spine и сопутствующие данные — пробрасываем как есть
-PASSTHROUGH_EXTS = {".spine", ".bytes", ".atlas", ".xml", ".txt", ".css", ".mp3", ".wav",
-                   ".ogg", ".ttf", ".woff",
-                   ".zip"}   # .zip — готовые комплекты пар (pairs/<имя>.zip) для сайта
+# .skel нужен, чтобы compile-job увидел бинарные скелеты и собрал из них .spine;
+# .zip — готовые комплекты пар (pairs/<имя>.zip) для сайта.
+PASSTHROUGH_EXTS = {".spine", ".skel", ".bytes", ".atlas", ".xml", ".txt", ".css",
+                   ".mp3", ".wav", ".ogg", ".ttf", ".woff", ".zip"}
 
 
 def pretty_json(path: str) -> None:
