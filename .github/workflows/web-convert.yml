@@ -72,6 +72,13 @@ jobs:
           if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
           URL=$(tr -d '\r\n' < fetch-url.txt)
           echo "ссылка на игру: $URL"
+          # Playson не берём браузером: ассеты лежат в манифесте game.<hash>.js,
+          # их разбирает наш экстрактор следующим шагом.
+          case "$URL" in
+            *gameName=*|*box-int*|*playson*)
+              echo "Playson — браузерный сейвер пропускаю, дальше экстрактор"
+              exit 0 ;;
+          esac
           python3 -m pip install --quiet playwright aiohttp brotli
           # Resources Saver: кладём распакованное расширение рядом с браузером
           EXT_DIR="${RUNNER_TEMP}/Resources-Saver/src"
@@ -102,11 +109,46 @@ jobs:
           rm -f fetch-url.txt
           unzip -l input.zip | head -30
 
+      # Playson: ассеты не в UHT-паках, а в манифесте внутри game.<hash>.js;
+      # скелеты бинарные. Для них нужен наш экстрактор, а не браузерный сейвер.
+      - name: Playson — экстрактор Spine-пар
+        if: ${{ always() && steps.mode.outputs.mode == 'url' }}
+        continue-on-error: true
+        env:
+          URL: ${{ steps.mode.outputs.url }}
+        run: |
+          set -uo pipefail
+          SYM=$(printf '%s' "$URL" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
+          case "$SYM" in vs*) echo "это PragmaticPlay, Playson-шаг не нужен"; exit 0 ;; esac
+          case "$URL" in
+            *gameName=*|*box-int*|*playson*) ;;
+            *) echo "не Playson — пропускаю"; exit 0 ;;
+          esac
+          OUT="$RUNNER_TEMP/pl"
+          rm -rf "$OUT"
+          python3 .codespace/pg-extractor/extract_playson.py "$URL" -o "$OUT" || true
+          N=$(find "$OUT/spine" -name '*.skel' -o -name '*.json' 2>/dev/null | wc -l)
+          echo "Playson: скелетов $N"
+          if [ "$N" -eq 0 ]; then
+            echo "::warning::Playson-экстрактор не нашёл Spine-скелетов"
+            exit 0
+          fi
+          # Собираем input.zip из найденных пар — дальше пойдёт общий конвейер
+          # (unpack → convert → .spine → превью → публикация в history).
+          rm -f input.zip
+          mkdir -p pg_out
+          find "$OUT/spine" -mindepth 1 -maxdepth 1 -type d -exec cp -R {} pg_out/ \;
+          cp "$OUT/playson-manifest.json" pg_out/ 2>/dev/null || true
+          python3 .codespace/pg-extractor/make_previews_index.py "$PWD/pg_out" || true
+          ( cd pg_out && zip -qr "$GITHUB_WORKSPACE/input.zip" . )
+          echo "input.zip собран из Playson-пар: $(unzip -l input.zip | tail -1)"
+          echo "PLAYSAON=1" >> "$GITHUB_ENV"
+
       # ── Node-захват (URL-режим) ────────────────────────────────────────────
       # Python-путь выше не трогаем: его бюджеты (55с/75с) — предел здоровья.
       # Это запасной headless-сейвер, он только дополняет выборку и отчёт.
       - name: Headless saver → ZIP + saver-report.json (URL-режим)
-        if: steps.mode.outputs.mode == 'url'
+        if: ${{ steps.mode.outputs.mode == 'url' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') }}
         continue-on-error: true
         env:
           URLS: ${{ steps.mode.outputs.url }}
