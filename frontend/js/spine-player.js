@@ -278,7 +278,9 @@
         var slot = att[slotName] || {};
         Object.keys(slot).forEach(function (key) {
           var a = slot[key] || {};
-          var path = a.path || (a.type === "mesh" ? a.path : a.image) || null;
+          // В 3.8 у region-вложения путь не пишется вовсе: он равен ключу.
+          // У mesh-вложения путь в поле path, у region старше 3.6 — в image.
+          var path = a.path || a.image || (a.type === "region" ? key : null);
           if (path) want[path] = true;
         });
       });
