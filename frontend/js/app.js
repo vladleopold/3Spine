@@ -853,10 +853,22 @@
     if (!skel) throw new Error("в архиве нет " + label + ".json");
     const srcDir = dirs.find((d) => idx.byPath.has((d ? d + "/" : "") + label + ".json")) || dirOf(item.spine);
     const dir = srcDir || "";
-    const atlases = Object.keys(idx.byPath).filter(
-      (n) => dirOf(n) === dir && /\.(atlas|atlas\.txt)$/i.test(n)
-    );
-    const atlas = atlases.find((n) => stemOf(n) === label) || atlases[0];
+    // Атлас не обязательно лежит рядом с выбранным JSON: у Playson скелет
+    // дублируется в previews/, а атлас остаётся в spine/<имя>/. Поэтому ищем
+    // по имени скелета сначала в родных папках, потом где угодно в архиве.
+    const atlases = Object.keys(idx.byPath).filter((n) => /\.(atlas|atlas\.txt)$/i.test(n));
+    const inDir = (d) => (d ? d + "/" : "") + label + ".atlas";
+    const cands = [inDir(srcDir), inDir("spine/" + label), inDir(dir)];
+    atlases.forEach((n) => {
+      if (stemOf(n) === label) cands.push(n);
+    });
+    atlases.forEach((n) => {
+      if (dirOf(n).split("/").pop() === label) cands.push(n);
+    });
+    atlases.forEach((n) => {
+      if (dirOf(n) === srcDir) cands.push(n);
+    });
+    const atlas = cands.find((n) => idx.byPath.has(n));
     if (!atlas) throw new Error("в архиве нет атласа");
     const pages = await atlasPagePaths(atlas, idx);
     if (!pages.length) throw new Error("в архиве нет листов атласа");
