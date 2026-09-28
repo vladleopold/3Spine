@@ -130,22 +130,14 @@
     sk.setSlotsToSetupPose();
     st.skeleton = sk;
     st.anims = sd.animations || [];
+    // В сборках 4.x список регионов один на весь атлас, у листов его нет
     st.pages = pages.length;
-    st.regions = (function () {
-      var n = 0;
-      pages.forEach(function (p) { n += (p.regions || []).length; });
-      return n;
-    })();
-    st.textured = (function () {
-      var ok = 0, all = 0;
-      pages.forEach(function (p) { (p.regions || []).forEach(function (r) {
-        all++; if (r.texture) ok++;
-      }); });
-      return ok + "/" + all;
-    })();
+    st.regions = (atlas.regions || []).length;
+    st.textured = (atlas.regions || []).filter(function (r) { return !!r.texture; }).length;
     st.slots = (sd.slots || []).length;
     st.attached = sk.slots.filter(function (s) { return !!s.attachment; }).length;
     st.imgs = images.map(function (i) { return i.naturalWidth + "x" + i.naturalHeight; }).join(",");
+    st.names = (atlas.regions || []).slice(0, 3).map(function (r) { return r.name; }).join(",");
     st.bounds = (function () {
       var x = sk.data.x, y = sk.data.y, w = sk.data.width, h = sk.data.height;
       return w + "x" + h + "@" + x + "," + y;
@@ -356,7 +348,7 @@
         : null,
       dt: Math.round(st.dt * 1000) / 1000, идёт: !!st.raf,
       страниц: st.pages,
-      регионов: st.regions,
+      регионов: st.regions, имена: st.names,
       стекстур: st.textured,
       слотов: st.slots,
       прикреплено: st.attached,
