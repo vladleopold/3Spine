@@ -12,6 +12,12 @@ jobs:
   convert:
     if: ${{ !github.event.deleted }}
     runs-on: ubuntu-latest
+    env:
+      # У Playson один атлас распадается на тысячи спрайтов, поэтому после
+      # распаковки в input.zip приходит 9–10 тыс. записей. Лимит safezip
+      # (5000) нужен против zip-бомб, а не против наших же архивов.
+      MAX_FILES: '30000'
+      MAX_UNPACKED: '2000000000'
     # 20 (Python-путь) + 8 на Node-захват: setup-node+npm ci+Chromium ≤7м,
     # сам сейвер урезан 300с, раскладка 120с
     timeout-minutes: 28
