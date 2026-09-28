@@ -342,6 +342,31 @@
     return "3.8";
   }
 
+  // Честный зонд: что реально готово к отрисовке — альфа слотов, кости,
+  // текстура и куда ложится геометрия после нашего трансформа.
+  function probe() {
+    var sk = st.skeleton;
+    if (!sk) return { нет: 'скелета' };
+    var slots = sk.slots.map(function (sl) {
+      return {
+        имя: sl.data.name,
+        кость: sl.bone ? Math.round(sl.bone.worldX) + "," + Math.round(sl.bone.worldY) : "-",
+        альфа: sl.color ? +(sl.color.a || 0).toFixed(2) : 0,
+        вложение: sl.attachment ? sl.attachment.name : null,
+        вид: sl.attachment ? (sl.attachment.type || (sl.attachment.constructor || {}).name) : null
+      };
+    });
+    var c = st.g2 && st.g2.canvas;
+    var ctx = st.g2;
+    var m = (ctx && ctx.getTransform) ? ctx.getTransform() : null;
+    return {
+      канвас: c ? c.width + "x" + c.height : "-",
+      css: c ? c.clientWidth + "x" + c.clientHeight : "-",
+      трансформ: m ? [m.a, m.d, m.e, m.f].map(function (v) { return Math.round(v * 100) / 100; }).join(",") : "-",
+      слоты: slots
+    };
+  }
+
   function debug() {
     if (st.skeleton && !st.world) {
       var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, n = 0;
@@ -377,5 +402,5 @@
     };
   }
 
-  window.SpineCardPlayer = { play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug };
+  window.SpineCardPlayer = { probe: probe, play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug };
 })();
