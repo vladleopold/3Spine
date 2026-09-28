@@ -138,6 +138,10 @@
     st.attached = sk.slots.filter(function (s) { return !!s.attachment; }).length;
     st.imgs = images.map(function (i) { return i.naturalWidth + "x" + i.naturalHeight; }).join(",");
     st.names = (atlas.regions || []).slice(0, 3).map(function (r) { return r.name; }).join(",");
+    st.db = (function () {
+      var d = sk.data.bounds;
+      return d ? Math.round(d.width) + "x" + Math.round(d.height) + "@" + Math.round(d.x) + "," + Math.round(d.y) : "null";
+    })();
     st.bounds = (function () {
       var x = sk.data.x, y = sk.data.y, w = sk.data.width, h = sk.data.height;
       return w + "x" + h + "@" + x + "," + y;
@@ -228,6 +232,14 @@
     skeleton.scaleY = scale;
     skeleton.x = (w - b.width * scale) / 2 - b.x * scale;
     skeleton.y = (h - b.height * scale) / 2 - b.y * scale;
+    st.fitInfo = {
+      w: Math.round(b.width), h: Math.round(b.height),
+      x: Math.round(b.x), y: Math.round(b.y),
+      масштаб: Math.round(scale * 1000) / 1000,
+      сдвиг: Math.round(skeleton.x) + "," + Math.round(skeleton.y),
+      источник: b === skeleton.data.bounds ? "data.bounds"
+        : (b === skeleton.data ? "data" : "по содержимому")
+    };
   }
 
   // Пустой кадр — значит рантайм не тянет эти данные: лучше статичное
@@ -439,7 +451,7 @@
       слотов: st.slots,
       прикреплено: st.attached,
       картинок: st.imgs,
-      границы: st.bounds, корень: st.root, мира: st.world
+      границы: st.bounds, фит: st.fitInfo, dataBounds: st.db, корень: st.root, мира: st.world
     };
   }
 
