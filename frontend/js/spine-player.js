@@ -116,9 +116,43 @@
 
   // Канвас-API: TextureAtlas(atlasText) без загрузчика, текстуры вешаются
   // на страницы через page.setTexture(), а вложения грузит AtlasAttachmentLoader.
+  // Атлас Playson разложен не по спецификации: пустая строка стоит в начале
+  // файла, а между свойствами страницы и первым регионом её нет. Официальный
+  // парсер из-за этого читает ноль регионов и картинка не рисуется. Приводим
+  // текст к каноничному виду: страница -> свойства -> пустая строка -> регионы.
+  var PAGE_PROP = /^(size|format|filter|repeat):/;
+
+  function normalizeAtlas(text) {
+    var lines = String(text).replace(/\r\n/g, "\n").split("\n");
+    var out = [];
+    var i = 0;
+    function blank() { return !lines[i] || !lines[i].trim(); }
+    while (blank()) i++;
+    while (i < lines.length) {
+      out.push(lines[i]);                        // имя страницы
+      i++;
+      var props = [];
+      while (i < lines.length && PAGE_PROP.test(lines[i].trim()) && !/^\s/.test(lines[i])) {
+        props.push(lines[i]);
+        i++;
+      }
+      if (props.length) {
+        out.push("");
+        props.forEach(function (p) { out.push(p); });
+        out.push("");                            // разделитель страницы и регионов
+      }
+      while (i < lines.length && !blank()) {     // блок регионов
+        out.push(lines[i]);
+        i++;
+      }
+      while (blank()) i++;
+    }
+    return out.join("\n") + "\n";
+  }
+
   function buildCanvas(ns, assets, images) {
     if (!ns.SkeletonRenderer || !ns.CanvasTexture) throw new Error("в сборке нет канвас-рендерера");
-    var atlas = new ns.TextureAtlas(assets.atlas);
+    var atlas = new ns.TextureAtlas(normalizeAtlas(assets.atlas));
     var pages = atlas.pages || [];
     if (pages.length > images.length) throw new Error("в атласе " + pages.length + " листов, а есть " + images.length);
     pages.forEach(function (page, i) { page.setTexture(new ns.CanvasTexture(images[i])); });
