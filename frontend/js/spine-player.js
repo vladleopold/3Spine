@@ -87,6 +87,8 @@
     st.renderer = null;
     st.saw = false;
     st.frames = 0;
+    st.lifted = false;
+    st.patched = 0;
   }
 
   // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
@@ -122,8 +124,10 @@
     var pages = atlas.pages || [];
     if (pages.length > images.length) throw new Error("в атласе " + pages.length + " листов, а есть " + images.length);
     pages.forEach(function (page, i) { page.setTexture(new ns.CanvasTexture(images[i])); });
+    var json = JSON.parse(assets.json);
+    st.patched = patchMissingRegions(ns, atlas, json);
     var loader = new ns.AtlasAttachmentLoader(atlas);
-    var sd = new ns.SkeletonJson(loader).readSkeletonData(JSON.parse(assets.json));
+    var sd = new ns.SkeletonJson(loader).readSkeletonData(json);
     var sk = new ns.Skeleton(sd);
     sk.setToSetupPose();
     sk.setSkin(0);
@@ -260,11 +264,59 @@
 
   var WARMUP = 45;                        // кадров до первого вывода
 
+  // Некоторые панели приходят с вложениями, которых нет в атласе: атлас
+  // пересобирался из страниц игры и часть регионов в него не попала, а
+  // загрузчик на этом падает целиком. Такие слоты закрываем пустышкой, чтобы
+  // остальная панель всё равно играла.
+  function patchMissingRegions(ns, atlas, json) {
+    if (!ns.TextureRegion || !atlas.pages.length) return 0;
+    var want = {};
+    var skins = json.skins;
+    (Array.isArray(skins) ? skins : []).forEach(function (skin) {
+      var att = skin && skin.attachments;
+      Object.keys(att || {}).forEach(function (slotName) {
+        var slot = att[slotName] || {};
+        Object.keys(slot).forEach(function (key) {
+          var a = slot[key] || {};
+          var path = a.path || (a.type === "mesh" ? a.path : a.image) || null;
+          if (path) want[path] = true;
+        });
+      });
+    });
+    var made = 0;
+    Object.keys(want).forEach(function (path) {
+      if (atlas.findRegion(path)) return;
+      var r = new ns.TextureRegion();
+      r.name = path;
+      r.page = atlas.pages[0];
+      r.originalWidth = 1;
+      r.originalHeight = 1;
+      atlas.regions.push(r);
+      made += 1;
+    });
+    return made;
+  }
+
+  // Панели часто держат альфу в setup-позе на нуле, а rgba-таймлайна, который
+  // её поднимает, в анимации нет: в игре цвет ставит код. В карточке такой
+  // слот остаётся полностью прозрачным — показываем его.
+  function liftInvisibleSlots() {
+    var n = 0;
+    (st.skeleton.slots || []).forEach(function (slot) {
+      if (slot.color && slot.color.a === 0 && slot.getAttachment && slot.getAttachment()) {
+        slot.color.a = 1;
+        n += 1;
+      }
+    });
+    return n;
+  }
+
   function tooEmpty() {
     if (st.saw) return false;             // хоть раз что-то нарисовалось
     st.frames = (st.frames || 0) + 1;
     if (st.frames < WARMUP) return false;
     if (!frameEmpty()) { st.saw = true; return false; }
+    if (!st.lifted) { st.lifted = liftInvisibleSlots() > 0; return false; }
     // пусто на всём прогреве — анимация в этих данных не играется
     if (st.frames < WARMUP + 90) return false;
     return true;
