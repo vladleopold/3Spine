@@ -401,14 +401,25 @@
     var sk = st.skeleton;
     if (!sk) return { нет: 'скелета' };
     var slots = sk.slots.map(function (sl) {
+      var a = sl.attachment;
+      var reg = a && a.region;
+      var pg = reg && reg.page;
+      var img = pg && pg.texture && pg.texture.getImage ? pg.texture.getImage() : null;
       return {
         имя: sl.data.name,
         кость: sl.bone ? Math.round(sl.bone.worldX) + "," + Math.round(sl.bone.worldY) : "-",
         альфа: sl.color ? +(sl.color.a || 0).toFixed(2) : 0,
-        вложение: sl.attachment ? sl.attachment.name : null,
-        вид: sl.attachment ? (sl.attachment.type || (sl.attachment.constructor || {}).name) : null
+        вложение: a ? a.name : null,
+        вид: a ? (a.type || (a.constructor || {}).name) : null,
+        регион: reg ? reg.name : "НЕТ",
+        страница: pg ? pg.name : "НЕТ",
+        лист: img ? (img.naturalWidth || img.width) + "x" + (img.naturalHeight || img.height) : "НЕТ",
+        размерРегиона: reg && reg.region ? Math.round(reg.region.width) + "x" + Math.round(reg.region.height) : "-"
       };
     });
+    st.drawOrder = (sk.drawOrder || []).filter(function (sl) {
+      return sl.attachment && sl.color && sl.color.a > 0;
+    }).length;
     var c = st.g2 && st.g2.canvas;
     var ctx = st.g2;
     var m = (ctx && ctx.getTransform) ? ctx.getTransform() : null;
@@ -416,7 +427,7 @@
       канвас: c ? c.width + "x" + c.height : "-",
       css: c ? c.clientWidth + "x" + c.clientHeight : "-",
       трансформ: m ? [m.a, m.d, m.e, m.f].map(function (v) { return Math.round(v * 100) / 100; }).join(",") : "-",
-      слоты: slots
+      слоты: slots, рисуется: st.drawOrder
     };
   }
 
