@@ -808,14 +808,27 @@ def main() -> None:
             if jobs and os.environ.get("SPINE_WEB_JSON", "1") == "1":
                 wjobs = []
                 used = set()
+                # 3.x скелеты в 4.3 не выгружаются: редактор 4.3 не берёт часть
+                # 3.8-кривых ("Invalid curve"), и это не лечится нашей правкой.
+                # Такие данные браузер играет рантаймом 4.0-4.2, который 3.8 читает,
+                # поэтому гонять их через редактор 4.3 смысла нет.
+                force3x = os.environ.get("SPINE_WEB_FORCE_3X", "0") == "1"
+                skipped = 0
                 for (p, out_spine, ver, rel) in jobs:
                     if ver and str(ver).split(".")[0] == "4":
-                        continue                      # 4.x рантайм и так подходит
+                        skipped += 1                 # 4.x рантайм и так подходит
+                        continue
+                    if not force3x:
+                        skipped += 1
+                        continue
                     stem = os.path.splitext(os.path.basename(p))[0]
                     if stem in used:
                         stem = rel[:-5].replace("/", "_")
                     used.add(stem)
                     wjobs.append((p, ver, rel, stem))
+                if skipped:
+                    say(f"compile-block: ЭТАП 3: {skipped} скелетов 3.x пропущены "
+                        f"(4.3 не читает их кривые, браузер играет их рантаймом 4.0-4.2)")
                 if wjobs:
                     workers3 = parallel_limit(len(wjobs))
                     say(f"compile-block: ЭТАП 3 (web-JSON {web_ver}): "
