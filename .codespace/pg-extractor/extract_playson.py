@@ -149,6 +149,90 @@ def logical(path: str) -> str:
     return path.split(":", 1)[1] if ":" in path else path
 
 
+def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
+    """Пары Spine по логическим путям res/spine/ — минуя группировку по папкам.
+
+    Главный build() раскладывает записи по ФИЗИЧЕСКОЙ папке (поле files), а у
+    Playson физические имена хешированные и лежат в других папках, чем
+    логические (поле path). Из-за этого все 13 проектов из res/spine/
+    (fs, win_popup, free_spins_choose_bet, widget_tnt, daily_drops…) терялись:
+    их атлас попадал в папку с хешем, где нет ни json, ни png этой сцены.
+    Здесь берём путь из path и собираем пару оттуда.
+    """
+    folders = {}
+    for files, path in recs:
+        lp = logical(path)
+        if "/res/spine/" not in lp:
+            continue
+        folder = lp.rsplit("/", 1)[0]
+        folders.setdefault(folder, []).append((files, lp))
+
+    # индекс картинок по имени файла — страница может лежать в своей папке
+    png_by_name = {}
+    for files, path in recs:
+        lp = logical(path)
+        if lp.endswith(".png"):
+            png_by_name.setdefault(lp.rsplit("/", 1)[-1], []).append(
+                (files, lp, size_by_files.get(files, 0)))
+
+    pairs = []
+    for folder in sorted(folders):
+        items = folders[folder]
+        atlases = [f for f, lp in items if lp.endswith(".atlas")]
+        if not atlases:
+            continue
+        atlas_bytes = get(base + atlases[0])
+        if not atlas_bytes:
+            print("  res/spine %s: не скачался атлас" % folder)
+            continue
+        page_blobs = []
+        for page_name, _w, _h in atlas_pages(atlas_bytes):
+            cand = png_by_name.get(page_name) or []
+            same = [c for c in cand if c[1].rsplit("/", 1)[0] == folder]
+            pick = (same or sorted(cand, key=lambda c: -c[2]))[0] if cand else None
+            if not pick:
+                print("  res/spine %s: страница %s не найдена" % (folder, page_name))
+                continue
+            blob = get(base + pick[0])
+            if blob:
+                page_blobs.append((page_name, blob))
+        if not page_blobs:
+            print("  res/spine %s: не нашлось страниц" % folder)
+            continue
+        names = []
+        for files, lp in sorted(items):
+            if not lp.endswith(".json"):
+                continue
+            name = lp[:-len(".json")].rsplit("/", 1)[-1]
+            name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+            if name in done:
+                continue
+            skel = get(base + files)
+            if not skel:
+                continue
+            kind = spine_kind(skel)
+            if not kind:
+                continue
+            d = spine_root / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / (name + "." + kind)).write_bytes(skel)
+            for pn, blob in page_blobs:
+                (textures / pn).write_bytes(blob)
+            (d / (name + ".atlas")).write_bytes(
+                retarget_atlas(atlas_bytes, [pn for pn, _ in page_blobs]))
+            pairs.append({"name": name, "kind": kind, "atlas_source": atlases[0],
+                          "pages": [pn for pn, _ in page_blobs],
+                          "skeleton_source": files,
+                          "bytes": sum(len(b) for _, b in page_blobs)})
+            done.add(name)
+            names.append(name)
+        if names:
+            print("  res/spine %s: %d пар (%s)"
+                  % (folder, len(names), ", ".join(names[:6])))
+    print("res/spine: добавлено пар %d" % len(pairs))
+    return pairs
+
+
 def build(url: str, out: Path) -> dict:
     base = find_base(url)
     print("Playson: база игры %s" % base)
@@ -248,6 +332,14 @@ def build(url: str, out: Path) -> dict:
             done.add(name)
             print("  KEEP: spine/%s/%s.%s + .atlas → textures/%s"
                   % (name, name, kind, ", ".join(pn for pn, _ in page_blobs)))
+
+    # Отдельный проход по манифесту. Логический путь (res/spine/...) и физический
+    # (files) у Playson не совпадают: физические имена хешированные и лежат в
+    # других папках, поэтому группировка по папкам из files теряет целые проекты
+    # — например все 13 UI-проектов из res/spine/ (fs, win_popup, widget_tnt…).
+    # Здесь идём напрямую по логическим путям, минуя эвристику.
+    extra_pairs = manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files)
+    pairs.extend(extra_pairs)
 
     # Манифест в том же виде, что ждёт hash_to_name/manifest_resolver.py:
     # пары "files"/"path" из launcher.<hash>.js. Он построит карту
