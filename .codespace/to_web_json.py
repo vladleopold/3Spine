@@ -75,8 +75,22 @@ def convert(data: dict) -> dict:
         out["skins"] = [{"name": name, "attachments": attachments}
                         for name, attachments in skins.items()]
 
-    animations = out.get("animations") or {}
-    for anim in animations.values():
+    # Анимации: в 3.x это ОБЪЕКТ { "<имя>": {...} }, в 4.x — МАССИВ
+    # [{ "name": "<имя>", ... }]. Рантайм 4.x читает root.animations[i], и с
+    # объектом animations.length === undefined, то есть анимаций НОЛЬ: карточка
+    # показывает только позу покоя и не проигрывает ничего (а если поза пустая —
+    # выглядит как пустая заглушка). Весь PragmaticPlay UHT отдаёт объект.
+    anims = out.get("animations")
+    if isinstance(anims, dict):
+        fixed = []
+        for name, body in anims.items():
+            if isinstance(body, dict):
+                item = dict(body)
+                item.setdefault("name", name)
+                fixed.append(item)
+        out["animations"] = fixed
+
+    for anim in (out.get("animations") or []):
         if not isinstance(anim, dict):
             continue
 
@@ -172,7 +186,12 @@ def _fix_curve_widths(data) -> int:
     """Дублирует кривую на каждое значение таймлайна (иначе вторая половина
     bezier читается как undefined → NaN в позе → карточка пустая)."""
     fixed = 0
-    for anim in (data.get("animations") or {}).values():
+    anims = data.get("animations") or []
+    # 3.x отдаёт анимации объектом {имя: {...}}, 4.x — массивом. convert() уже
+    # приводит к массиву, но функцию зовут и на сырых данных.
+    if isinstance(anims, dict):
+        anims = list(anims.values())
+    for anim in anims:
         if not isinstance(anim, dict):
             continue
         groups = (

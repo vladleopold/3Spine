@@ -11,6 +11,7 @@ extract_pragmatic_uht.py): карточка остаётся, но рисует 
 """
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -18,8 +19,29 @@ from pathlib import Path
 # Пороги «проект-гигант» для снятия страниц общего пула. Мелкие проекты не
 # трогаем вовсе: у них собственные страницы копеечные, и снятие пула ломает
 # карточку сильнее, чем экономит.
-MIN_STRIP_BYTES = 4 * 1024 * 1024
+MIN_STRIP_BYTES = 8 * 1024 * 1024
 MAX_POOL_SHARE = 0.75
+
+# Снять пул можно только если карточка от этого не потеряет ни одной картинки.
+# Раньше это правило было «пул — меньшинство веса проекта», и оно срабатывало
+# на проектах, у которых ВЕСЬ рисунок как раз в пуле: снимали 2 страницы —
+# карточка теряла все 20 регионов (wran_gamble_screen_in_fx). Теперь сверяемся
+# с тем, что скелет реально просит.
+try:                                    # переиспользуем разбор регионов экстрактора
+    from extract_pragmatic_uht import atlas_region_name, spine_image_refs
+except Exception:                       # pragma: no cover - страховка, не молча портим
+    atlas_region_name = spine_image_refs = None
+
+
+def needed_regions(proj: Path, name: str) -> set[str]:
+    """Имена регионов, которые скелет проекта реально использует."""
+    if spine_image_refs is None:
+        return set()
+    skel = proj / f"{name}.json"
+    try:
+        return set(spine_image_refs(json.loads(skel.read_text(encoding="utf-8"))))
+    except Exception:
+        return set()
 
 
 def dir_size(path: Path) -> int:
@@ -66,13 +88,29 @@ def strip_pool_pages(proj: Path) -> int:
     if freed_pool > own * MAX_POOL_SHARE:
         return 0                      # пул here и есть вся графика — не трогаем
     lines = atlas.read_text(encoding="utf-8").splitlines()
+    blocks = page_blocks(lines)
     drop = {p.name for p in pool}
-    kept = [b for b in page_blocks(lines) if b[0] not in drop]
-    if len(kept) == len(page_blocks(lines)):
+    kept = [b for b in blocks if b[0] not in drop]
+    if len(kept) == len(blocks):
         return 0
     if not kept:
         return 0                       # единственная страница — проект и так нужен
-    head = [l for l in lines[:page_blocks(lines)[0][1]] if l.strip()]
+    # Главное правило: если хоть один нужный скелету регион лежит на странице
+    # пула — пул несущий, снимать его нельзя. Иначе карточка теряет картинки
+    # («не хватает N картинок в атласе»), и это хуже, чем лишние мегабайты.
+    need = needed_regions(proj, name)
+    if need:
+        pool_regions: set[str] = set()
+        for pn, _s, _e, _r in blocks:
+            if pn in drop:
+                pool_regions.update(
+                    atlas_region_name(l.strip()) for l in lines[_s + 5:_e]
+                    if l and not l[0].isspace()
+                )
+        load_bearing = need & pool_regions
+        if load_bearing:
+            return 0
+    head = [l for l in lines[:blocks[0][1]] if l.strip()]
     body: list[str] = []
     for _p, start, end in kept:
         body.extend(lines[start:end])

@@ -15,6 +15,10 @@ OUT_DIR="${OUT_DIR:-./uht-assets/${SYMBOL}}"
 PLATFORMS="${PLATFORMS:-desktop mobile}"
 SKIP_NA="${SKIP_NA:-3}"
 HARD_MAX="${HARD_MAX:-200}"
+# Сколько раз пробуем скачать файл: DL_404_TRIES попыток на честный 404,
+# DL_RETRIES — на всё остальное (обрыв, 5xx, троттлинг, пустой ответ).
+DL_404_TRIES="${DL_404_TRIES:-2}"
+DL_RETRIES="${DL_RETRIES:-4}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTRACTOR="${SCRIPT_DIR}/extract_pragmatic_uht.py"
 GAMES_ROOT="https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games"
@@ -49,19 +53,32 @@ log "Symbol=${SYMBOL}  platforms=${PLATFORMS}  серии идут до ${SKIP_N
 download() {
   local platform="$1" rel="$2"
   local dest="${OUT_DIR}/resources/${platform}/${rel}"
+  local attempt=0 code="" sz=0
   mkdir -p "$(dirname "$dest")"
   if [[ -f "$dest" ]] && [[ $(wc -c <"$dest" | tr -d ' ') -gt 200 ]]; then
     return 0
   fi
-  if curl -sL -f -A "Mozilla/5.0 CI-Bot" --connect-timeout 15 --max-time 90 \
-       -o "$dest" "${ROOT}/${platform}/${rel}"; then
-    local sz; sz=$(wc -c <"$dest" | tr -d ' ')
-    if [[ "$sz" -gt 200 ]]; then
+  # Одна попытка на файл — источник тихих поломок: серия game/main_resources
+  # перестаёт качаться на первом же сетевом сбое, пул текстур игры оказывается
+  # неполным, и карточка лишается картинок («не хватает 20 картинок в атласе»).
+  # Теперь отличаем честный 404 от обрыва/троттлинга и повторяем второе.
+  while (( attempt < DL_RETRIES )); do
+    attempt=$(( attempt + 1 ))
+    code=$(curl -sL -A "Mozilla/5.0 CI-Bot" --connect-timeout 15 --max-time 90 \
+              -o "$dest" -w '%{http_code}' "${ROOT}/${platform}/${rel}" || echo 000)
+    sz=$(wc -c <"$dest" 2>/dev/null | tr -d ' ' || echo 0)
+    [[ -z "$sz" ]] && sz=0
+    if [[ "$code" == "200" && "$sz" -gt 200 ]]; then
       log "GET ${platform}/${rel} (${sz})"
       return 0
     fi
-  fi
-  rm -f "$dest"
+    rm -f "$dest"
+    if [[ "$code" == "404" ]] && (( attempt >= DL_404_TRIES )); then
+      return 2                       # файла действительно нет
+    fi
+    log "не скачался ${platform}/${rel} (HTTP ${code}, ${sz} б) — попытка ${attempt}/${DL_RETRIES}"
+    sleep $(( attempt * 2 ))
+  done
   return 1
 }
 
@@ -81,17 +98,18 @@ HARD_MAX="${HARD_MAX:-200}"
 # Скачивает game/<stem><NNN>.json по возрастанию, пока файлы не кончатся.
 pull_series() {
   local platform="$1" stem="$2" limit="$3"
-  local miss=0 i=0
+  local miss=0 i=0 got=0
   while [[ $i -le $limit ]]; do
     local ii; ii=$(printf '%03d' "$i")
     if download "$platform" "game/${stem}${ii}.json"; then
-      ok=$((ok+1)); miss=0
+      ok=$((ok+1)); miss=0; got=$((got+1))
     else
       fail=$((fail+1)); miss=$((miss+1))
       [[ $miss -ge $SKIP_NA ]] && break
     fi
     i=$((i+1))
   done
+  log "серия ${stem}: скачано ${got} шт. (последняя попытка ${ii}, лимит ${limit})"
 }
 
 fetch_platform() {
