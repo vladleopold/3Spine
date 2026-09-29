@@ -23,6 +23,7 @@
 
 import json
 import os
+import re
 import sys
 
 WEB_VERSION = "4.0.31"          # рантайм, на котором подтверждено воспроизведение
@@ -46,10 +47,22 @@ def convert(data: dict) -> dict:
     out = json.loads(json.dumps(data))          # глубокая копия без общих ссылок
 
     skeleton = out.get("skeleton")
+    # 3.5-3.8 приводим к 4.0.31 (единственный формат, цвет которого переименован,
+    # и рантайм, на котором подтверждено воспроизведение). Данные 4.x оставляем в
+    # СВОЕМ формате: в 4.1 цвет слота снова называется "color" (4.0 читал "rgba"),
+    # там есть физика, а понижение версии всё это тихо выкинуло бы. Сайт сам
+    # выберет нужный рантайм по полю skeleton.spine (4.0 -> 4.0.31, 4.1 -> 4.1.55).
+    src_ver = ""
     if isinstance(skeleton, dict):
-        skeleton["spine"] = WEB_VERSION
+        src_ver = str(skeleton.get("spine", "") or "")
+    m = re.match(r"^(\d+)\.(\d+)", src_ver)
+    native_4x = bool(m) and (int(m.group(1)), int(m.group(2))) >= (4, 0)
+    target_ver = src_ver if native_4x else WEB_VERSION
+
+    if isinstance(skeleton, dict):
+        skeleton["spine"] = target_ver
     else:
-        out["skeleton"] = {"spine": WEB_VERSION}
+        out["skeleton"] = {"spine": target_ver}
 
     # Рантайм 4.0.x ждёт скины МАССИВОМ вида
     #   [{ "name": "default", "attachments": { "<слот>": { "<имя>": {...} } } }]
@@ -68,7 +81,7 @@ def convert(data: dict) -> dict:
             continue
 
         slots = anim.get("slots")
-        if isinstance(slots, dict):
+        if isinstance(slots, dict) and not native_4x:
             for entry in slots.values():
                 if isinstance(entry, dict) and "color" in entry:
                     # порядок ключей сохраняем: 4.x ждёт rgba рядом с attachment
@@ -82,7 +95,7 @@ def convert(data: dict) -> dict:
                     entry.update(rebuilt)
 
         transform = anim.get("transform")
-        if isinstance(transform, list):
+        if isinstance(transform, list) and not native_4x:
             for item in transform:
                 if isinstance(item, dict) and "bone" not in item:
                     name = item.get("name")

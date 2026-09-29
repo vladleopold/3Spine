@@ -939,8 +939,11 @@ def main() -> None:
                 wjobs = []
                 used = set()
                 for (p, out_spine, ver, rel) in jobs:
-                    if str(ver or "").startswith("4"):
-                        continue          # 4.x рантайм играет свои данные как есть
+                    # 4.x больше не пропускаем: конвертер держит данные 4.x в их
+                    # СВОЕМ формате (цвет слота в 4.1 снова "color", физика на
+                    # месте) и только чинит скины-объекты. Раньше здесь стоял
+                    # `continue` для версий 4.x, из-за чего 3Oasks не получал
+                    # web-JSON вообще, а на сайте не оставалось ни одной карточки.
                     stem = os.path.splitext(os.path.basename(p))[0]
                     if stem in used:
                         stem = rel[:-5].replace("/", "_")
