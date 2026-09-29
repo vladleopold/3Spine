@@ -107,6 +107,7 @@ def convert(data: dict) -> dict:
 
     out["_кривых_исправлено"] = 0
     _fix_curves(out)
+    _fix_curve_widths(out)
     out.pop("_кривых_исправлено", None)
 
     return out
@@ -134,7 +135,15 @@ def _fix_curves(node) -> int:
     fixed = 0
     if isinstance(node, dict):
         curve = node.get("curve")
-        if (isinstance(curve, (int, float)) and not isinstance(curve, bool)
+        if isinstance(curve, str):
+            # 3.x помечал «ступенчатую» интерполяцию строкой. Рантайм 4.x про
+            # любой непустой curve читает как массив чисел, строка даёт
+            # undefined → NaN в позе → пустая карточка. Заменяем на bezier
+            # [0,0,0,0]: значение держится до конца интервала и прыгает на
+            # следующем кадре — визуально та же ступенька.
+            node["curve"] = [0, 0, 0, 0]
+            fixed += 1
+        elif (isinstance(curve, (int, float)) and not isinstance(curve, bool)
                 and "c2" in node and "c3" in node and "c4" in node):
             node["curve"] = [curve, node["c2"], node["c3"], node["c4"]]
             for key in ("c2", "c3", "c4"):
@@ -145,6 +154,53 @@ def _fix_curves(node) -> int:
     elif isinstance(node, list):
         for value in node:
             fixed += _fix_curves(value)
+    return fixed
+
+
+# Сколько значений в таймлайне: в 4.x на каждое значение — свои четыре числа
+# кривой (readCurve читает curve[value << 2 .. +3]). В 3.x кривая одна на весь
+# кадр, поэтому для многозначных таймлайнов её надо продублировать.
+_TIMELINE_VALUES = {
+    "rotate": 1, "transform": 1, "deform": 1, "ik": 1, "attachment": 0,
+    "drawOrder": 0, "event": 0, "path": 2,
+    "translate": 2, "scale": 2, "shear": 2,
+    "rgba": 4, "color": 4,
+}
+
+
+def _fix_curve_widths(data) -> int:
+    """Дублирует кривую на каждое значение таймлайна (иначе вторая половина
+    bezier читается как undefined → NaN в позе → карточка пустая)."""
+    fixed = 0
+    for anim in (data.get("animations") or {}).values():
+        if not isinstance(anim, dict):
+            continue
+        groups = (
+            (anim.get("bones") or {}, None),
+            (anim.get("slots") or {}, None),
+        )
+        for group, _ in groups:
+            for timelines in group.values():
+                if not isinstance(timelines, dict):
+                    continue
+                for kind, keys in timelines.items():
+                    n = _TIMELINE_VALUES.get(kind)
+                    if not n or not isinstance(keys, list):
+                        continue
+                    for key in keys:
+                        if not isinstance(key, dict):
+                            continue
+                        curve = key.get("curve")
+                        if isinstance(curve, list) and len(curve) == 4 and n > 1:
+                            key["curve"] = curve * n
+                            fixed += 1
+        for attach, keyed in (anim.get("deform") or {}).items():
+            for keyed2 in (keyed or {}).values():
+                for keys in (keyed2 or {}).values():
+                    for key in (keys or []):
+                        if isinstance(key, dict) and isinstance(key.get("curve"), list) \
+                                and len(key["curve"]) == 4:
+                            fixed += 0  # деформация — одно значение, без дублей
     return fixed
 
 
