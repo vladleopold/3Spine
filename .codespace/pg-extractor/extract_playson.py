@@ -214,6 +214,7 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
             print("  res/spine %s: не нашлось страниц" % folder)
             continue
         names = []
+        seen_names = []
         # В res/spine/ скелет лежит не обязательно как .json: в сейве это
         # atlas + skel/bin + текстуры. Поэтому берём всё, что не атлас и не
         # картинка, и расширение выводим из данных, а не из логического пути.
@@ -227,6 +228,7 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
             elif low.endswith(".skel") or low.endswith(".bin"):
                 stem = stem.rsplit(".", 1)[0]
             name = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem)
+            seen_names.append("%s%s" % (name, " [уже есть]" if name in done else ""))
             if not name or name in done:
                 continue
             skel = get(base + files)
@@ -252,6 +254,8 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
                           "bytes": sum(len(b) for _, b in page_blobs)})
             done.add(name)
             names.append(name)
+        print("  res/spine %s: кандидаты %s"
+              % (folder, ", ".join(seen_names[:8]) or "нет"))
         if names:
             print("  res/spine %s: %d пар (%s)"
                   % (folder, len(names), ", ".join(names[:6])))
