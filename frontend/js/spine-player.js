@@ -406,7 +406,9 @@
     st.last = now;
     // apply() только применяет позу; время двигает update()
     if (st.state) { st.state.update(st.dt); st.state.apply(st.skeleton); }
-    st.skeleton.update(st.dt);
+    // В 4.1+ у скелета нет update(): там поза целиком считается в
+    // updateWorldTransform. Вызываем то, что есть, — иначе 4.x-игры падают.
+    if (typeof st.skeleton.update === "function") st.skeleton.update(st.dt);
     st.skeleton.updateWorldTransform(0);
     st.g2.clearRect(0, 0, st.cssW || st.canvas.width, st.cssH || st.canvas.height);
     st.renderer.draw(st.skeleton);
@@ -472,7 +474,7 @@
                 }
                 for (var f = 0; f < 20; f++) {                 // промотка до видимого кадра
                   if (st.state) { st.state.update(0.016); st.state.apply(sk); }
-                  sk.update(0.016);
+                  if (typeof sk.update === "function") sk.update(0.016);
                   sk.updateWorldTransform(0);
                 }
                 // Фитим по позе после промотки: в покое геометрия может лежать
