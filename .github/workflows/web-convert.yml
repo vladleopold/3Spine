@@ -152,11 +152,48 @@ jobs:
           echo "input.zip собран из Playson-пар: $(unzip -l input.zip | tail -1)"
           echo "PLAYSAON=1" >> "$GITHUB_ENV"
 
+      # ── PragmaticPlay: UHT-экстрактор ─────────────────────────────────────
+      # У PG нет отдельных .skel/.atlas: скелеты лежат в пакетах ресурсов как
+      # {"type":"UHTSpine","data":{"spineJSON": base64(Spine JSON)}}, атлас — как
+      # UIAtlas.spriteList, текстуры — как type:Texture + data:image/png;base64.
+      # Поэтому обычный путь «ищем .atlas/.skel» на этих играх всегда пустой.
+      - name: PragmaticPlay UHT — экстрактор Spine-пар
+        id: pguht
+        if: ${{ always() && steps.mode.outputs.mode == 'url' }}
+        continue-on-error: true
+        env:
+          URL: ${{ steps.mode.outputs.url }}
+        run: |
+          set -uo pipefail
+          echo "pairs=0" >> "$GITHUB_OUTPUT"
+          SYM=$(printf '%s' "$URL" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
+          case "$SYM" in vs*) ;; *) echo "не PragmaticPlay (символ '${SYM:-пусто}') — пропускаю"; exit 0 ;; esac
+          case "$URL" in *demogamesfree.pragmaticplay.net*|*pragmaticplay.net*) ;; *) echo "хост не pragmaticplay — пропускаю"; exit 0 ;; esac
+          OUT="$RUNNER_TEMP/pg_uht"
+          rm -rf "$OUT"
+          SYMBOL="$SYM" OUT_DIR="$OUT" PLATFORMS=desktop MAIN_MAX=70 GAME_MAX=11 GUI_RES_MAX=3 \
+            bash .codespace/pg-extractor/find-uht-assets.sh "$SYM" 2>&1 | tail -40 || true
+          N=$(find "$OUT/extracted/spine" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+          echo "PragmaticPlay $SYM: проектов $N"
+          if [ "$N" -eq 0 ]; then
+            echo "::warning::UHT-экстрактор не нашёл Spine-скелетов"
+            exit 0
+          fi
+          rm -f input.zip
+          mkdir -p pg_out
+          cp -R "$OUT/extracted/spine" pg_out/
+          cp -R "$OUT/extracted/textures" pg_out/ 2>/dev/null || true
+          python3 .codespace/pg-extractor/make_previews_index.py "$PWD/pg_out" || true
+          ( cd pg_out && zip -qr "$GITHUB_WORKSPACE/input.zip" . )
+          echo "input.zip собран из PragmaticPlay-пар: $(unzip -l input.zip | tail -1)"
+          echo "PLAYSAON=1" >> "$GITHUB_ENV"
+          echo "pairs=$N" >> "$GITHUB_OUTPUT"
+
       # ── Node-захват (URL-режим) ────────────────────────────────────────────
       # Python-путь выше не трогаем: его бюджеты (55с/75с) — предел здоровья.
       # Это запасной headless-сейвер, он только дополняет выборку и отчёт.
       - name: Headless saver → ZIP + saver-report.json (URL-режим)
-        if: ${{ steps.mode.outputs.mode == 'url' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') }}
+        if: ${{ steps.mode.outputs.mode == 'url' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') && steps.pguht.outputs.pairs == '0' }}
         continue-on-error: true
         env:
           URLS: ${{ steps.mode.outputs.url }}
