@@ -420,6 +420,9 @@
           if (!ok && st.host === host) {
             if (window.console && console.warn) {
               console.warn("spine-player:", key, (lastErr && lastErr.message) || "не удалось");
+              if (lastErr && lastErr.stack && window.console.debug) {
+                console.debug("spine-player stack:", lastErr.stack);
+              }
             }
             stop();
           }
