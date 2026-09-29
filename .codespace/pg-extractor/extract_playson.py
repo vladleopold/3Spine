@@ -214,19 +214,31 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
             print("  res/spine %s: не нашлось страниц" % folder)
             continue
         names = []
+        # В res/spine/ скелет лежит не обязательно как .json: в сейве это
+        # atlas + skel/bin + текстуры. Поэтому берём всё, что не атлас и не
+        # картинка, и расширение выводим из данных, а не из логического пути.
         for files, lp in sorted(items):
-            if not lp.endswith(".json"):
+            low = lp.lower()
+            if low.endswith(".atlas") or low.endswith(".png"):
                 continue
-            name = lp[:-len(".json")].rsplit("/", 1)[-1]
-            name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
-            if name in done:
+            stem = lp.rsplit("/", 1)[-1]
+            if low.endswith(".json"):
+                stem = stem[:-len(".json")]
+            elif low.endswith(".skel") or low.endswith(".bin"):
+                stem = stem.rsplit(".", 1)[0]
+            name = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem)
+            if not name or name in done:
                 continue
             skel = get(base + files)
             if not skel:
+                print("  res/spine %s: скелет %s не скачался" % (folder, files))
                 continue
             kind = spine_kind(skel)
             if not kind:
-                continue
+                kind = low.rsplit(".", 1)[-1] if "." in low else "bin"
+                if kind not in ("json", "skel"):
+                    print("  res/spine %s: %s не похож на скелет" % (folder, files))
+                    continue
             d = spine_root / name
             d.mkdir(parents=True, exist_ok=True)
             (d / (name + "." + kind)).write_bytes(skel)
