@@ -606,6 +606,16 @@
     };
   }
 
+  // Слоты с вложением, у которого нашёлся регион в атласе: без него карточка
+  // пустая, хотя вложение формально есть.
+  function sk0slots(sk) {
+    var n = 0;
+    ((sk && sk.slots) || []).forEach(function (s) {
+      if (s.attachment && s.attachment.region) n += 1;
+    });
+    return n;
+  }
+
   function debug() {
     if (st.skeleton && !st.world) {
       var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, n = 0;
@@ -627,6 +637,10 @@
       трек: st.state && st.state.getCurrent(0)
         ? st.state.getCurrent(0).animation.name
         : (st.anims && st.anims[0] ? st.anims[0].name : null),
+      анимаций: (st.anims || []).length,
+      анимации: (st.anims || []).slice(0, 3).map(function (a) { return a.name; }).join(","),
+      трекЖивой: !!(st.state && st.state.getCurrent(0)),
+      сРегионом: (sk0slots(sk) || []),
       время: st.state && st.state.getCurrent(0)
         ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
         : null,
