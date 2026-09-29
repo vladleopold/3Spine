@@ -90,6 +90,7 @@
     st.liftedTried = false;
     st.lifted = false;
     st.patched = 0;
+    st.verdict = null;
   }
 
   // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
@@ -425,6 +426,17 @@
     }
     // пусто на всём прогреве — анимация в этих данных не играется
     if (st.frames < WARMUP + 90) return false;
+    // Снимок позы на момент вердикта: stop() обнуляет скелет, а по этому
+    // снимку видно, был ли контент (вложения с регионами) в кадре.
+    st.verdict = {
+      слотов: (st.skeleton && st.skeleton.slots || []).length,
+      сВложением: (st.skeleton && st.skeleton.slots || []).filter(function (s) { return !!s.attachment; }).length,
+      сРегионом: sk0slots(st.skeleton),
+      вердикт: st.verdict || null,
+      трек: st.state && st.state.getCurrent(0) ? st.state.getCurrent(0).animation.name : null,
+      анимаций: (st.anims || []).length,
+      фит: st.fitInfo || null
+    };
     return true;
   }
 
@@ -641,6 +653,7 @@
       анимации: (st.anims || []).slice(0, 3).map(function (a) { return a.name; }).join(","),
       трекЖивой: !!(st.state && st.state.getCurrent(0)),
       сРегионом: sk0slots(st.skeleton),
+      вердикт: st.verdict || null,
       время: st.state && st.state.getCurrent(0)
         ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
         : null,
