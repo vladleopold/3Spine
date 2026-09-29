@@ -235,6 +235,15 @@ def convert_file(src: str, dst: str) -> dict:
     return stats
 
 
+def iter_anims(data: dict):
+    """Анимации в 3.x — объект {имя: {...}}, в 4.x — массив. Счётчики зовут
+    функцию на сырых данных, где вид может быть любым."""
+    anims = data.get("animations") or []
+    if isinstance(anims, dict):
+        return list(anims.values())
+    return [a for a in anims if isinstance(a, dict)]
+
+
 def count_issues(data: dict) -> dict:
     """Сколько всего 3.8-цветовых таймлайнов и сколько слотов с нулевой альфой."""
     colors = 0
@@ -245,7 +254,7 @@ def count_issues(data: dict) -> dict:
         rgba = hex_to_rgba(slot.get("color", "ffffffff"))
         if rgba and rgba[3] == 0:
             transparent += 1
-    for anim in (data.get("animations") or {}).values():
+    for anim in iter_anims(data):
         if not isinstance(anim, dict):
             continue
         for entry in (anim.get("slots") or {}).values():
@@ -257,7 +266,7 @@ def count_issues(data: dict) -> dict:
 
 def count_rgba(data: dict) -> int:
     total = 0
-    for anim in (data.get("animations") or {}).values():
+    for anim in iter_anims(data):
         if not isinstance(anim, dict):
             continue
         for entry in (anim.get("slots") or {}).values():
