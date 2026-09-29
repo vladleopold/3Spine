@@ -171,7 +171,7 @@ jobs:
           case "$URL" in *demogamesfree.pragmaticplay.net*|*pragmaticplay.net*) ;; *) echo "хост не pragmaticplay — пропускаю"; exit 0 ;; esac
           OUT="$RUNNER_TEMP/pg_uht"
           rm -rf "$OUT"
-          SYMBOL="$SYM" OUT_DIR="$OUT" PLATFORMS=desktop MAIN_MAX=70 GAME_MAX=11 GUI_RES_MAX=3 \
+          SYMBOL="$SYM" OUT_DIR="$OUT" PLATFORMS=desktop \
             bash .codespace/pg-extractor/find-uht-assets.sh "$SYM" 2>&1 | tail -40 || true
           N=$(find "$OUT/extracted/spine" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
           echo "PragmaticPlay $SYM: проектов $N"

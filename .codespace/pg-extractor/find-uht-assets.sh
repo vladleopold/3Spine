@@ -4,19 +4,17 @@
 # Usage: ./find-uht-assets.sh <gameSymbol>
 # Env:
 #   OUT_DIR       default ./uht-assets/<symbol>
-#   MAIN_MAX      default 50  (UHTSpine often in 023+ / 036+)
-#   GAME_MAX      default 12
-#   GUI_RES_MAX   default 8
+#   SKIP_NA       default 3   (столько подряд 404 подряд → серия кончилась)
+#   HARD_MAX      default 200 (потолок перебора, страховка от бесконечного цикла)
 #   PLATFORMS     default "desktop mobile"
 #                 (some games put UHTSpine only under mobile/, e.g. vswaysdragden)
 set -euo pipefail
 
 SYMBOL="${1:?Usage: $0 <gameSymbol>  e.g. vswaysdragden}"
 OUT_DIR="${OUT_DIR:-./uht-assets/${SYMBOL}}"
-MAIN_MAX="${MAIN_MAX:-50}"
-GAME_MAX="${GAME_MAX:-12}"
-GUI_RES_MAX="${GUI_RES_MAX:-8}"
 PLATFORMS="${PLATFORMS:-desktop mobile}"
+SKIP_NA="${SKIP_NA:-3}"
+HARD_MAX="${HARD_MAX:-200}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTRACTOR="${SCRIPT_DIR}/extract_pragmatic_uht.py"
 ROOT="https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games/vs/${SYMBOL}"
@@ -24,7 +22,7 @@ ROOT="https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games/v
 log() { echo "[uht-ci] $*"; }
 
 mkdir -p "${OUT_DIR}/resources"
-log "Symbol=${SYMBOL}  platforms=${PLATFORMS}  main=0..${MAIN_MAX}"
+log "Symbol=${SYMBOL}  platforms=${PLATFORMS}  серии идут до ${SKIP_NA} подряд 404 (потолок ${HARD_MAX})"
 
 download() {
   local platform="$1" rel="$2"
@@ -47,30 +45,38 @@ download() {
 
 ok=0
 fail=0
+# Число пакетов у каждой игры своё (у vs20wraanu — 71 main_resources, у других
+# бывает 40, а бывает и 120). Раньше стоял жёсткий *_MAX, и у игр с бо́льшим
+# числом пакетов часть ассетов просто не докачивалась. Теперь перебираем, пока
+# идут файлы, и останавливаемся после SKIP_NA подряд идущих 404.
+SKIP_NA="${SKIP_NA:-3}"
+HARD_MAX="${HARD_MAX:-200}"
+
+# Скачивает game/<stem><NNN>.json по возрастанию, пока файлы не кончатся.
+pull_series() {
+  local platform="$1" stem="$2" limit="$3"
+  local miss=0 i=0
+  while [[ $i -le $limit ]]; do
+    local ii; ii=$(printf '%03d' "$i")
+    if download "$platform" "game/${stem}${ii}.json"; then
+      ok=$((ok+1)); miss=0
+    else
+      fail=$((fail+1)); miss=$((miss+1))
+      [[ $miss -ge $SKIP_NA ]] && break
+    fi
+    i=$((i+1))
+  done
+}
+
 for platform in $PLATFORMS; do
   for rel in client/resources.json client/game.json; do
     download "$platform" "$rel" && ok=$((ok+1)) || fail=$((fail+1))
   done
-  i=0
-  while [[ $i -le $GAME_MAX ]]; do
-    ii=$(printf '%03d' "$i")
-    download "$platform" "game/game${ii}.json" && ok=$((ok+1)) || fail=$((fail+1))
-    download "$platform" "game/GUI${ii}.json" && ok=$((ok+1)) || fail=$((fail+1))
-    i=$((i+1))
-  done
-  i=0
-  while [[ $i -le $MAIN_MAX ]]; do
-    ii=$(printf '%03d' "$i")
-    download "$platform" "game/main_resources${ii}.json" && ok=$((ok+1)) || fail=$((fail+1))
-    i=$((i+1))
-  done
-  i=0
-  while [[ $i -le $GUI_RES_MAX ]]; do
-    ii=$(printf '%03d' "$i")
-    download "$platform" "game/GUI_resources${ii}.json" && ok=$((ok+1)) || fail=$((fail+1))
-    download "$platform" "game/other_resources${ii}.json" && ok=$((ok+1)) || fail=$((fail+1))
-    i=$((i+1))
-  done
+  pull_series "$platform" game      "$HARD_MAX"
+  pull_series "$platform" GUI       "$HARD_MAX"
+  pull_series "$platform" main_resources  "$HARD_MAX"
+  pull_series "$platform" GUI_resources   "$HARD_MAX"
+  pull_series "$platform" other_resources "$HARD_MAX"
 done
 log "Downloaded ok=${ok} missing/empty=${fail}"
 
@@ -107,6 +113,6 @@ if [[ "$n_tex" -eq 0 && "$n_spine" -eq 0 ]]; then
   exit 1
 fi
 if [[ "$n_spine" -eq 0 ]]; then
-  log "WARNING: no UHTSpine (try MAIN_MAX=60 or PLATFORMS='desktop mobile')"
+  log "WARNING: no UHTSpine (попробуй SKIP_NA=6 или PLATFORMS='desktop mobile')"
 fi
 exit 0
