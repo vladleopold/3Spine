@@ -68,7 +68,8 @@ pull_series() {
   done
 }
 
-for platform in $PLATFORMS; do
+fetch_platform() {
+  local platform="$1"
   for rel in client/resources.json client/game.json; do
     download "$platform" "$rel" && ok=$((ok+1)) || fail=$((fail+1))
   done
@@ -77,6 +78,38 @@ for platform in $PLATFORMS; do
   pull_series "$platform" main_resources  "$HARD_MAX"
   pull_series "$platform" GUI_resources   "$HARD_MAX"
   pull_series "$platform" other_resources "$HARD_MAX"
+}
+
+# Сколько скачанных пакетов содержат скелеты.
+count_spine_packs() {
+  local n=0 f
+  while IFS= read -r f; do
+    if grep -q 'UHTSpine' "$f" 2>/dev/null && grep -q 'spineJSON' "$f" 2>/dev/null; then
+      n=$((n+1))
+    fi
+  done < <(find "${OUT_DIR}/resources" -name '*.json' -size +200c 2>/dev/null)
+  printf '%s' "$n"
+}
+
+# Платформы перебираем по очереди и берём первую, где вообще есть скелеты:
+# у части игр пакеты лежат только под mobile/ (например vswaysdragden), и
+# жёстко прописанная в workflow платформа молча давала 0 скелетов.
+# Если скелетов нет — повторяем проход глубже (SKIP_NA=6): серия могла
+# прерваться на пропуске, и докачиваем только недостающее (download кэширует).
+tried_deep=0
+for platform in $PLATFORMS; do
+  fetch_platform "$platform"
+  n_spine_packs=$(count_spine_packs)
+  if [[ "$n_spine_packs" -eq 0 && "$tried_deep" -eq 0 ]]; then
+    log "платформа ${platform}: spineJSON не найдено — повторяю глубже (SKIP_NA=6)"
+    saved_skip="$SKIP_NA"; SKIP_NA=6; tried_deep=1
+    fetch_platform "$platform"
+    SKIP_NA="$saved_skip"
+    n_spine_packs=$(count_spine_packs)
+  fi
+  log "платформа ${platform}: пакетов со spineJSON=${n_spine_packs} (всего ok=${ok} miss=${fail})"
+  [[ "$n_spine_packs" -gt 0 ]] && break
+  log "платформа ${platform}: скелетов нет, пробую следующую"
 done
 log "Downloaded ok=${ok} missing/empty=${fail}"
 

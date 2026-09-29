@@ -171,8 +171,9 @@ jobs:
           case "$URL" in *demogamesfree.pragmaticplay.net*|*pragmaticplay.net*) ;; *) echo "хост не pragmaticplay — пропускаю"; exit 0 ;; esac
           OUT="$RUNNER_TEMP/pg_uht"
           rm -rf "$OUT"
-          SYMBOL="$SYM" OUT_DIR="$OUT" PLATFORMS=desktop \
-            bash .codespace/pg-extractor/find-uht-assets.sh "$SYM" 2>&1 | tail -40 || true
+          # скелеты (у части игр пакеты только под mobile/), и докачивает глубже.
+          SYMBOL="$SYM" OUT_DIR="$OUT" \
+            bash .codespace/pg-extractor/find-uht-assets.sh "$SYM" 2>&1 | tail -60 || true
           N=$(find "$OUT/extracted/spine" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
           echo "PragmaticPlay $SYM: проектов $N"
           if [ "$N" -eq 0 ]; then

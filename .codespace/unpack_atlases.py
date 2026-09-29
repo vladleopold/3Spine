@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
@@ -321,6 +322,69 @@ def open_image(path: str):
     return Image.open(path).convert('RGBA')      # повторно — чтобы выбросить понятную ошибку
 
 
+_TREE_INDEX_LOCK = threading.Lock()
+_TREE_INDEX: Dict[str, str] = {}          # case-insensitive basename -> абсолютный путь
+_TREE_INDEX_DIRS: Optional[Tuple[str, ...]] = None
+
+
+def _build_tree_index(roots: List[str]) -> Dict[str, str]:
+    """Индекс всех картинок распакованного дерева по basename (в нижнем регистре).
+
+    Node-сейвер раскладывает текстуры по путям сайта, а не рядом с .atlas,
+    поэтому ищем по всему дереву, а не только в каталоге атласа.
+    """
+    index: Dict[str, str] = {}
+    exts = tuple(e.lower() for e in IMAGE_EXTS)
+    for root_dir in roots:
+        if not root_dir or not os.path.isdir(root_dir):
+            continue
+        root_dir = os.path.abspath(root_dir)
+        for root, dirs, fnames in os.walk(root_dir):
+            dirs[:] = [d for d in dirs
+                       if d not in ('.git', '__pycache__', 'node_modules', 'output', 'build', 'dist', 'unpacked')
+                       and not d.startswith('output')
+                       and d not in ('images', 'android', 'ios', 'desktop')]  # не индексируем уже готовую распаковку
+            for fn in fnames:
+                if not fn.lower().endswith(exts):
+                    continue
+                key = fn.lower()
+                full = os.path.join(root, fn)
+                prev = index.get(key)
+                # при коллизии базовых имён оставляем самую «глубокую» (упакованную) копию
+                if prev is None or len(full) > len(prev):
+                    index[key] = full
+    return index
+
+
+def _get_tree_index(roots: List[str]) -> Dict[str, str]:
+    global _TREE_INDEX, _TREE_INDEX_DIRS
+    key = tuple(sorted(os.path.abspath(r) for r in roots if r and os.path.isdir(r)))
+    with _TREE_INDEX_LOCK:
+        if _TREE_INDEX_DIRS == key and _TREE_INDEX:
+            return _TREE_INDEX
+        _TREE_INDEX = _build_tree_index(roots)
+        _TREE_INDEX_DIRS = key
+        return _TREE_INDEX
+
+
+def _tree_index_find(tree_index: Dict[str, str], image_name: str) -> Optional[str]:
+    """Точный basename -> basename без расширения (с любым расширением)."""
+    if not image_name or not tree_index:
+        return None
+    base = os.path.basename(image_name.replace('\\', '/').strip('/'))
+    if not base:
+        return None
+    hit = tree_index.get(base.lower())
+    if hit:
+        return hit
+    stem, ext = os.path.splitext(base)
+    if stem:
+        hit = tree_index.get((stem + ext).lower())
+        if hit:
+            return hit
+    return None
+
+
 def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str, out_dir: str, dest_name: Optional[str] = None, trim: Optional[Dict[str, Any]] = None, page_images: Optional[List[str]] = None, rotate_mode: str = "90", image_renames: Optional[Dict[str, List[str]]] = None, extra_image_dirs: Optional[List[str]] = None) -> None:
     strategy = choose_strategy(atlas_path, pages)
     atlas_name = os.path.splitext(os.path.basename(atlas_path))[0]
@@ -372,6 +436,8 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
         for d in extra_image_dirs:
             if d and os.path.isdir(d) and d not in search_dirs:
                 search_dirs.append(d)
+    # Глобальный индекс по basename — ловит текстуры, пришедшие по путям сайта
+    tree_index = _get_tree_index(search_dirs)
 
     def _find_image(image_name):
         """Search for image_name across all search_dirs, trying multiple extensions."""
@@ -401,8 +467,10 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
                     candidate = os.path.join(search_dir, cand)
                     if os.path.exists(candidate):
                         return candidate
-        return None
+        # 5. Ничего рядом нет — ищем по всему распакованному дереву (Node-пути сайта)
+        return _tree_index_find(tree_index, image_name)
 
+    found_any = False
     for page in pages:
         image_name = page.get('image') or ''
         if image_name == '':
@@ -445,6 +513,7 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
             print("  Warning: cannot identify image file %r (%s) (skipping page)"
                   % (os.path.basename(image_path), str(_ie)[:60]))
             continue
+        found_any = True
         try:
             img.load()
         except Exception:
@@ -551,6 +620,16 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
             cropped.save(out_path)
             written += 1
 
+    # Текстуры не нашлись — оставляем каталог, но помечаем его .keep,
+    # чтобы images/<имя атласа>/ существовал всегда и был виден в дереве.
+    if not found_any:
+        try:
+            if dest_base and os.path.isdir(dest_base) and not os.listdir(dest_base):
+                with open(os.path.join(dest_base, '.keep'), 'w') as _kf:
+                    _kf.write('')
+        except OSError:
+            pass
+
     return written
 
 
@@ -627,6 +706,8 @@ def unpack(src: str, output: Optional[str] = None, rotate_mode: str = "90", rena
     # Auto-discover image directories to help texture lookup
     auto_dirs = _collect_image_dirs(src)
     all_extra_dirs = list(auto_dirs)
+    if src not in all_extra_dirs:
+        all_extra_dirs.insert(0, src)
     if extra_image_dirs:
         for d in extra_image_dirs:
             if d and d not in all_extra_dirs:
