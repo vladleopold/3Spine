@@ -162,7 +162,9 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
     folders = {}
     for files, path in recs:
         lp = logical(path)
-        if "/res/spine/" not in lp:
+        # логический путь начинается с res/spine/, поэтому ищем вхождением без
+        # требования ведущего слэша
+        if "res/spine/" not in lp:
             continue
         folder = lp.rsplit("/", 1)[0]
         folders.setdefault(folder, []).append((files, lp))
