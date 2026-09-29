@@ -253,6 +253,20 @@
     if (skeleton.updateWorldTransform) skeleton.updateWorldTransform(0);
     var b = pickBounds(skeleton);
     if (!b || !(b.width > 0) || !(b.height > 0)) return;
+    // Границы из данных скелетонаописывают только «дизайн» размера, а реальная
+    // графика (особенно меши) часто вылезает за них — тогда карточка рисует
+    // вьюпорт, где ничего нет, и выглядит пустой. Поэтому берём объединение:
+    // расширяем рамку, но никогда не сжимаем её.
+    var c = contentBounds(skeleton);
+    if (c && c.width > 0 && c.height > 0) {
+      var x0 = Math.min(b.x, c.x), y0 = Math.min(b.y, c.y);
+      var x1 = Math.max(b.x + b.width, c.x + c.width);
+      var y1 = Math.max(b.y + b.height, c.y + c.height);
+      if (x1 - x0 > b.width + 1 || y1 - y0 > b.height + 1) {
+        b = { x: x0, y: y0, width: x1 - x0, height: y1 - y0,
+              src: b.src + "+содержимое" };
+      }
+    }
     var pad = 10;
     var w = st.cssW || st.canvas.width, h = st.cssH || st.canvas.height;
     var scale = Math.min((w - pad * 2) / b.width, (h - pad * 2) / b.height);
@@ -369,6 +383,10 @@
     st.skeleton.updateWorldTransform(0);
     st.g2.clearRect(0, 0, st.cssW || st.canvas.width, st.cssH || st.canvas.height);
     st.renderer.draw(st.skeleton);
+    // Первый кадр рисуется ещё без развёрнутых вершин мешей, поэтому рамку
+    // пересчитываем один раз уже после отрисовки — иначе объединение с
+    // содержимым ничего не добавит.
+    if (!st.refit) { st.refit = 1; fit(st.skeleton); }
     if (tooEmpty()) {
       // пусто на всём прогреве: говорим карточке почему, чтобы она не молчала
       st.reason = st.patched
