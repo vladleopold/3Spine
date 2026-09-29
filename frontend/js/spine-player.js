@@ -218,26 +218,7 @@
   // Границы по факту отрисованного: у части скелетов data.bounds пустой или
   // вырожденный (0x0, 2x2), а координаты костей уходят в минус — без нормального
   // фита картинка рисуется за пределами канваса и карточка остаётся пустой.
-  function contentBounds(skeleton) {
-    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, any = false;
-    function take(x, y, w, h) {
-      any = true;
-      if (x - w < minx) minx = x - w;
-      if (y - h < miny) miny = y - h;
-      if (x + w > maxx) maxx = x + w;
-      if (y + h > maxy) maxy = y + h;
-    }
-    function point(x, y) {
-      any = true;
-      if (x < minx) minx = x;
-      if (x > maxx) maxx = x;
-      if (y < miny) miny = y;
-      if (y > maxy) maxy = y;
-    }
-    skeleton.bones.forEach(function (bone) {
-      take(bone.worldX, bone.worldY, 0, 0);
-    });
-    // Рамка по ВСЕМ вложениям скина, а не по текущей позе. Поза в момент фита
+  // Рамка по ВСЕМ вложениям скина, а не по текущей позе. Поза в момент фита
   // часто ещё пустая (контент появляется только из таймлайна attachment), и
   // тогда рамка схлопывается до точек костей. Скин известен заранее, поэтому
   // считаем его сами: рамка получается верной с первого кадра.
@@ -288,7 +269,26 @@
     return { x: minx, y: miny, width: maxx - minx, height: maxy - miny };
   }
 
-  // Локальная точка вложения → координаты скелета через трансформ кости.
+  function contentBounds(skeleton) {
+    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, any = false;
+    function take(x, y, w, h) {
+      any = true;
+      if (x - w < minx) minx = x - w;
+      if (y - h < miny) miny = y - h;
+      if (x + w > maxx) maxx = x + w;
+      if (y + h > maxy) maxy = y + h;
+    }
+    function point(x, y) {
+      any = true;
+      if (x < minx) minx = x;
+      if (x > maxx) maxx = x;
+      if (y < miny) miny = y;
+      if (y > maxy) maxy = y;
+    }
+    skeleton.bones.forEach(function (bone) {
+      take(bone.worldX, bone.worldY, 0, 0);
+    });
+    // Локальная точка вложения → координаты скелета через трансформ кости.
     // Рантайм считает мировые вершины меша только во время отрисовки и в
     // само вложение их не кладёт, поэтому для границ считаем сами: иначе у
     // скелетов, собранных из одних мешей, рамка выходит по точкам костей,
