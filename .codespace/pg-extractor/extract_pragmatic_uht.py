@@ -272,7 +272,7 @@ def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
         start = m.start()
         depth = 0
         in_str = esc = False
-        end = start
+        end = None
         for i, ch in enumerate(text[start:], start):
             if in_str:
                 if esc:
@@ -291,6 +291,18 @@ def iter_json_objects(text: str) -> Iterator[dict[str, Any]]:
                 if depth == 0:
                     end = i + 1
                     break
+        if end is None:
+            # Файл-фрагмент обрывается на последнем объекте: закрываем скобки сами,
+            # иначе теряется целый UIAtlas (так терялись регионы initial_gumble*).
+            for pad in range(1, 8):
+                try:
+                    obj = json.loads(text[start:] + "}" * pad)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict) and "type" in obj:
+                    yield obj
+                break
+            break
         try:
             obj = json.loads(text[start:end])
             if isinstance(obj, dict) and "type" in obj:
@@ -341,6 +353,163 @@ def safe_name(name: str) -> str:
     name = re.sub(r"_SkeletonData$", "", name, flags=re.I)
     name = re.sub(r"_Material$", "", name, flags=re.I)
     return re.sub(r"[^\w.\-]+", "_", name).strip("_") or "unnamed"
+
+
+def atlas_region_name(raw: str) -> str:
+    """Имя региона в .atlas (схема отдаёт ключи с префиксом s_)."""
+    return raw[2:] if raw.startswith("s_") else raw
+
+
+def spine_image_refs(skel: dict) -> set[str]:
+    """Имена регионов, на которые ссылается скелет.
+
+    У PragmaticPlay вложения часто без поля image: тогда регион называется
+    именем самого вложения (ключом в attachments). Тип вложения определяется
+    по набору ключей — у mesh есть vertices/uvs, у point bone, у path length.
+    """
+    refs: set[str] = set()
+    skins = skel.get("skins") or []
+    if isinstance(skins, dict):
+        skins = [{"attachments": a} for a in skins.values()]
+    for skin in skins:
+        if not isinstance(skin, dict):
+            continue
+        slots = skin.get("attachments")
+        if not isinstance(slots, dict):
+            continue
+        for attachments in slots.values():
+            if not isinstance(attachments, dict):
+                continue
+            for att_name, att in attachments.items():
+                if not isinstance(att, dict):
+                    continue
+                img = att.get("image")
+                if isinstance(img, str) and img:
+                    refs.add(img)
+                    continue
+                if any(k in att for k in ("vertices", "uvs", "vertexCount", "bone", "length")):
+                    continue                       # не картинка
+                path = att.get("path")
+                refs.add(path if isinstance(path, str) and path else str(att_name))
+    return refs
+
+
+def build_region_pool(atlases: dict[str, dict]) -> dict[str, tuple[str, str]]:
+    """Имя региона игры → guid атласа, где он лежит (общий пул текстур)."""
+    pool: dict[str, tuple[str, str]] = {}
+    for guid, meta in atlases.items():
+        sprites = meta.get("sprite_list") or {}
+        if not isinstance(sprites, dict):
+            continue
+        for raw, info in sprites.items():
+            if not isinstance(info, dict):
+                continue
+            name = atlas_region_name(str(raw))
+            if name and name not in pool:
+                pool[name] = (guid, str(raw))
+    return pool
+
+
+def locate_page(tex_guid: str, tex_dir: Path, symbol: str) -> Path | None:
+    """Файл страницы атласа: сперва локально, потом с CDN."""
+    if not tex_guid:
+        return None
+    for ext in (".png", ".jpg", ".ktx"):
+        for cand in sorted(tex_dir.glob(f"{tex_guid}{ext}")):
+            if cand.stat().st_size > 32:
+                return cand
+    for ext in ("png", "jpg"):
+        url = f"{cdn_res(symbol)}/{tex_guid}.{ext}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CI-Bot"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+            if len(data) > 32:
+                dest = tex_dir / f"{tex_guid}{ext}"
+                dest.write_bytes(data)
+                return dest
+        except Exception:
+            pass
+    return None
+
+
+def extend_atlas_with_pool(
+    skel: dict,
+    pages: list[tuple[str, int, int, dict]],
+    page_index: dict[str, int],
+    atlases: dict[str, dict],
+    pool: dict[str, tuple[str, str]],
+    linked: set[str],
+    tex_dir: Path,
+    proj: Path,
+    name: str,
+    symbol: str,
+) -> tuple[list[str], list[str], int]:
+    """Достраивает атлас регионами из общего пула текстур игры.
+
+    Прагматик переиспользует картинки между скелетонами: например
+    wran_symbols_overlay и wran_gamble_screen_in_fx ссылаются на overlay_fxNNN,
+    которые лежат в атласе wran_character_overlay_fx. Такие карточки раньше не
+    играли («не хватает N картинок в атласе»). Теперь недостающие регионы
+    берутся из соседних UIAtlas: если страница уже подключена — регионы
+    дописываются в неё (новая страница не создаётся), иначе страница копируется
+    в папку проекта. Возвращает (новые страницы, ненайденные регионы, сколько
+    регионов добрали).
+    """
+    have: set[str] = set()
+    for _pn, _w, _h, sprites in pages:
+        have.update(atlas_region_name(str(r)) for r in sprites)
+    need = sorted(spine_image_refs(skel) - have)
+    if not need:
+        return [], [], 0
+
+    by_atlas: dict[str, list[str]] = {}
+    lost: list[str] = []
+    for region in need:
+        hit = pool.get(region)
+        if not hit:
+            lost.append(region)
+            continue
+        by_atlas.setdefault(hit[0], []).append(region)
+
+    added_pages: list[str] = []
+    added_regions = 0
+    # сначала те атласы, что уже привязаны к проекту, — у них страница уже есть
+    for aguid in sorted(by_atlas, key=lambda g: (g not in linked, g)):
+        sprites_all = atlases[aguid].get("sprite_list") or {}
+        want = set(by_atlas[aguid])
+        subset = {
+            raw: info for raw, info in sprites_all.items()
+            if isinstance(info, dict) and atlas_region_name(str(raw)) in want
+        }
+        got = {atlas_region_name(str(r)) for r in subset}
+        lost.extend(sorted(want - got))
+        if not subset:
+            continue
+        tex_guid = atlases[aguid].get("texture_guid") or ""
+        if tex_guid in page_index:
+            pages[page_index[tex_guid]][3].update(subset)     # страница уже есть
+        else:
+            cand = locate_page(tex_guid, tex_dir, symbol)
+            if cand is None:
+                lost.extend(sorted(got))
+                continue
+            ext = cand.suffix if cand.suffix.lower() in (".png", ".jpg") else ".png"
+            if ext == ".png" and not cand.suffix.lower() == ".png":
+                png = cand.with_suffix(".png")
+                if png.exists():
+                    cand = png
+            page_name = f"{name}x{len(added_pages) + 1}{ext}"
+            dest = proj / page_name
+            dest.write_bytes(cand.read_bytes())
+            size = png_size(dest.read_bytes()) or ktx_size(dest.read_bytes()) or (1, 1)
+            pages.append((page_name, size[0], size[1], subset))
+            page_index[tex_guid] = len(pages) - 1
+            added_pages.append(page_name)
+            print(f"KEEP: spine/{name}/{page_name} (страница общего пула из {cand.name}, "
+                  f"{dest.stat().st_size} bytes, {len(subset)} регионов)")
+        added_regions += len(subset)
+    return added_pages, lost, added_regions
 
 
 def sprite_list_to_atlas_multi(pages: list[tuple[str, int, int, dict]]) -> str:
@@ -484,10 +653,12 @@ def write_spine_projects(
     links: dict[str, set[str]],
     tex_dir: Path,
     out_dir: Path,
+    symbol: str,
 ) -> list[dict]:
     out_dir.mkdir(parents=True, exist_ok=True)
     used: set[str] = set()
     projects: list[dict] = []
+    pool = build_region_pool(atlases)
 
     for guid, sp in spines.items():
         name = safe_name(sp["name"])
@@ -524,32 +695,16 @@ def write_spine_projects(
 
         if atlas_metas:
             pages: list[tuple[str, int, int, dict]] = []
+            page_index: dict[str, int] = {}
             for idx, meta in enumerate(atlas_metas, 1):
                 tex_guid = meta.get("texture_guid") or ""
                 sprites = meta.get("sprite_list") or {}
                 if not sprites:
                     continue
-                cand = None
-                for c in tex_dir.glob(f"{tex_guid}.*"):
-                    cand = c
-                    break
-                if cand is None and tex_guid:
-                    for ext in ("png", "jpg"):
-                        url = f"{cdn_res(getattr(write_spine_projects, '_symbol', 'vs20olympgate'))}/{tex_guid}.{ext}"
-                        try:
-                            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CI-Bot"})
-                            with urllib.request.urlopen(req, timeout=20) as resp:
-                                data = resp.read()
-                            if len(data) > 32:
-                                cand = tex_dir / f"{tex_guid}.{ext}"
-                                cand.write_bytes(data)
-                                break
-                        except Exception:
-                            pass
+                cand = locate_page(tex_guid, tex_dir, symbol)
                 if cand is None:
                     continue                      # страница не нашлась — пропускаем
                 ext = cand.suffix if cand.suffix.lower() in (".png", ".jpg", ".ktx") else ".png"
-                # .ktx отдаём как есть, но размер страницы всё равно нужен атласу
                 page_name = f"{name}{ext}" if idx == 1 else f"{name}{idx}{ext}"
                 dest = proj / page_name
                 dest.write_bytes(cand.read_bytes())
@@ -558,8 +713,24 @@ def write_spine_projects(
                 if sz:
                     page_w, page_h = sz
                 pages.append((page_name, page_w, page_h, sprites))
+                page_index[tex_guid] = len(pages) - 1
                 info["png"] = True
                 print(f"KEEP: spine/{name}/{page_name} (Spine page PNG, {dest.stat().st_size} bytes)")
+
+            # Скелет может брать картинки не из своего UIAtlas, а из общего пула
+            # игры — дописываем недостающие регионы и их страницы автоматически.
+            if pages:
+                added, lost, n_regions = extend_atlas_with_pool(
+                    sp["skeleton"], pages, page_index, atlases, pool,
+                    links.get(guid, set()), tex_dir, proj, name, symbol,
+                )
+                if n_regions:
+                    print(f"::notice::spine/{name}: добираем {n_regions} регионов из общего пула "
+                          f"игры (+{len(added)} страниц)")
+                if lost:
+                    print(f"::warning::spine/{name}: {len(lost)} картинок не нашлось ни в одном "
+                          f"атласе игры: {', '.join(lost[:8])}")
+
             if pages:
                 ap = proj / f"{name}.atlas"
                 ap.write_text(sprite_list_to_atlas_multi(pages), encoding="utf-8")
@@ -615,8 +786,9 @@ def main() -> int:
 
     print("")
     print("=== 3/3 SPINE PROJECTS (json + atlas + png when available) ===")
-    write_spine_projects._symbol = args.symbol  # type: ignore[attr-defined]
-    projects = write_spine_projects(spines, atlases, links, tex_dir, args.out / "spine")
+    projects = write_spine_projects(
+        spines, atlases, links, tex_dir, args.out / "spine", args.symbol
+    )
 
     pairs = sum(1 for p in projects if p["json"] and p["atlas"] and p["png"])
     json_only = sum(1 for p in projects if p["json"] and not p["atlas"])
