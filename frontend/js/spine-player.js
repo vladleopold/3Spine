@@ -308,7 +308,7 @@
   function fit(skeleton) {
     if (skeleton.updateWorldTransform) skeleton.updateWorldTransform(0);
     var b = pickBounds(skeleton);
-    if (!b || !(b.width > 0) || !(b.height > 0)) return;
+    if (!b || !(b.width > 0) || !(b.height > 0)) return false;
     // Границы из данных скелетонаописывают только «дизайн» размера, а реальная
     // графика (особенно меши) часто вылезает за них — тогда карточка рисует
     // вьюпорт, где ничего нет, и выглядит пустой. Поэтому берём объединение:
@@ -326,7 +326,7 @@
     var pad = 10;
     var w = st.cssW || st.canvas.width, h = st.cssH || st.canvas.height;
     var scale = Math.min((w - pad * 2) / b.width, (h - pad * 2) / b.height);
-    if (!isFinite(scale) || scale <= 0) return;
+    if (!isFinite(scale) || scale <= 0) return false;
     skeleton.scaleX = scale;
     skeleton.scaleY = scale;
     skeleton.x = (w - b.width * scale) / 2 - num(b.x, 0) * scale;
@@ -334,6 +334,7 @@
     // Страховка от NaN в сдвиге: с ним холст не рисует вообще ничего.
     if (!isFinite(skeleton.x)) skeleton.x = (w - b.width * scale) / 2;
     if (!isFinite(skeleton.y)) skeleton.y = (h - b.height * scale) / 2;
+    st.fitOk = true;
     st.fitInfo = {
       w: Math.round(b.width), h: Math.round(b.height),
       x: Math.round(num(b.x, 0)), y: Math.round(num(b.y, 0)),
@@ -341,6 +342,7 @@
       сдвиг: Math.round(skeleton.x) + "," + Math.round(skeleton.y),
       источник: b.src || "по содержимому"
     };
+    return true;
   }
 
   // Пустой кадр — значит рантайм не тянет эти данные: лучше статичное
@@ -439,17 +441,16 @@
     }
     // пусто на всём прогреве — анимация в этих данных не играется
     if (st.frames < WARMUP + 90) return false;
-    // Снимок позы на момент вердикта: stop() обнуляет скелет, а по этому
-    // снимку видно, был ли контент (вложения с регионами) в кадре.
-    st.verdict = {
-      слотов: (st.skeleton && st.skeleton.slots || []).length,
-      сВложением: (st.skeleton && st.skeleton.slots || []).filter(function (s) { return !!s.attachment; }).length,
-      сРегионом: sk0slots(st.skeleton),
-      вердикт: st.verdict || null,
-      трек: st.state && st.state.getCurrent(0) ? st.state.getCurrent(0).animation.name : null,
-      анимаций: (st.anims || []).length,
-      фит: st.fitInfo || null
-    };
+    // Рамка считается по позе на момент фита, а в этот момент поза бывает ещё
+    // пустой: контент у многих карточек появляется только из таймлайнов
+    // анимации (attachment/rgba). Тогда рамка схлопывается до точек костей,
+    // масштаб уезжает, и графика рисуется за вьюпортом. Поэтому один раз
+    // пересчитываем рамку по текущей позе и даём новый прогрев — карточка
+    // чинит свою рамку сама, без знания о данных.
+    if (!st.refitTried) {
+      st.refitTried = true;
+      if (fit(st.skeleton)) { st.frames = WARMUP; return false; }
+    }
     return true;
   }
 
