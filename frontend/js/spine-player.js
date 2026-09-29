@@ -519,6 +519,10 @@
         ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
         : null,
       dt: Math.round(st.dt * 1000) / 1000, идёт: !!st.raf,
+      картинки: (st.images || []).map(function (im) {
+        return (im.naturalWidth || im.width || 0) + "x" + (im.naturalHeight || im.height || 0);
+      }),
+      подменено: st.patched || 0, причина: st.reason || "",
       страниц: st.pages,
       регионов: st.regions, имена: st.names,
       стекстур: st.textured,
