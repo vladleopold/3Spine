@@ -640,7 +640,7 @@
       анимаций: (st.anims || []).length,
       анимации: (st.anims || []).slice(0, 3).map(function (a) { return a.name; }).join(","),
       трекЖивой: !!(st.state && st.state.getCurrent(0)),
-      сРегионом: (sk0slots(sk) || []),
+      сРегионом: sk0slots(st.skeleton),
       время: st.state && st.state.getCurrent(0)
         ? Math.round(st.state.getCurrent(0).trackTime * 100) / 100
         : null,
