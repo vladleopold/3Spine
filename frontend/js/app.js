@@ -965,7 +965,23 @@
         card.addEventListener("mouseenter", () => {
           window.SpineCardPlayer.play(shot, collectSpineAssets(it), fillAnims);
         });
-        card.addEventListener("mouseleave", () => window.SpineCardPlayer.stop());
+        card.addEventListener("mouseleave", () => {
+          window.SpineCardPlayer.stop();
+          // если анимацию играть не вышло (пустая заглушка или не хватает
+          // картинок в атласе) — подписываем это внизу карточки
+          const note = window.SpineCardPlayer.note();
+          let line = info.querySelector(".pv-note");
+          if (note) {
+            if (!line) {
+              line = document.createElement("div");
+              line.className = "pv-note";
+              info.appendChild(line);
+            }
+            line.textContent = note;
+          } else if (line) {
+            line.remove();
+          }
+        });
       }
 
       const pngFile = z.file(it.png);

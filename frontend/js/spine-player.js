@@ -336,13 +336,21 @@
     st.skeleton.updateWorldTransform(0);
     st.g2.clearRect(0, 0, st.cssW || st.canvas.width, st.cssH || st.canvas.height);
     st.renderer.draw(st.skeleton);
-    if (tooEmpty()) { stop(); return; }
+    if (tooEmpty()) {
+      // пусто на всём прогреве: говорим карточке почему, чтобы она не молчала
+      st.reason = st.patched
+        ? "не хватает " + st.patched + " картинок в атласе — показан кадр"
+        : "в игре это пустая заглушка — показан кадр";
+      stop();
+      return;
+    }
     st.raf = requestAnimationFrame(loop);
   }
 
   // assets: { json, atlas, pages: [Blob, ...] }
   function play(host, assetsPromise, onReady) {
     stop();
+    st.reason = "";
     st.host = host;
     Promise.resolve(assetsPromise).then(function (assets) {
       if (!assets || st.host !== host) return;
@@ -521,5 +529,5 @@
     };
   }
 
-  window.SpineCardPlayer = { probe: probe, play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug };
+  window.SpineCardPlayer = { probe: probe, play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug, note: function () { return st.reason || ""; } };
 })();

@@ -444,6 +444,7 @@ canvas.pv-live {
   white-space: nowrap;
 }
 
+.pv-note { color: #b98a3c; }
 .pv-anim {
   margin-top: 4px;
   max-width: 100%;
