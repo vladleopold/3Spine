@@ -748,17 +748,19 @@
   function buildIndexes() {
     const byPath = new Map();
     const byBase = new Map();
+    const sizeByPath = new Map();
     Object.keys(resultZip.files).forEach((name) => {
       const f = resultZip.files[name];
       if (f.dir) return;
       byPath.set(name, f);
+      sizeByPath.set(name, (f._data && f._data.uncompressedSize) || 0);
       const key = baseOf(name).toLowerCase();
       if (IMG_RE.test(key)) {
         if (!byBase.has(key)) byBase.set(key, []);
         byBase.get(key).push(name);
       }
     });
-    return { byPath, byBase };
+    return { byPath, byBase, sizeByPath };
   }
 
   function atlasPagePaths(atlasPath, idx) {
@@ -872,7 +874,15 @@
     if (!atlas) throw new Error("в архиве нет атласа");
     const pages = await atlasPagePaths(atlas, idx);
     if (!pages.length) throw new Error("в архиве нет листов атласа");
-    if (pages.length > 8) throw new Error("в атласе слишком много листов");
+    // У PragmaticPlay атлас часто многостраничный (wran_sansational — 17 листов),
+    // поэтому лимит выше привычных 8. Мягкий потолок по весу отсекает совсем
+    // безнадёжные случаи, чтобы не уронить вкладку.
+    const MAX_PAGES = 32;
+    if (pages.length > MAX_PAGES) throw new Error("в атласе слишком много листов (" + pages.length + ")");
+    const totalBytes = pages.reduce((s, n) => s + (idx.sizeByPath.get(n) || 0), 0);
+    if (totalBytes > 64 * 1024 * 1024) {
+      throw new Error("страницы атласа слишком тяжёлые (" + Math.round(totalBytes / 1048576) + " МБ)");
+    }
     const [json, atlasText, pageBlobs] = await Promise.all([
       idx.byPath.get(skel).async("string"),
       idx.byPath.get(atlas).async("string"),
