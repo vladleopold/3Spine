@@ -227,27 +227,56 @@
       if (x + w > maxx) maxx = x + w;
       if (y + h > maxy) maxy = y + h;
     }
+    function point(x, y) {
+      any = true;
+      if (x < minx) minx = x;
+      if (x > maxx) maxx = x;
+      if (y < miny) miny = y;
+      if (y > maxy) maxy = y;
+    }
     skeleton.bones.forEach(function (bone) {
       take(bone.worldX, bone.worldY, 0, 0);
     });
+    // Локальная точка вложения → координаты скелета через трансформ кости.
+    // Рантайм считает мировые вершины меша только во время отрисовки и в
+    // само вложение их не кладёт, поэтому для границ считаем сами: иначе у
+    // скелетов, собранных из одних мешей, рамка выходит по точкам костей,
+    // графика рисуется за её пределами, и карточка выглядит пустой.
+    var pt = [0, 0];
+    function toWorld(sl, x, y) {
+      var b = sl.bone;
+      if (!b) { pt[0] = x; pt[1] = y; return; }
+      pt[0] = x * b.a + y * b.c + b.worldX;
+      pt[1] = x * b.b + y * b.d + b.worldY;
+    }
     skeleton.slots.forEach(function (sl) {
       var a = sl.attachment; if (!a) return;
-      // В 4.x мировые вершины меша живут в самом вложении, а не в слоте:
-      // только по ним видно, где реально лежит картинка (у скелетов из одних
-      // mesh-вложений скелет целиком состоит из точек костей).
       var wv = a.worldVertices;
       if (wv && wv.length > 3) {
-        for (var i = 0; i + 1 < wv.length; i += 2) {
-          var vx = wv[i], vy = wv[i + 1];
-          if (vx < minx) minx = vx; if (vx > maxx) maxx = vx;
-          if (vy < miny) miny = vy; if (vy > maxy) maxy = vy;
-          any = true;
-        }
+        for (var i = 0; i + 1 < wv.length; i += 2) point(wv[i], wv[i + 1]);
         return;
       }
       var reg = a.region;
       var rw = (reg && reg.region && reg.region.width) || a.width || 0;
       var rh = (reg && reg.region && reg.region.height) || a.height || 0;
+      if (rw > 0 && rh > 0) {
+        // Прямоугольник картинки с её собственным поворотом и сдвигом.
+        var cs = Math.cos(a.rotation || 0), sn = Math.sin(a.rotation || 0);
+        var sx = a.scaleX == null ? 1 : a.scaleX, sy = a.scaleY == null ? 1 : a.scaleY;
+        var ax = a.x || 0, ay = a.y || 0;
+        var cs4 = [[0, 0], [rw, 0], [rw, rh], [0, rh]];
+        for (var k = 0; k < 4; k++) {
+          var lx = cs4[k][0] * sx, ly = cs4[k][1] * sy;
+          toWorld(sl, lx * cs - ly * sn + ax, lx * sn + ly * cs + ay);
+          point(pt[0], pt[1]);
+        }
+        return;
+      }
+      var vs = a.vertices;
+      if (vs && vs.length > 1) {
+        for (var j = 0; j + 1 < vs.length; j += 2) { toWorld(sl, vs[j], vs[j + 1]); point(pt[0], pt[1]); }
+        return;
+      }
       if (sl.bone) take(sl.bone.worldX, sl.bone.worldY, rw / 2, rh / 2);
     });
     if (!any) return null;
