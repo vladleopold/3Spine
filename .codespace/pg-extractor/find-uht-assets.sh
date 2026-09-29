@@ -17,7 +17,29 @@ SKIP_NA="${SKIP_NA:-3}"
 HARD_MAX="${HARD_MAX:-200}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTRACTOR="${SCRIPT_DIR}/extract_pragmatic_uht.py"
-ROOT="https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games/vs/${SYMBOL}"
+GAMES_ROOT="https://demogamesfree.pragmaticplay.net/gs2c/common/v3/games-html5/games"
+ROOT="${GAMES_ROOT}/${FOLDER:-vs}/${SYMBOL}"
+
+# У каждой игры своя папка games/<FOLDER>/<SYMBOL> (у слотов это vs, но символы
+# бывают с другим префиксом). Раньше «vs» был зашит, и игра с другим префиксом
+# молча давала 0 ассетов. Теперь определяем папку сами, пробуя варианты.
+pick_root() {
+  local cand url code
+  local -a cands=("${FOLDER:-}" "${SYMBOL:0:2}" "vs" "${SYMBOL}")
+  for cand in "${cands[@]}"; do
+    [[ -z "$cand" ]] && continue
+    url="${GAMES_ROOT}/${cand}/${SYMBOL}/desktop/client/game.json"
+    code=$(curl -sL -o /dev/null -w '%{http_code}' -A "Mozilla/5.0 CI-Bot" \
+                 --connect-timeout 15 --max-time 60 "$url" || echo 000)
+    log "проба папки ${cand}: HTTP ${code}"
+    if [[ "$code" == "200" ]]; then
+      ROOT="${GAMES_ROOT}/${cand}/${SYMBOL}"
+      log "папка игры: ${cand}"
+      return 0
+    fi
+  done
+  return 1
+}
 
 log() { echo "[uht-ci] $*"; }
 
@@ -45,6 +67,10 @@ download() {
 
 ok=0
 fail=0
+if ! pick_root; then
+  log "не нашёл папку игры ни для одного варианта: ${SYMBOL}"
+  exit 1
+fi
 # Число пакетов у каждой игры своё (у vs20wraanu — 71 main_resources, у других
 # бывает 40, а бывает и 120). Раньше стоял жёсткий *_MAX, и у игр с бо́льшим
 # числом пакетов часть ассетов просто не докачивалась. Теперь перебираем, пока

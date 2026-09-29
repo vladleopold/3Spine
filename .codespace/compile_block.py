@@ -270,7 +270,10 @@ def main() -> None:
         preview_probe: dict = {}          # версия редактора -> "ok"/"fail"
         preview_state = {"count": 0, "bytes": 0, "rendered": 0}
         plock = threading.Lock()
-        pv_max = int(os.environ.get("SPINE_PREVIEW_MAX", "24"))
+        # SPINE_PREVIEW_MAX — потолок на ЧИСЛО превью. 0 или пусто = не ограничиваем:
+        # единственный предохранитель тогда — pv_total (общий вес превью в байтах).
+        # Жёсткая цифра молча выбрасывала последние наборы у игр с 25+ скелетами.
+        pv_max = int(os.environ.get("SPINE_PREVIEW_MAX", "0") or 0)
         pv_render_max = int(os.environ.get("SPINE_PREVIEW_RENDER_MAX", "8"))
         pv_per_version = int(os.environ.get("SPINE_PREVIEW_PER_VERSION", "4"))
         pv_bytes = int(os.environ.get("SPINE_PREVIEW_BYTES", str(512 * 1024)))
@@ -541,7 +544,7 @@ def main() -> None:
             flat = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)[:60] or "preview"
             with plock:
                 n = preview_state["count"]
-                if n >= pv_max or preview_state["bytes"] >= pv_total:
+                if (pv_max and n >= pv_max) or preview_state["bytes"] >= pv_total:
                     return ""
             atlas_png = _atlas_png(spine_path)
             if not atlas_png:

@@ -255,7 +255,9 @@ def main():
         repair_on = os.environ.get("SPINE_REPAIR", "0") == "1"
         repair_budget = int(os.environ.get("SPINE_REPAIR_BUDGET", "1500"))
         repair_min_conf = float(os.environ.get("SPINE_REPAIR_MIN_CONFIDENCE", "0.5"))
-        repair_max_files = int(os.environ.get("SPINE_REPAIR_MAX_FILES", "60"))
+        # 0 = без потолка по числу файлов: ограничивает время (repair_time_limit).
+        # Жёсткая цифра молча оставляла битые скелеты невылеченными в больших играх.
+        repair_max_files = int(os.environ.get("SPINE_REPAIR_MAX_FILES", "0") or 0)
         repair_time_limit = float(os.environ.get("SPINE_REPAIR_TIME_LIMIT", "30"))
         repair_allow_tail = float(os.environ.get("SPINE_REPAIR_ALLOW_TAIL", "0"))
         repair_deadline = time.monotonic() + repair_time_limit
@@ -280,7 +282,7 @@ def main():
             if repair_tool is None:
                 return ""
             with repair_state_lock:
-                if repair_state["left"] <= 0:
+                if repair_state["left"] == 0:
                     return ""
                 if time.monotonic() > repair_deadline:
                     repair_state.setdefault("skipped_time", 0)

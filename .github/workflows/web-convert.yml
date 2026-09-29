@@ -166,9 +166,11 @@ jobs:
         run: |
           set -uo pipefail
           echo "pairs=0" >> "$GITHUB_OUTPUT"
+          case "$URL" in *pragmaticplay.net*) ;; *) echo "хост не pragmaticplay — пропускаю"; exit 0 ;; esac
+          # Символ берём из любых известных параметров. Префикс символа не
+          # проверяем: папку игры скрипт определяет сам пробой.
           SYM=$(printf '%s' "$URL" | sed -n 's/.*[?&]gameSymbol=\([^&]*\).*/\1/p; s/.*[?&]symbol=\([^&]*\).*/\1/p' | head -1)
-          case "$SYM" in vs*) ;; *) echo "не PragmaticPlay (символ '${SYM:-пусто}') — пропускаю"; exit 0 ;; esac
-          case "$URL" in *demogamesfree.pragmaticplay.net*|*pragmaticplay.net*) ;; *) echo "хост не pragmaticplay — пропускаю"; exit 0 ;; esac
+          if [ -z "$SYM" ]; then echo "в URL нет gameSymbol/symbol — пропускаю"; exit 0; fi
           OUT="$RUNNER_TEMP/pg_uht"
           rm -rf "$OUT"
           # скелеты (у части игр пакеты только под mobile/), и докачивает глубже.
