@@ -187,12 +187,7 @@ jobs:
           # в лимит GitHub (100 МБ) при пуше на results.
           # Подрезаем самые тяжёлые проекты, если всё равно не влезаем.
           CAP_MB=85
-          while [ "$(du -sm pg_out/spine | cut -f1)" -gt "$CAP_MB" ]; do
-            big=$(du -sm pg_out/spine/* | sort -rn | head -1 | cut -f2-)
-            [ -n "$big" ] || break
-            echo "::warning::подрезаю $(basename "$big") — общий размер выше ${CAP_MB} МБ"
-            rm -rf "$big"
-          done
+          python3 .codespace/pg-extractor/trim_spine.py pg_out/spine "$CAP_MB"
           N=$(find pg_out/spine -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
           if [ "$N" -eq 0 ]; then
             echo "::warning::после подрезки не осталось ни одного проекта"
