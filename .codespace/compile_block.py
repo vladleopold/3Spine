@@ -13,6 +13,7 @@ import sys
 import json
 import shutil
 import zipfile
+import struct
 import subprocess
 import hashlib
 import tempfile
@@ -36,6 +37,24 @@ def parallel_limit(count: int) -> int:
     if not raw.isdigit() or int(raw) <= 0:
         raw = str(max(2, (os.cpu_count() or 4)))
     return max(1, min(int(raw), max(1, count)))
+
+
+def skel_version(path: str) -> str:
+    """Версия движка из заголовка бинарного .skel.
+
+    Формат 4.x: 8 байт хеша, затем длина строки одним байтом и сама строка
+    вида «4.1.17» — то есть версия лежит в начале файла текстом. Без этого
+    шага редактор открывает файл своей текущей версией и ругается «Error
+    reading binary skeleton data, version: 4.1.17», то есть весь бинарный
+    набор уходит в никуда.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+    except OSError:
+        return ""
+    m = re.search(rb"(?<![\d.])(\d{1,2}\.\d{1,2}(?:\.\d{1,3})?)(?![\d.])", head[8:24])
+    return m.group(1).decode("ascii") if m else ""
 
 
 def version_candidates(ver: str) -> list[str]:
@@ -659,14 +678,41 @@ def main() -> None:
 
                 def skel_to_json(job):
                     skel, outjson, rel = job
-                    cmd = base_cmd() + ["-i", skel, "-o", outjson, "-e", "json"]
+                    # Версию движка берём из самого бинарника и просим лаунчер
+                    # именно её; иначе редактор откажется читать файл.
+                    ver = skel_version(skel)
+                    vers = version_candidates(ver) if ver else [""]
+                    if ver and "." in ver:
+                        # лаунчер умеет и семейство («4.1»), если точного патча нет
+                        fam = ".".join(ver.split(".")[:2])
+                        if fam not in vers:
+                            vers.append(fam)
+                    plans = [base_cmd() + (["-u", v] if v else [])
+                             + ["-i", skel, "-o", outjson, "-e", "json"]
+                             for v in vers]
+                    # запасной вариант: текущий редактор без -u
+                    plans.append(base_cmd() + ["-i", skel, "-o", outjson, "-e", "json"])
+                    last = 0
                     for attempt in range(3):
-                        rc = run(cmd)
-                        if os.path.exists(outjson) and os.path.getsize(outjson) > 0:
-                            return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(outjson)} (skel→json, редактор)"
+                        for cmd in plans:
+                            if os.path.exists(outjson) and os.path.getsize(outjson) > 0:
+                                return rel, True, (
+                                    f"compile-block: ✓ {rel} → {os.path.basename(outjson)} "
+                                    f"(skel→json, редактор {ver or 'текущий'})")
+                            used = cmd[cmd.index("-u") + 1] if "-u" in cmd else ""
+                            if used and not editor_installed(used) and attempt == 0:
+                                # первый запуск сам докачает редактор
+                                pass
+                            last = run(cmd)
+                            if os.path.exists(outjson) and os.path.getsize(outjson) > 0:
+                                return rel, True, (
+                                    f"compile-block: ✓ {rel} → {os.path.basename(outjson)} "
+                                    f"(skel→json, редактор {used or 'текущий'})")
                         if attempt < 2:
                             time.sleep(1.5 + attempt)
-                    return rel, False, f"compile-block: FAIL {rel} (skel→json): rc={rc}"
+                    return rel, False, (
+                        f"compile-block: FAIL {rel} (skel→json): rc={last} "
+                        f"(версии: {', '.join(v or 'текущая' for v in vers)})")
 
                 results = []
                 # Прогрев одного файла перед основным заходом — только если
