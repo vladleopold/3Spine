@@ -139,6 +139,9 @@ async def save(url: str, out_dir: Path, budget: int = 30000,
         if CHROME and os.path.exists(CHROME):
             kw["executable_path"] = CHROME
         cargs = ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
+        # с профилем браузер не создаётся, живёт только контекст; раньше из-за
+        # этого сейвер падал на browser.close() с UnboundLocalError и отдавал 0
+        browser = None
         if profile:
             # развёрнутая сессия: профиль переживает прогоны (куки, localStorage,
             # снятые блокировки) — сайт начинает доверять нас как обычному клиенту
@@ -325,7 +328,10 @@ async def save(url: str, out_dir: Path, budget: int = 30000,
             dst = out_dir / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(data)
-        await browser.close()
+        if browser is not None:
+            await browser.close()
+        else:
+            await ctx.close()
 
     # докачиваем то, что перечислил манифест, и страницы атласов
     extra = {}
