@@ -90,7 +90,6 @@
     st.liftedTried = false;
     st.lifted = false;
     st.patched = 0;
-    st.verdict = null;
   }
 
   // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
@@ -412,6 +411,20 @@
     return n;
   }
 
+  // Снимок позы на момент вердикта: stop() обнуляет скелет, а по снимку
+  // видно, был ли контент (вложения с регионами) в кадре.
+  function verdictShot() {
+    var slots = (st.skeleton && st.skeleton.slots) || [];
+    return {
+      слотов: slots.length,
+      сВложением: slots.filter(function (s) { return !!s.attachment; }).length,
+      сРегионом: sk0slots(st.skeleton),
+      трек: st.state && st.state.getCurrent(0) ? st.state.getCurrent(0).animation.name : null,
+      анимаций: (st.anims || []).length,
+      фит: st.fitInfo || null
+    };
+  }
+
   function tooEmpty() {
     if (st.saw) return false;             // хоть раз что-то нарисовалось
     st.frames = (st.frames || 0) + 1;
@@ -462,6 +475,7 @@
       st.reason = st.patched
         ? "не хватает " + st.patched + " картинок в атласе — показан кадр"
         : "в игре это пустая заглушка — показан кадр";
+      st.verdict = verdictShot();
       stop();
       return;
     }
