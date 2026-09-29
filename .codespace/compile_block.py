@@ -85,6 +85,24 @@ def run_all(fn, items, workers, label):
             run_all(fn, items[mid:], workers, label + " (2/2)")
 
 
+def _attach_web(items, web_dir):
+    """Проставляет в карточках путь к web-JSON, если он выгружен. Возвращает число."""
+    added = 0
+    if not web_dir or not os.path.isdir(web_dir):
+        return 0
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name") or os.path.splitext(os.path.basename(str(it.get("spine", ""))))[0]
+        if not name:
+            continue
+        cand = os.path.join(web_dir, name + ".json")
+        if os.path.isfile(cand):
+            it["web"] = "previews/web/" + name + ".json"
+            added += 1
+    return added
+
+
 def _web_index(src: str, web_dir: str) -> None:
     """Проставляет в previews/index.json путь к web-JSON, если он выгружен."""
     idx_path = os.path.join(src, "previews", "index.json")
@@ -99,17 +117,7 @@ def _web_index(src: str, web_dir: str) -> None:
     items = data.get("items") if isinstance(data, dict) else None
     if not isinstance(items, list):
         return
-    added = 0
-    for it in items:
-        if not isinstance(it, dict):
-            continue
-        name = it.get("name") or os.path.splitext(os.path.basename(str(it.get("spine", ""))))[0]
-        if not name:
-            continue
-        cand = os.path.join(web_dir, name + ".json")
-        if os.path.isfile(cand):
-            it["web"] = "previews/web/" + name + ".json"
-            added += 1
+    added = _attach_web(items, web_dir)
     if added:
         try:
             with open(idx_path, "w", encoding="utf-8") as f:
@@ -900,6 +908,11 @@ def main() -> None:
         if previews:
             try:
                 os.makedirs(preview_root, exist_ok=True)
+                # индекс переписывается целиком, поэтому web-JSON проставляем
+                # ещё раз — иначе финальный дамп затирает ключи из _web_index
+                nw = _attach_web(previews, os.path.join(src, "previews", "web"))
+                if nw:
+                    say(f"compile-block: web-JSON прописан в {nw} карточек (финальный индекс)")
                 with open(os.path.join(preview_root, "index.json"), "w", encoding="utf-8") as f:
                     json.dump({"items": previews}, f, ensure_ascii=False, indent=1)
                 print(f"compile-block: превью готово: {len(previews)}")
