@@ -87,6 +87,7 @@
     st.renderer = null;
     st.saw = false;
     st.frames = 0;
+    st.liftedTried = false;
     st.lifted = false;
     st.patched = 0;
   }
@@ -253,7 +254,7 @@
   function frameEmpty() {
     try {
       var d = st.g2.getImageData(0, 0, st.canvas.width, st.canvas.height).data;
-      for (var i = 3; i < d.length; i += 4 * 29) {
+      for (var i = 3; i < d.length; i += 4 * 11) {
         if (d[i] > 8) return false;
       }
       return true;
@@ -319,7 +320,13 @@
     st.frames = (st.frames || 0) + 1;
     if (st.frames < WARMUP) return false;
     if (!frameEmpty()) { st.saw = true; return false; }
-    if (!st.lifted) { st.lifted = liftInvisibleSlots() > 0; return false; }
+    if (!st.liftedTried) {
+      // поднимаем альфу один раз: если поднимать нечего, повторять бессмысленно
+      // и вердикт о пустом кадре никогда не выносится
+      st.liftedTried = true;
+      st.lifted = liftInvisibleSlots() > 0;
+      return false;
+    }
     // пусто на всём прогреве — анимация в этих данных не играется
     if (st.frames < WARMUP + 90) return false;
     return true;
