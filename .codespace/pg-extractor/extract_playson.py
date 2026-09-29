@@ -102,8 +102,14 @@ def atlas_pages(atlas: bytes) -> list[tuple[str, int, int]]:
     pages = []
     for i, ln in enumerate(lines[:-1]):
         head = ln.strip()
-        nxt = lines[i + 1].strip()
-        if not head or not nxt.startswith("size:"):
+        nxt_raw = lines[i + 1]
+        nxt = nxt_raw.strip()
+        # Блок страницы начинается с size: В КОЛОНКЕ 0, а у региона он же с
+        # отступом — иначе в res/spine атласах именем страницы считалась
+        # строка вида "xy: 2, 10". Плюс имя страницы не содержит ':'.
+        if not head or ":" in head:
+            continue
+        if nxt_raw[:1].isspace() or not nxt.startswith("size:"):
             continue
         try:
             w, h = (int(x) for x in nxt.split(":", 1)[1].split(",")[:2])
