@@ -237,7 +237,58 @@
     skeleton.bones.forEach(function (bone) {
       take(bone.worldX, bone.worldY, 0, 0);
     });
-    // Локальная точка вложения → координаты скелета через трансформ кости.
+    // Рамка по ВСЕМ вложениям скина, а не по текущей позе. Поза в момент фита
+  // часто ещё пустая (контент появляется только из таймлайна attachment), и
+  // тогда рамка схлопывается до точек костей. Скин известен заранее, поэтому
+  // считаем его сами: рамка получается верной с первого кадра.
+  function skinBounds(skeleton) {
+    var sd = skeleton.data;
+    var minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9, any = false;
+    function box(cx, cy, w, h) {
+      if (!(w > 0) || !(h > 0)) return;
+      any = true;
+      if (cx - w / 2 < minx) minx = cx - w / 2;
+      if (cx + w / 2 > maxx) maxx = cx + w / 2;
+      if (cy - h / 2 < miny) miny = cy - h / 2;
+      if (cy + h / 2 > maxy) maxy = cy + h / 2;
+    }
+    (sd.skins || []).forEach(function (skin) {
+      var att = (skin && skin.attachments) || {};
+      Object.keys(att).forEach(function (slotName) {
+        var sl = null;
+        for (var i = 0; i < skeleton.slots.length; i++) {
+          if (skeleton.slots[i].name === slotName) { sl = skeleton.slots[i]; break; }
+        }
+        var bone = sl && sl.bone;
+        var cx = bone ? bone.worldX : 0, cy = bone ? bone.worldY : 0;
+        Object.keys(att[slotName] || {}).forEach(function (nm) {
+          var a = att[slotName][nm] || {};
+          var reg = a.region;
+          var w = a.width || (reg && (reg.originalWidth || reg.width)) || 0;
+          var h = a.height || (reg && (reg.originalHeight || reg.height)) || 0;
+          var vs = a.vertices;
+          if ((!w || !h) && vs && vs.length > 2) {
+            var lx = 0, ly = 0;
+            for (var j = 0; j + 1 < vs.length; j += 2) {
+              if (vs[j] < lx) lx = vs[j];
+              if (vs[j] > w) w = vs[j];
+              if (vs[j + 1] < ly) ly = vs[j + 1];
+              if (vs[j + 1] > h) h = vs[j + 1];
+            }
+            w -= lx; h -= ly;
+          }
+          var sc = Math.abs((a.scaleX == null ? 1 : a.scaleX) * (bone && bone.scaleX || 1));
+          var sh = Math.abs((a.scaleY == null ? 1 : a.scaleY) * (bone && bone.scaleY || 1));
+          box(cx + (a.x || 0) * (bone && bone.a || 1), cy + (a.y || 0) * (bone && bone.d || 1),
+              Math.abs(w) * sc, Math.abs(h) * sh);
+        });
+      });
+    });
+    if (!any) return null;
+    return { x: minx, y: miny, width: maxx - minx, height: maxy - miny };
+  }
+
+  // Локальная точка вложения → координаты скелета через трансформ кости.
     // Рантайм считает мировые вершины меша только во время отрисовки и в
     // само вложение их не кладёт, поэтому для границ считаем сами: иначе у
     // скелетов, собранных из одних мешей, рамка выходит по точкам костей,
@@ -293,6 +344,14 @@
   function pickBounds(skeleton) {
     var d = skeleton.data;
     var c = contentBounds(skeleton);
+    var sk = skinBounds(skeleton);
+    if (sk) {                       // рамка по скину — всегда шире позы
+      c = c ? {
+        x: Math.min(c.x, sk.x), y: Math.min(c.y, sk.y),
+        width: Math.max(c.x + c.width, sk.x + sk.width) - Math.min(c.x, sk.x),
+        height: Math.max(c.y + c.height, sk.y + sk.height) - Math.min(c.y, sk.y)
+      } : sk;
+    }
     if (d.bounds && d.bounds.width > 1 && d.bounds.height > 1) {
       return { x: num(d.bounds.x, 0), y: num(d.bounds.y, 0),
                width: d.bounds.width, height: d.bounds.height, src: "data.bounds" };
