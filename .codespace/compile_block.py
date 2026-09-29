@@ -38,6 +38,26 @@ def parallel_limit(count: int) -> int:
     return max(1, min(int(raw), max(1, count)))
 
 
+def version_candidates(ver: str) -> list[str]:
+    """Варианты написания версии редактора.
+
+    В JSON PragmaticPlay версия записана как «3.7.9.1», а лаунчер знает только
+    «3.7.91» и на неизвестное написание отвечает 0x105 «The requested update
+    version does not exist». Поэтому после исходной строки пробуем варианты
+    со склейкой чисел хвоста: 3.7.9.1 → 3.7.91 → 3.79.1.
+    """
+    if not ver:
+        return []
+    out = [ver]
+    parts = ver.split(".")
+    if len(parts) >= 4 and all(p.isdigit() for p in parts):
+        for k in range(len(parts) - 2, 0, -1):
+            cand = ".".join(parts[:k] + ["".join(parts[k:])])
+            if cand not in out:
+                out.append(cand)
+    return out
+
+
 def per_batch() -> int:
     """Размер пачки. По умолчанию — сразу всё (0 = без разбиения)."""
     raw = env_int("SPINE_BATCH", 0)
@@ -742,33 +762,36 @@ def main() -> None:
                     # если в JSON указана версия — используем ровно её:
                     # подстановка «последней» (4.3.x) ломает 3.x-кривые и тянет
                     # лишнюю загрузку редактора
-                    if ver and not fallback:
-                        attempts = [base_cmd() + ["-u", ver] + tail] * 2
-                    else:
-                        attempts = [base_cmd() + tail] * 3
-                    if ver and not editor_installed(ver) and ver not in retried_versions:
-                        # первый запуск сам скачает нужную версию редактора
-                        retried_versions.add(ver)
-                        run(base_cmd() + ["-u", ver, "-i", p, "-o", out_spine, "-r"])
+                    vers = version_candidates(ver) if (ver and not fallback) else [""]
+                    # первый запуск сам скачает нужную версию редактора; если
+                    # написание из JSON лаунчер не знает (0x105) — идём к следующему
+                    for v in vers:
+                        if not v or editor_installed(v) or v in retried_versions:
+                            break
+                        retried_versions.add(v)
+                        run(base_cmd() + ["-u", v, "-i", p, "-o", out_spine, "-r"])
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             return rel, True, (f"compile-block: ✓ {rel} → "
-                                               f"{os.path.basename(out_spine)} (Spine {ver}, версия {ver})")
-                        if not editor_installed(ver):
-                            path = os.path.join(updates_dir(), ver)
+                                               f"{os.path.basename(out_spine)} (Spine {ver}, версия {v})")
+                        if not editor_installed(v):
+                            path = os.path.join(updates_dir(), v)
                             try:
                                 if os.path.exists(path):
                                     os.remove(path)
                             except OSError:
                                 pass
-                            broken_versions.add(ver)
-                            return rel, False, (f"compile-block: FAIL {rel}: не удалось загрузить "
-                                                f"редактор Spine {ver} (файл обновления повреждён)")
-                    if ver and editor_broken(ver):
-                        return rel, False, (f"compile-block: FAIL {rel}: редактор Spine {ver} "
-                                            f"не запускается (битое обновление), нужна версия {ver}")
+                            broken_versions.add(v)
+                            say(f"compile-block: {rel}: редактор {v} недоступен, "
+                                f"пробую другое написание версии")
+                            continue
+                        break
+                    plans = [v for v in vers if not (v and editor_broken(v))] or [""]
+                    attempts = [base_cmd() + (["-u", v] if v else []) + tail for v in plans]
+                    if len(plans) == 1:
+                        attempts = attempts * 2
                     rc = -1
                     for idx, cmd in enumerate(attempts):
-                        used = ("версия " + ver) if "-u" in cmd else "последняя"
+                        used = ("версия " + cmd[cmd.index("-u") + 1]) if "-u" in cmd else "последняя"
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             if os.environ.get("SPINE_PREVIEW", "1") == "1":
@@ -784,7 +807,9 @@ def main() -> None:
                     if alt:
                         say(f"compile-block: {rel}: редактор не принял JSON, пробую alt из другого движка")
                         tail2 = ["-i", alt, "-o", out_spine, "-r"]
-                        for cmd in [base_cmd() + ["-u", ver] + tail2, base_cmd() + tail2]:
+                        alt_cmds = [base_cmd() + ["-u", v] + tail2 for v in plans if v]
+                        alt_cmds.append(base_cmd() + tail2)
+                        for cmd in alt_cmds:
                             rc = run(cmd)
                             if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                                 if os.environ.get("SPINE_PREVIEW", "1") == "1":
@@ -824,7 +849,8 @@ def main() -> None:
                                     pass
                     except Exception as e:
                         print(f"compile-block: 4.x-конверсия не удалась: {e}")
-                    return rel, False, f"compile-block: FAIL {rel} (json→spine): rc={rc}"
+                    return rel, False, (f"compile-block: FAIL {rel} (json→spine): rc={rc} "
+                                        f"(версии: {', '.join(v or 'последняя' for v in plans)})")
 
                 results = [json_to_spine(jobs[0])]
                 rest = jobs[1:]
