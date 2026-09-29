@@ -228,30 +228,44 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
             elif low.endswith(".skel") or low.endswith(".bin"):
                 stem = stem.rsplit(".", 1)[0]
             name = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem)
-            seen_names.append("%s%s" % (name, " [уже есть]" if name in done else ""))
-            if not name or name in done:
+            if not name:
                 continue
+            # Имя может быть уже извлечено: те же 13 проектов лежат ещё и в
+            # физических папках с хешами, и там мы спарили скелет с АТЛАСОМ этой
+            # папки. Атлас из res/spine/ полный (в нём есть bet_bg_static,
+            # btn_play, ray, placeholder_qty_spins), поэтому для известного имени
+            # не пропускаем пару, а пересобираем её: скелет оставляем какой есть,
+            # атлас и страницы берём отсюда.
+            known = name in done
+            seen_names.append("%s%s" % (name, " [пересборка]" if known else ""))
             skel = get(base + files)
-            if not skel:
+            if not skel and not known:
                 print("  res/spine %s: скелет %s не скачался" % (folder, files))
                 continue
-            kind = spine_kind(skel)
-            if not kind:
-                kind = low.rsplit(".", 1)[-1] if "." in low else "bin"
-                if kind not in ("json", "skel"):
-                    print("  res/spine %s: %s не похож на скелет" % (folder, files))
-                    continue
+            kind = None
+            if skel:
+                kind = spine_kind(skel)
+                if not kind:
+                    kind = low.rsplit(".", 1)[-1] if "." in low else "bin"
+                    if kind not in ("json", "skel"):
+                        kind = None
             d = spine_root / name
             d.mkdir(parents=True, exist_ok=True)
-            (d / (name + "." + kind)).write_bytes(skel)
+            have = sorted(p.name for p in d.glob(name + ".json")) + \
+                   sorted(p.name for p in d.glob(name + ".skel"))
+            if not known and skel and kind and not have:
+                (d / (name + "." + kind)).write_bytes(skel)
+            if not have:
+                continue
             for pn, blob in page_blobs:
                 (textures / pn).write_bytes(blob)
             (d / (name + ".atlas")).write_bytes(
                 retarget_atlas(atlas_bytes, [pn for pn, _ in page_blobs]))
-            pairs.append({"name": name, "kind": kind, "atlas_source": atlases[0],
-                          "pages": [pn for pn, _ in page_blobs],
-                          "skeleton_source": files,
-                          "bytes": sum(len(b) for _, b in page_blobs)})
+            if not known:
+                pairs.append({"name": name, "kind": kind, "atlas_source": atlases[0],
+                              "pages": [pn for pn, _ in page_blobs],
+                              "skeleton_source": files,
+                              "bytes": sum(len(b) for _, b in page_blobs)})
             done.add(name)
             names.append(name)
         print("  res/spine %s: кандидаты %s"
