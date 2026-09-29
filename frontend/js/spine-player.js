@@ -157,7 +157,34 @@
     })();
     st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
     st.renderer = new ns.SkeletonRenderer(st.g2);
+    if (hasNonRegion(st.renderer, sd)) st.renderer.triangleRendering = true;
     return sk;
+  }
+
+  // Штатный путь отрисовки в сборках 4.x (drawImages) рисует ТОЛЬКО вложения
+  // вида RegionAttachment — всё остальное (mesh, linkedmesh, path, clipping)
+  // молча пропускается:  if (!(attachment instanceof RegionAttachment)) continue;
+  // Поэтому скелет, у которого вся графика — меши, рисуется пустым холстом без
+  // единой ошибки (проверено на PragmaticPlay vs20wraanu, wran_hv_1: 111 mesh,
+  // 0 region — 0 пикселей). Треугольный путь умеет и те, и другие, но он
+  // дороже, поэтому включаем его только когда меши в скинах действительно есть.
+  function hasNonRegion(renderer, sd) {
+    if (!("triangleRendering" in renderer) || !sd || !sd.skins) return false;
+    for (var i = 0; i < sd.skins.length; i++) {
+      var att = sd.skins[i].attachments;
+      if (!att) continue;
+      for (var slot in att) {
+        var byName = att[slot];
+        if (!byName) continue;
+        for (var name in byName) {
+          var a = byName[name];
+          if (!a || !a.constructor) continue;
+          // у минифицированных сборок класс зовётся _RegionAttachment
+          if (!/RegionAttachment$/.test(a.constructor.name)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   // Запасной путь для сборок 3.x, где канвас-рендерера нет: WebGL.

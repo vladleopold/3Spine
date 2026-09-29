@@ -105,7 +105,47 @@ def convert(data: dict) -> dict:
                         item.clear()
                         item.update(rebuilt)
 
+    out["_кривых_исправлено"] = 0
+    _fix_curves(out)
+    out.pop("_кривых_исправлено", None)
+
     return out
+
+
+def _fix_curves(node) -> int:
+    """Переводит БЕЗИЕРЫ 3.x в формат 4.x: curve: [cx1, cy1, cx2, cy2].
+
+    В 3.x кадр таймлайна описывал кривую четырьмя отдельными полями —
+    ``curve`` (число) и ``c2``/``c3``/``c4``. В 4.x рантайм ждёт ``curve``
+    МАССИВОМ из четырёх чисел и читает его так::
+
+        let curve = keyMap.curve;
+        if (curve) { let i = value << 2; let cx1 = curve[i]; ... }
+
+    Со скаляром на месте ``curve[0]`` — это undefined, bezier получает NaN, и
+    всё, что считается по этой кривой (поворот/масштаб/цвет кости и слота,
+    деформация), становится NaN. Кран скелета не бросает ошибку — вершины мешей
+    уезжают в NaN, треугольники рисуются «в никуда», и карточка молча остаётся
+    пустой. Проверено на PragmaticPlay vs20wraanu: 255 кривых в wran_hv_1,
+    после правки карточка рисует 66 101 пиксель вместо нуля.
+
+    Данные 4.x приходят уже с массивами, там функция ничего не меняет.
+    """
+    fixed = 0
+    if isinstance(node, dict):
+        curve = node.get("curve")
+        if (isinstance(curve, (int, float)) and not isinstance(curve, bool)
+                and "c2" in node and "c3" in node and "c4" in node):
+            node["curve"] = [curve, node["c2"], node["c3"], node["c4"]]
+            for key in ("c2", "c3", "c4"):
+                node.pop(key, None)
+            fixed += 1
+        for value in node.values():
+            fixed += _fix_curves(value)
+    elif isinstance(node, list):
+        for value in node:
+            fixed += _fix_curves(value)
+    return fixed
 
 
 def convert_file(src: str, dst: str) -> dict:
