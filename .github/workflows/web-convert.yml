@@ -182,7 +182,22 @@ jobs:
           rm -f input.zip
           mkdir -p pg_out
           cp -R "$OUT/extracted/spine" pg_out/
-          cp -R "$OUT/extracted/textures" pg_out/ 2>/dev/null || true
+          # отдельные textures/ не копируем: страницы атласов уже лежат внутри
+          # каждого проекта, а сами спрайты вдвое раздувают input.zip и упираются
+          # в лимит GitHub (100 МБ) при пуше на results.
+          # Подрезаем самые тяжёлые проекты, если всё равно не влезаем.
+          CAP_MB=85
+          while [ "$(du -sm pg_out/spine | cut -f1)" -gt "$CAP_MB" ]; do
+            big=$(du -sm pg_out/spine/* | sort -rn | head -1 | cut -f2-)
+            [ -n "$big" ] || break
+            echo "::warning::подрезаю $(basename "$big") — общий размер выше ${CAP_MB} МБ"
+            rm -rf "$big"
+          done
+          N=$(find pg_out/spine -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$N" -eq 0 ]; then
+            echo "::warning::после подрезки не осталось ни одного проекта"
+            exit 0
+          fi
           python3 .codespace/pg-extractor/make_previews_index.py "$PWD/pg_out" || true
           ( cd pg_out && zip -qr "$GITHUB_WORKSPACE/input.zip" . )
           echo "input.zip собран из PragmaticPlay-пар: $(unzip -l input.zip | tail -1)"
