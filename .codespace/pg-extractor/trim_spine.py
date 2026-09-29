@@ -15,6 +15,12 @@ import shutil
 import sys
 from pathlib import Path
 
+# Пороги «проект-гигант» для снятия страниц общего пула. Мелкие проекты не
+# трогаем вовсе: у них собственные страницы копеечные, и снятие пула ломает
+# карточку сильнее, чем экономит.
+MIN_STRIP_BYTES = 4 * 1024 * 1024
+MAX_POOL_SHARE = 0.75
+
 
 def dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
@@ -38,12 +44,27 @@ def page_blocks(lines: list[str]) -> list[tuple[str, int, int]]:
 
 
 def strip_pool_pages(proj: Path) -> int:
-    """Убирает страницы-пул из проекта. Возвращает освобождённые байты."""
+    """Убирает страницы-пул из проекта. Возвращает освобождённые байты.
+
+    Страницы-пул снимаются только у ПРОЕКТОВ-ГИГАНТОВ, у которых собственные
+    страницы и так покрывают карточку. Раньше правило было «самый тяжёлый
+    проект», и под нож попадали как раз мелкие проекты, у которых собственные
+    страницы копеечные, а все картинки пришли из общего пула: сняли пул — и
+    карточка потеряла половину графики (а если пул был весь — становилась
+    пустой заглушкой). Теперь порог: проект крупнее MIN_STRIP_MB и пул в нём —
+    меньшинство (меньше MAX_POOL_SHARE от его веса).
+    """
     name = proj.name
     pool = sorted(p for p in proj.glob(f"{name}x*.png") if p.stat().st_size)
     atlas = proj / f"{name}.atlas"
     if not pool or not atlas.exists():
         return 0
+    freed_pool = sum(p.stat().st_size for p in pool)
+    own = dir_size(proj) - freed_pool
+    if dir_size(proj) < MIN_STRIP_BYTES:
+        return 0                      # мелкий проект: жалко его не портить
+    if freed_pool > own * MAX_POOL_SHARE:
+        return 0                      # пул here и есть вся графика — не трогаем
     lines = atlas.read_text(encoding="utf-8").splitlines()
     drop = {p.name for p in pool}
     kept = [b for b in page_blocks(lines) if b[0] not in drop]
@@ -56,10 +77,9 @@ def strip_pool_pages(proj: Path) -> int:
     for _p, start, end in kept:
         body.extend(lines[start:end])
     atlas.write_text("\n".join(head + body) + "\n", encoding="utf-8")
-    freed = sum(p.stat().st_size for p in pool)
     for p in pool:
         p.unlink()
-    return freed
+    return freed_pool
 
 
 def main(argv: list[str]) -> int:

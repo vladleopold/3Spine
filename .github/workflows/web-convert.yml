@@ -182,23 +182,50 @@ jobs:
             echo "::warning::UHT-экстрактор не нашёл Spine-скелетов"
             exit 0
           fi
-          rm -f input.zip
-          mkdir -p pg_out
-          cp -R "$OUT/extracted/spine" pg_out/
-          # отдельные textures/ не копируем: страницы атласов уже лежат внутри
-          # каждого проекта, а сами спрайты вдвое раздувают input.zip и упираются
-          # в лимит GitHub (100 МБ) при пуше на results.
-          # Подрезаем самые тяжёлые проекты, если всё равно не влезаем.
-          CAP_MB=85
-          python3 .codespace/pg-extractor/trim_spine.py pg_out/spine "$CAP_MB"
-          N=$(find pg_out/spine -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
-          if [ "$N" -eq 0 ]; then
-            echo "::warning::после подрезки не осталось ни одного проекта"
+          # Сборку input.zip (подрезка под лимит GitHub → индекс превью → zip)
+          # делает общий скрипт: его же зовёт экстрактор 3Oaks.
+          N=$(bash .codespace/assemble_spine_pairs.sh "$OUT/extracted/spine" "$GITHUB_WORKSPACE" 85 | tail -1)
+          if [ "${N:-0}" -eq 0 ]; then
+            echo "::warning::сборка input.zip из PragmaticPlay-пар не удалась"
             exit 0
           fi
-          python3 .codespace/pg-extractor/make_previews_index.py "$PWD/pg_out" || true
-          ( cd pg_out && zip -qr "$GITHUB_WORKSPACE/input.zip" . )
           echo "input.zip собран из PragmaticPlay-пар: $(unzip -l input.zip | tail -1)"
+          echo "PLAYSAON=1" >> "$GITHUB_ENV"
+          echo "pairs=$N" >> "$GITHUB_OUTPUT"
+
+      # ── 3Oaks ─────────────────────────────────────────────────────────────
+      # У 3Oaks скелеты — обычные файлы: assets/packs/720/<имя>.skel|.json +
+      # <имя>.atlas + страницы. База ассетов (движок и версия лежат внутри пути)
+      # берётся из og:image страницы игры, список имён — из бандла src/game.js.
+      # Всё определяется без браузера, поэтому шаг быстрый и предсказуемый.
+      - name: 3Oaks — экстрактор Spine-пар
+        id: oaks
+        if: ${{ always() && steps.mode.outputs.mode == 'url' }}
+        continue-on-error: true
+        env:
+          URL: ${{ steps.mode.outputs.url }}
+        run: |
+          set -uo pipefail
+          echo "pairs=0" >> "$GITHUB_OUTPUT"
+          case "$URL" in *3oaks.com*) ;; *) echo "хост не 3oaks — пропускаю"; exit 0 ;; esac
+          OUT="$RUNNER_TEMP/oaks"
+          rm -rf "$OUT"
+          if ! python3 .codespace/3oaks/extract_3oaks.py "$URL" --out "$OUT" 2>&1 | tail -30; then
+            echo "::warning::экстрактор 3Oaks завершился с ошибкой"
+            exit 0
+          fi
+          N=$(find "$OUT/extracted/spine" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+          echo "3Oaks: проектов $N"
+          if [ "$N" -eq 0 ]; then
+            echo "::warning::экстрактор 3Oaks не нашёл Spine-скелетов"
+            exit 0
+          fi
+          N=$(bash .codespace/assemble_spine_pairs.sh "$OUT/extracted/spine" "$GITHUB_WORKSPACE" 85 | tail -1)
+          if [ "${N:-0}" -eq 0 ]; then
+            echo "::warning::сборка input.zip из 3Oaks-пар не удалась"
+            exit 0
+          fi
+          echo "input.zip собран из 3Oaks-пар: $(unzip -l input.zip | tail -1)"
           echo "PLAYSAON=1" >> "$GITHUB_ENV"
           echo "pairs=$N" >> "$GITHUB_OUTPUT"
 
@@ -206,7 +233,7 @@ jobs:
       # Python-путь выше не трогаем: его бюджеты (55с/75с) — предел здоровья.
       # Это запасной headless-сейвер, он только дополняет выборку и отчёт.
       - name: Headless saver → ZIP + saver-report.json (URL-режим)
-        if: ${{ steps.mode.outputs.mode == 'url' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') && steps.pguht.outputs.pairs == '0' }}
+        if: ${{ steps.mode.outputs.mode == 'url' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') && steps.pguht.outputs.pairs == '0' && steps.oaks.outputs.pairs == '0' }}
         continue-on-error: true
         env:
           URLS: ${{ steps.mode.outputs.url }}
