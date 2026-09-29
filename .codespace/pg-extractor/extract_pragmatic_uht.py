@@ -24,6 +24,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 import urllib.request
 import zlib
 from pathlib import Path
@@ -244,6 +245,12 @@ def transcode_ktx(path: Path) -> Path | None:
     return None
 
 
+# Проект → регионы, которые не нашлись ни в одном атласе игры. Держим
+# на уровне модуля, чтобы в конце вывести честный итог: такие карточки
+# соберутся, но будут играть без части картинок.
+LOST_BY_PROJECT: dict[str, list[str]] = {}
+
+
 def cdn_res(symbol: str) -> str:
     return (
         "https://demogamesfree.pragmaticplay.net"
@@ -418,18 +425,24 @@ def locate_page(tex_guid: str, tex_dir: Path, symbol: str) -> Path | None:
         for cand in sorted(tex_dir.glob(f"{tex_guid}{ext}")):
             if cand.stat().st_size > 32:
                 return cand
+    # CDN иногда режет скорость на серии запросов: страница одного атласа может
+    # не отдаться с первого раза и потеряться навсегда — карточка потом играет
+    # без части картинок ("не хватает N картинок в атласе"). Несколько попыток.
     for ext in ("png", "jpg"):
         url = f"{cdn_res(symbol)}/{tex_guid}.{ext}"
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CI-Bot"})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = resp.read()
-            if len(data) > 32:
-                dest = tex_dir / f"{tex_guid}{ext}"
-                dest.write_bytes(data)
-                return dest
-        except Exception:
-            pass
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 CI-Bot"})
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = resp.read()
+                if len(data) > 32:
+                    dest = tex_dir / f"{tex_guid}{ext}"
+                    dest.write_bytes(data)
+                    return dest
+            except Exception:
+                pass
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
     return None
 
 
@@ -728,6 +741,7 @@ def write_spine_projects(
                     print(f"::notice::spine/{name}: добираем {n_regions} регионов из общего пула "
                           f"игры (+{len(added)} страниц)")
                 if lost:
+                    LOST_BY_PROJECT[name] = lost
                     print(f"::warning::spine/{name}: {len(lost)} картинок не нашлось ни в одном "
                           f"атласе игры: {', '.join(lost[:8])}")
 
@@ -812,6 +826,12 @@ def main() -> int:
     ]
     print("\n".join(report))
     (args.out / "extract-report.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
+
+    if LOST_BY_PROJECT:
+        print("")
+        print("!! ПРОЕКТЫ С НЕХВАТОЙ КАРТИНОК (карточка будет играть частично):")
+        for nm, lst in sorted(LOST_BY_PROJECT.items()):
+            print(f"   {nm}: нет {len(lst)} ({', '.join(lst[:6])})")
 
     print("")
     print(f"FOUND textures={len(textures)} spine_json={len(projects)} pairs={pairs}")
