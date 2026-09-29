@@ -43,30 +43,35 @@ def build(root: str) -> int:
                          if e in rec and os.path.isfile(rec[e])), None)
         if not skel_ext:
             continue
-        # Страница: обычно <имя>.png, но у Playson атлас сам объявляет
-        # свои страницы (fs2.png и т.п.) — берём первую из заголовка атласа.
+        # Страница атласа. Её нельзя переносить: первая страница — это часть
+        # самого скелета, и после переноса анимация грузила 0 текстур
+        # (карточка оставалась пустой заглушкой). Карточка умеет ссылаться на
+        # любой файл архива, поэтому просто запоминаем путь на месте — ни
+        # переноса, ни дубликатов.
         page = None
         for ext in (".png", ".jpg"):
             if ext in rec and os.path.isfile(rec[ext]):
-                page = "previews/%s%s" % (name, ext)
-                shutil.move(rec[ext], os.path.join(root, page))
+                page = os.path.relpath(rec[ext], root).replace(os.sep, "/")
                 break
         if page is None and ".atlas" in rec and os.path.isfile(rec[".atlas"]):
             with open(rec[".atlas"], encoding="utf-8", errors="ignore") as f:
                 lines = [ln.strip() for ln in f.read().split("\n")]
             for i, ln in enumerate(lines[:-1]):
-                if not (ln and lines[i + 1].startswith("size:")):
+                # Строка страницы — это имя файла картинки, а следующая —
+                # ровно `size: W,H`. Проверка по расширению обязательна: у
+                # регионов атласа тоже есть `xy:` перед `size:`, и без неё
+                # за «страницу» принимался первый регион.
+                if not ln.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".ktx")):
+                    continue
+                nxt = lines[i + 1]
+                if not (nxt.startswith("size:") and "," in nxt):
                     continue
                 cand = os.path.normpath(os.path.join(os.path.dirname(rec[".atlas"]), ln))
                 if not os.path.isfile(cand):
                     break
                 # Общий лист лежит в textures/ и используется многими парами —
-                # не переносим, а просто ссылаемся на него из карточки.
-                if os.path.dirname(cand) == os.path.join(root, "textures"):
-                    page = "textures/%s" % os.path.basename(cand)
-                else:
-                    page = "previews/%s" % os.path.basename(cand)
-                    shutil.copyfile(cand, os.path.join(root, page))
+                # ссылаемся на него, а не копируем (копия съедала бы мегабайты).
+                page = os.path.relpath(cand, root).replace(os.sep, "/")
                 break
         if page is None:
             continue
