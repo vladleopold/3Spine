@@ -51,6 +51,17 @@ def convert(data: dict) -> dict:
     else:
         out["skeleton"] = {"spine": WEB_VERSION}
 
+    # Рантайм 4.0.x ждёт скины МАССИВОМ вида
+    #   [{ "name": "default", "attachments": { "<слот>": { "<имя>": {...} } } }]
+    # А часть игр (в том числе весь PragmaticPlay UHT) отдаёт скины объектом
+    # { "<имя>": { "<слот>": { "<вложение>": {...} } } }. С таким объектом
+    # рантайм молча не создаёт ни одного скина (root.skins.length === 0), и
+    # первая же анимация с deform падает на findSkin() → null.getAttachment().
+    skins = out.get("skins")
+    if isinstance(skins, dict):
+        out["skins"] = [{"name": name, "attachments": attachments}
+                        for name, attachments in skins.items()]
+
     animations = out.get("animations") or {}
     for anim in animations.values():
         if not isinstance(anim, dict):
