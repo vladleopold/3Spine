@@ -183,18 +183,24 @@ def manifest_spine_pass(base, recs, spine_root, textures, done, size_by_files):
             png_by_name.setdefault(lp.rsplit("/", 1)[-1], []).append(
                 (files, lp, size_by_files.get(files, 0)))
 
+    print("res/spine: папок в манифесте %d, записей %d"
+          % (len(folders), sum(len(v) for v in folders.values())))
     pairs = []
     for folder in sorted(folders):
         items = folders[folder]
         atlases = [f for f, lp in items if lp.endswith(".atlas")]
         if not atlases:
             continue
+        print("  res/spine %s: файлов %d, атлас %s"
+              % (folder, len(items), atlases[0]))
         atlas_bytes = get(base + atlases[0])
         if not atlas_bytes:
             print("  res/spine %s: не скачался атлас" % folder)
             continue
         page_blobs = []
-        for page_name, _w, _h in atlas_pages(atlas_bytes):
+        found_pages = atlas_pages(atlas_bytes)
+        print("  res/spine %s: страниц в атласе %d" % (folder, len(found_pages)))
+        for page_name, _w, _h in found_pages:
             cand = png_by_name.get(page_name) or []
             same = [c for c in cand if c[1].rsplit("/", 1)[0] == folder]
             pick = (same or sorted(cand, key=lambda c: -c[2]))[0] if cand else None
