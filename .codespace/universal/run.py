@@ -114,6 +114,7 @@ def probe_static_bases(page_url: str, page: bytes) -> list[str]:
 
 def strategy_bundles(page_url: str, pool: str, log) -> dict:
     """Провайдер-независимый: имена скелетов/атласов вытаскиваем из бандлов."""
+    os.makedirs(pool, exist_ok=True)
     page = get(page_url) or b""
     bases = probe_static_bases(page_url, page)
     names: set[str] = set()
@@ -248,7 +249,10 @@ def main() -> int:
         for fn in (strategy_pg, strategy_3oaks, strategy_bundles):
             try:
                 if fn is strategy_bundles:
-                    rep = fn(a.url, pool, log)
+                    # web-охотник пишет в отдельный каталог: его находки
+                    # самые шумные и не должны затирать то, что уже нашёл
+                    # точный экстрактор (приоритет — при слиянии, см. gather).
+                    rep = fn(a.url, os.path.join(work, "pool-web"), log)
                 else:
                     rep = fn(a.url, work, log)
             except Exception as exc:
@@ -256,8 +260,11 @@ def main() -> int:
             reports.append(rep)
             log("итог стратегии: " + json.dumps(rep, ensure_ascii=False))
 
+    # Порядок = приоритет. Первый источник, где файл уже есть, выигрывает:
+    # точный экстрактор → то, что отдал пользователь/сейвер → web-охотник.
     roots = [os.path.join(work, "pguht-out", "spine"),
              os.path.join(work, "oaks-out", "extracted", "spine")] + a.pool
+    roots += [os.path.join(work, "pool-web")]
     copied = gather(roots, pool)
     log("в пуле %d файлов (скопировано %d)" % (len(os.listdir(pool)), copied))
 
@@ -265,7 +272,16 @@ def main() -> int:
     for rep in reports:
         rep["детектор"] = report["проектов"]
     log("детектор: " + json.dumps(report, ensure_ascii=False)[:500])
-    json.dump({"стратегии": reports, "детектор": report, "заметки": notes},
+
+    # Сверка результата: атлас обещает страницы — они должны лежать рядом.
+    broken = detect.verify(os.path.join(work, "extracted", "spine"))
+    report["непрошенных"] = broken
+    if broken:
+        log("внимание, неполных проектов: %d — %s" % (len(broken), list(broken)[:5]))
+    else:
+        log("сверка: у всех %d проектов страницы на месте" % len(projects))
+    report_ = report
+    json.dump({"стратегии": reports, "детектор": report_, "заметки": notes},
               open(os.path.join(work, "universal-report.json"), "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
 

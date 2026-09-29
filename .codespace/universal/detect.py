@@ -29,37 +29,23 @@ SKELETON_JSON_EXT = (".json",)
 
 # ────────────────────────────── атласы ──────────────────────────────
 
-def looks_like_atlas(text: str) -> bool:
-    """Строгая проверка: страница (имя с картиночным расширением) + `size: w, h`."""
-    lines = text.splitlines()
-    if not lines:
-        return False
-    pages = 0
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        if not s or s.endswith(":"):
-            continue
-        if not s.lower().endswith(IMG_EXT):
-            continue
-        for nxt in lines[i + 1:i + 4]:
-            t = nxt.strip()
-            if t.startswith("size:"):
-                if re.match(r"^size:\s*\d+\s*,\s*\d+\s*$", t):
-                    pages += 1
-                break
-            if t.startswith("xy:"):
-                continue
-            break
-    return pages > 0
+def _page_names(lines: list[str]) -> list[str]:
+    """Имена страниц атласа — по СТРУКТУРЕ, а не по расширению.
 
-
-def parse_atlas(text: str) -> list[str]:
-    """Имена страниц из текстового атласа, в порядке объявления."""
-    lines = text.splitlines()
+    В формате Spine страница лежит в колонке 0, а регион и его свойства —
+    с отступом. Расширение у региона может быть любым (`img/1.5x.png`),
+    поэтому прежняя проверка «строка кончается на .png» путала регион со
+    страницей: в проект попадала лишняя «страница», а настоящая страница
+    уезжала в `missing`.
+    """
     pages: list[str] = []
     for i, ln in enumerate(lines):
+        if not ln.strip():
+            continue
+        if ln[:1] in (" ", "\t", "\ufeff"):
+            continue                                  # вложенная строка = регион
         s = ln.strip()
-        if not s or s.endswith(":") or not s.lower().endswith(IMG_EXT):
+        if s.endswith(":") or re.match(r"^[A-Za-z_]+\s*:", s):
             continue
         for nxt in lines[i + 1:i + 4]:
             t = nxt.strip()
@@ -71,6 +57,16 @@ def parse_atlas(text: str) -> list[str]:
                 continue
             break
     return pages
+
+
+def looks_like_atlas(text: str) -> bool:
+    """Строгая проверка: есть хотя бы одна страница (колонка 0 + `size: w, h`)."""
+    return bool(_page_names(text.splitlines()))
+
+
+def parse_atlas(text: str) -> list[str]:
+    """Имена страниц из текстового атласа, в порядке объявления."""
+    return _page_names(text.splitlines())
 
 
 def json_atlas_to_text(obj: dict) -> str | None:
@@ -215,47 +211,85 @@ def region_aliases(name: str) -> set[str]:
 # ─────────────────────── сборка проектов из мешка файлов ───────────────────────
 
 class Project:
-    __slots__ = ("name", "atlas", "skeleton", "skeleton_ext", "pages", "pool_pages", "missing")
+    __slots__ = ("name", "atlas", "skeleton", "skeleton_ext", "pages", "pool_pages",
+                 "missing_pages", "missing_regions", "conflicts")
 
     def __init__(self, name):
         self.name = name
         self.atlas: str = ""
         self.skeleton: str = ""
         self.skeleton_ext: str = ""
-        self.pages: list[str] = []
-        self.pool_pages: list[str] = []
-        self.missing: list[str] = []
+        self.pages: list[tuple[str, str]] = []      # (имя страницы, путь)
+        self.pool_pages: list[tuple[str, str]] = []
+        self.missing_pages: list[str] = []
+        self.missing_regions: list[str] = []
+        self.conflicts: list[str] = []
 
 
-def assemble(root: str, out_spine: str, name_hint: str | None = None) -> tuple[list[Project], dict]:
+def _skeleton_regions_of(path: str, ext: str):
+    """Регионы скелета — только для JSON. У бинарного их не прочитать,
+    поэтому для `.skel` возвращается пустое множество (без исключения)."""
+    if ext not in SKELETON_JSON_EXT:
+        return set()
+    try:
+        obj = json.loads(open(path, "r", encoding="utf-8", errors="ignore").read())
+    except Exception:
+        return set()
+    return skeleton_regions(obj) if looks_like_spine_json(obj) else set()
+
+
+def _find_page(name: str, home: str, files: dict) -> str | None:
+    """Ищем файл страницы. Сначала рядом с атласом, потом — где есть.
+
+    Плоский пул склеивает разные провайдеры, и одноимённые картинки у разных
+    игр встречаются. Поэтому сначала смотрим соседние файлы, и только если
+    рядом ничего нет — берём единственное совпадение во всём дереве.
+    """
+    low = name.lower()
+    exact = os.path.join(home, name)
+    if os.path.isfile(exact):
+        return exact
+    cands = files.get(low, [])
+    if not cands:
+        return None
+    for c in cands:
+        if os.path.dirname(c) == home:
+            return c
+    return cands[0] if len(cands) == 1 else None
+
+
+def assemble(root: str, out_spine: str) -> tuple[list[Project], dict]:
     """Собирает `spine/<имя>/` из любого дерева файлов в `root`.
 
     Возвращает (проекты, отчёт). Проект = атлас + скелет + страницы.
     """
-    files: dict[str, str] = {}           # нижний регистр -> путь
+    files: dict[str, list[str]] = {}     # нижний регистр имени -> ВСЕ пути
     for dirpath, _dirs, names in os.walk(root):
         for n in names:
-            p = os.path.join(dirpath, n)
-            files.setdefault(n.lower(), p)
+            files.setdefault(n.lower(), []).append(os.path.join(dirpath, n))
+    first = {low: c[0] for low, c in files.items()}
 
-    atlases: dict[str, tuple[str, str, list[str]]] = {}   # stem -> (путь, текст, страницы)
-    skels: dict[str, tuple[str, str]] = {}                 # stem -> (путь, версия)
+    # Ключ — (каталог, stem), а не только stem: в плоском пуле две разные
+    # игры дают по своему `logo.atlas`, и одна молча затирала другую.
+    atlases: dict[tuple[str, str], tuple[str, str, list[str]]] = {}  # (каталог, stem)
+    skels: dict[tuple[str, str], tuple[str, str]] = {}
     pool: list[tuple[str, str, set[str]]] = []             # (stem, текст, регионы)
 
-    for low, path in sorted(files.items()):
+    for low, path in sorted(first.items()):
         stem, ext = os.path.splitext(low)
         try:
+            key = (os.path.dirname(path), stem)
             if low.endswith(ATLAS_EXT):
                 text = open(path, "r", encoding="utf-8", errors="ignore").read()
                 if looks_like_atlas(text):
-                    atlases[stem] = (path, text, parse_atlas(text))
+                    atlases[key] = (path, text, parse_atlas(text))
                 elif ext == ".json":
                     try:
                         conv = json_atlas_to_text(json.loads(text))
                     except Exception:
                         conv = None
                     if conv:
-                        atlases[stem] = (path, conv, parse_atlas(conv))
+                        atlases[key] = (path, conv, parse_atlas(conv))
             elif ext in SKELETON_JSON_EXT:
                 with open(path, "rb") as f:
                     head = f.read(4096)
@@ -266,87 +300,140 @@ def assemble(root: str, out_spine: str, name_hint: str | None = None) -> tuple[l
                 except Exception:
                     obj = None
                 if looks_like_spine_json(obj):
-                    skels[stem] = (path, skeleton_version(obj) or "?")
+                    skels[key] = (path, skeleton_version(obj) or "?")
             elif ext in SKELETON_BIN_EXT:
                 with open(path, "rb") as f:
                     head = f.read(48)
                 if is_binary_skeleton(head):
-                    skels[stem] = (path, binary_skeleton_version(head) or "?")
+                    skels[key] = (path, binary_skeleton_version(head) or "?")
         except Exception as exc:  # единичный битый файл не должен ронять всё
             print("::warning::детектор пропустил %s: %s" % (path, exc))
 
-    for stem, (_path, text, _pages) in atlases.items():
+    for _key, (_path, text, _pages) in sorted(atlases.items()):
         aliases: set[str] = set()
         for rn in atlas_regions(text):
             aliases |= region_aliases(rn)
-        pool.append((stem, text, aliases))
+        pool.append((_key[1], text, aliases))
 
+    # атлас ищется по (каталог, stem), а если не нашлось — по одному stem
+    # во всём дереве: игры часто кладут скелет и атлас в разные папки.
+    def find_atlas(key):
+        if key in atlases:
+            return atlases[key]
+        same = [v for k, v in atlases.items() if k[1] == key[1]]
+        return same[0] if len(same) == 1 else None
+
+    used_names: set[str] = set()
     projects: list[Project] = []
-    for stem, (skel_path, ver) in sorted(skels.items()):
-        pr = Project(os.path.splitext(os.path.basename(skel_path))[0])
+    for key, (skel_path, _ver) in sorted(skels.items()):
+        name = os.path.splitext(os.path.basename(skel_path))[0]
+        base_name, bump = name, 2
+        while name.lower() in used_names:      # два разных скелета с одним stem
+            name = "%s_%d" % (base_name, bump)
+            bump += 1
+        used_names.add(name.lower())
+        pr = Project(name)
         pr.skeleton = skel_path
         pr.skeleton_ext = os.path.splitext(skel_path)[1]
-        atlas = atlases.get(stem)
+        atlas = find_atlas(key)
         if not atlas:
-            continue                                   # скелет без атласа — не проект
+            continue                           # скелет без атласа — не проект
         pr.atlas = atlas[0]
-        used = []
+        home = os.path.dirname(atlas[0])
+        taken: set[str] = set()
         for page in atlas[2]:
-            src = files.get(page.lower())
-            if src:
-                used.append(src)
-            else:
-                pr.missing.append(page)
-        pr.pages = used
+            src = _find_page(page, home, files)
+            if not src:
+                pr.missing_pages.append(page)
+                continue
+            if page.lower() in taken:
+                pr.conflicts.append(page)      # две разные картинки на одно имя
+                continue
+            taken.add(page.lower())
+            pr.pages.append((page, src))
+
         # добираем недостающие регионы из чужих атласов того же набора
-        try:
-            obj = json.loads(open(skel_path, "r", encoding="utf-8", errors="ignore").read())
-            need = skeleton_regions(obj) if looks_like_spine_json(obj) else set()
-        except Exception:
-            need = set()
+        need = _skeleton_regions_of(skel_path, pr.skeleton_ext)
         have: set[str] = set()
         for rn in atlas_regions(atlas[1]):
             have |= region_aliases(rn)
         for region in sorted(need - have):
+            home_atlas = None
             for pstem, ptext, pregions in pool:
-                if region not in pregions:
+                if region in pregions and pstem != key[1]:
+                    home_atlas = ptext
+                    break
+            if home_atlas is None:
+                pr.missing_regions.append(region)     # проект всё равно делаем:
+                continue                               # не хватать картинок —
+            for page in parse_atlas(home_atlas):       # не повод его выкинуть
+                if page.lower() in taken:
                     continue
-                for page in parse_atlas(ptext):
-                    if page in [os.path.basename(u) for u in pr.pages]:
-                        continue
-                    src = files.get(page.lower())
-                    if src and src not in pr.pages:
-                        pr.pool_pages.append(src)
-                break
-            else:
-                pr.missing.append(region)
+                src = _find_page(page, home, files)
+                if src:
+                    taken.add(page.lower())
+                    pr.pool_pages.append((page, src))
         projects.append(pr)
 
     # запись на диск
     for pr in projects:
         d = os.path.join(out_spine, pr.name)
         os.makedirs(d, exist_ok=True)
-        shutil_copy(pr.atlas, os.path.join(d, os.path.basename(pr.atlas)))
+        shutil_copy(pr.atlas, os.path.join(d, pr.name + ".atlas"))
         sk_dst = os.path.join(d, pr.name + (".skel" if pr.skeleton_ext == ".skel" else ".json"))
         shutil_copy(pr.skeleton, sk_dst)
-        for i, src in enumerate(pr.pages):
-            base = os.path.basename(src)
-            shutil_copy(src, os.path.join(d, base))
-        for i, src in enumerate(pr.pool_pages):
-            base = os.path.basename(src)
-            dst = os.path.join(d, base)
-            if not os.path.exists(dst):
-                shutil_copy(src, dst)
+        # файл кладём под ИМЕНЕМ, объявленным в атласе: иначе на регистр
+        # или регистр на файл карточка не грузит страницу целиком
+        for page, src in pr.pages + pr.pool_pages:
+            shutil_copy(src, os.path.join(d, page))
 
     report = {
         "файлов": len(files),
         "атласов": len(atlases),
         "скелетов": len(skels),
         "проектов": len(projects),
-        "без атласа": sorted(set(skels) - set(atlases)),
-        "неполных": {p.name: p.missing[:6] for p in projects if p.missing},
+        "без атласа": sorted({"%s/%s" % k for k in skels} - {"%s/%s" % k for k in atlases}),
+        "без страниц": {p.name: p.missing_pages[:6] for p in projects if p.missing_pages},
+        "без регионов": {p.name: p.missing_regions[:6] for p in projects if p.missing_regions},
+        "конфликты": {p.name: p.conflicts[:6] for p in projects if p.conflicts},
     }
     return projects, report
+
+
+def verify(spine_dir: str) -> dict:
+    """Сверка готового каталога: что атлас обещает, а чего на диске нет.
+
+    Детектор сам себя проверяет, иначе проект с недостающей страницей уехал бы
+    дальше по конвейеру и «сломался» бы уже на сайте.
+    """
+    out: dict[str, dict[str, list[str]]] = {}
+    if not os.path.isdir(spine_dir):
+        return out
+    for name in sorted(os.listdir(spine_dir)):
+        d = os.path.join(spine_dir, name)
+        if not os.path.isdir(d):
+            continue
+        have = {f.lower() for f in os.listdir(d)}
+        bad: dict[str, list[str]] = {}
+        apath = None
+        for cand in (name + ".atlas", name + ".atlas.txt"):
+            if cand.lower() in have:
+                apath = os.path.join(d, cand)
+                break
+        if not apath:
+            bad["без атласа"] = []
+        else:
+            text = open(apath, "r", encoding="utf-8", errors="ignore").read()
+            miss = [p for p in parse_atlas(text) if p.lower() not in have]
+            if miss:
+                bad["без страниц"] = miss[:6]
+        skel = [f for f in have if f.endswith((".skel", ".json"))
+                and not f.endswith(".atlas.json")]
+        if not skel:
+            bad["без скелета"] = []
+        if bad:
+            out[name] = bad
+    return out
 
 
 def shutil_copy(src: str, dst: str) -> None:
