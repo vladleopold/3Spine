@@ -205,6 +205,19 @@
     });
     skeleton.slots.forEach(function (sl) {
       var a = sl.attachment; if (!a) return;
+      // В 4.x мировые вершины меша живут в самом вложении, а не в слоте:
+      // только по ним видно, где реально лежит картинка (у скелетов из одних
+      // mesh-вложений скелет целиком состоит из точек костей).
+      var wv = a.worldVertices;
+      if (wv && wv.length > 3) {
+        for (var i = 0; i + 1 < wv.length; i += 2) {
+          var vx = wv[i], vy = wv[i + 1];
+          if (vx < minx) minx = vx; if (vx > maxx) maxx = vx;
+          if (vy < miny) miny = vy; if (vy > maxy) maxy = vy;
+          any = true;
+        }
+        return;
+      }
       var reg = a.region;
       var rw = (reg && reg.region && reg.region.width) || a.width || 0;
       var rh = (reg && reg.region && reg.region.height) || a.height || 0;
@@ -216,13 +229,24 @@
     return { x: minx, y: miny, width: maxx - minx, height: maxy - miny };
   }
 
+  // Границы из данных скелетона, но всегда с числами: в JSON скелета x/y часто
+  // нет вовсе, и если такое undefined уедет в fit(), сдвиг станет NaN, а холст с
+  // NaN-трансформом не рисует ничего — карточка молча остаётся пустой.
+  function num(v, dflt) { return typeof v === "number" && isFinite(v) ? v : dflt; }
+
   function pickBounds(skeleton) {
     var d = skeleton.data;
-    if (d.bounds && d.bounds.width > 1 && d.bounds.height > 1) return d.bounds;
-    if (d.width > 1 && d.height > 1) {
-      return { x: d.x, y: d.y, width: d.width, height: d.height };
+    var c = contentBounds(skeleton);
+    if (d.bounds && d.bounds.width > 1 && d.bounds.height > 1) {
+      return { x: num(d.bounds.x, 0), y: num(d.bounds.y, 0),
+               width: d.bounds.width, height: d.bounds.height, src: "data.bounds" };
     }
-    return contentBounds(skeleton);
+    if (d.width > 1 && d.height > 1) {
+      return { x: num(d.x, 0), y: num(d.y, 0),
+               width: d.width, height: d.height, src: "data" };
+    }
+    if (c) { c.src = "по содержимому"; return c; }
+    return null;
   }
 
   function fit(skeleton) {
@@ -235,15 +259,17 @@
     if (!isFinite(scale) || scale <= 0) return;
     skeleton.scaleX = scale;
     skeleton.scaleY = scale;
-    skeleton.x = (w - b.width * scale) / 2 - b.x * scale;
-    skeleton.y = (h - b.height * scale) / 2 - b.y * scale;
+    skeleton.x = (w - b.width * scale) / 2 - num(b.x, 0) * scale;
+    skeleton.y = (h - b.height * scale) / 2 - num(b.y, 0) * scale;
+    // Страховка от NaN в сдвиге: с ним холст не рисует вообще ничего.
+    if (!isFinite(skeleton.x)) skeleton.x = (w - b.width * scale) / 2;
+    if (!isFinite(skeleton.y)) skeleton.y = (h - b.height * scale) / 2;
     st.fitInfo = {
       w: Math.round(b.width), h: Math.round(b.height),
-      x: Math.round(b.x), y: Math.round(b.y),
+      x: Math.round(num(b.x, 0)), y: Math.round(num(b.y, 0)),
       масштаб: Math.round(scale * 1000) / 1000,
       сдвиг: Math.round(skeleton.x) + "," + Math.round(skeleton.y),
-      источник: b === skeleton.data.bounds ? "data.bounds"
-        : (b === skeleton.data ? "data" : "по содержимому")
+      источник: b.src || "по содержимому"
     };
   }
 
