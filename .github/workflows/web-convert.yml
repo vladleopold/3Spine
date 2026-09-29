@@ -470,6 +470,9 @@ jobs:
           SPINE_BATCH: "0"
           SPINE_WARMUP: "0"
           SPINE_TIMEOUT: "2400"
+          # наборов бывает 25+, дефолтные 24 резали последний
+          SPINE_PREVIEW_MAX: "64"
+          SPINE_PREVIEW_PER_VERSION: "8"
         run: |
           set -euo pipefail
           test -f work/output.zip || { echo "work/output.zip не найден"; exit 1; }

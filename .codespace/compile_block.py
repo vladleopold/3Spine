@@ -468,6 +468,32 @@ def main() -> None:
             shutil.rmtree(outdir, ignore_errors=True)
             return False
 
+        def _shrink_preview(path: str, limit: int) -> bool:
+            """Уменьшаем кадр превью до limit байт. False — ужать не вышло."""
+            try:
+                from PIL import Image
+            except Exception:
+                return False
+            try:
+                with Image.open(path) as src_im:
+                    im = src_im.convert("RGBA")
+                    for side in (1400, 1100, 900, 700, 512, 384, 256):
+                        w, h = im.size
+                        if max(w, h) > side:
+                            im = im.resize((max(1, w * side // max(w, h)),
+                                            max(1, h * side // max(w, h))),
+                                           Image.LANCZOS)
+                        if path.lower().endswith(".png"):
+                            im.save(path, optimize=True)
+                        else:
+                            im.save(path, quality=82)
+                        if os.path.getsize(path) <= limit:
+                            return True
+                return os.path.getsize(path) <= limit
+            except Exception as e:                       # noqa: BLE001
+                say(f"compile-block: не удалось ужать превью: {e}")
+                return False
+
         def make_preview(spine_path: str, rel: str, ver: str = "", json_hint: str = "") -> str:
             """Кадр для галереи сайта: рендер Spine, иначе — текстура атласа."""
             if not pv_on:
@@ -532,11 +558,17 @@ def main() -> None:
                 return ""
             size = os.path.getsize(want)
             if size > pv_bytes:
-                try:
-                    os.remove(want)
-                except OSError:
-                    pass
-                return ""
+                # Страница атласа у PragmaticPlay бывает на несколько мегабайт,
+                # и раньше такой кадр просто выбрасывался — карточка исчезала из
+                # индекса целиком. Теперь ужимаем по месту.
+                if _shrink_preview(want, pv_bytes):
+                    size = os.path.getsize(want)
+                else:
+                    try:
+                        os.remove(want)
+                    except OSError:
+                        pass
+                    return ""
             with plock:
                 preview_state["count"] = n + 1
                 preview_state["bytes"] += size
