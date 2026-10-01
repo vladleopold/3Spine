@@ -207,23 +207,10 @@ jobs:
             echo "::warning::input.zip $((SZ / 1048576)) МБ — не влезает в ветку results (лимит 100 МБ), сырые карточки пропускаем"
             exit 0
           fi
-          rm -rf publish-raw && mkdir publish-raw
-          cd publish-raw
-          git init -q
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git fetch -q --depth 1 origin results; then
-            git checkout -q -B results FETCH_HEAD
-          else
-            git checkout -q --orphan results
-            git rm -rq --cached . 2>/dev/null || true
-          fi
-          mkdir -p history
-          cp "$GITHUB_WORKSPACE/input.zip" "history/${JOB}-raw.zip"
           # В сообщении коммита намеренно НЕТ job id: /status?job= должен
           # остаться «не готово», иначе сайт подумает, что компиляция закончена.
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A "history/${JOB}-raw.zip"
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "raw spine pairs $(date -u +%FT%TZ)"
-          git push -q origin results
+          bash .codespace/publish-results.sh "raw spine pairs $(date -u +%FT%TZ)" \
+            "$GITHUB_WORKSPACE/input.zip:history/${JOB}-raw.zip"
           echo "сырой архив опубликован: history/${JOB}-raw.zip ($(du -h "$GITHUB_WORKSPACE/input.zip" | cut -f1))"
 
       # ── Node-захват (URL-режим) ────────────────────────────────────────────
@@ -368,21 +355,9 @@ jobs:
           set -euo pipefail
           JOB="$(git log -1 --format=%s)"
           echo "$JOB" > job-id.txt
-          cp output.zip /tmp/publish-output.zip
-          rm -rf publish && mkdir publish
-          cd publish
-          git init -q
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git fetch -q --depth 1 origin results; then
-            git checkout -q -B results FETCH_HEAD
-          else
-            git checkout -q --orphan results
-            git rm -rq --cached . 2>/dev/null || true
-          fi
-          cp /tmp/publish-output.zip output.zip
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A output.zip
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results baseline $(date -u +%FT%TZ) (job in artifact, ожидаем .spine)"
-          git push -q origin results
+          bash .codespace/publish-results.sh \
+            "results baseline $(date -u +%FT%TZ) (job in artifact, ожидаем .spine)" \
+            "$GITHUB_WORKSPACE/output.zip:output.zip"
 
       # ── Честный пустой результат ─────────────────────────────────────────
       # Если Spine-пар не нашлось вовсе, публикуем пустой проход: сайт
@@ -399,21 +374,8 @@ jobs:
           printf 'Spine-скелеты не найдены: экстракторы ничего не вытащили из этой игры.\n' > emptyout/report.txt
           ( cd emptyout && zip -qr "$GITHUB_WORKSPACE/output.zip" . )
           echo "$JOB" > job-id.txt
-          rm -rf publish-empty && mkdir publish-empty
-          cd publish-empty
-          git init -q
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git fetch -q --depth 1 origin results; then
-            git checkout -q -B results FETCH_HEAD
-          else
-            git checkout -q --orphan results
-            git rm -rq --cached . 2>/dev/null || true
-          fi
-          mkdir -p history
-          cp "$GITHUB_WORKSPACE/output.zip" "history/${JOB}.zip"
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A "history/${JOB}.zip"
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "empty result ${JOB} $(date -u +%FT%TZ)"
-          git push -q origin results
+          bash .codespace/publish-results.sh "empty result ${JOB} $(date -u +%FT%TZ)" \
+            "$GITHUB_WORKSPACE/output.zip:history/${JOB}.zip"
           echo "пустой результат опубликован: history/${JOB}.zip"
 
       - name: Upload conversion artifact for compile block
@@ -597,24 +559,16 @@ jobs:
           SAFE="$(printf '%s' "$JOB" | tr -c 'A-Za-z0-9._-' '_')"
           NOW="$(date -u +%FT%TZ)"
           cp work/output.zip /tmp/publish-output.zip
-          rm -rf publish && mkdir publish
-          cd publish
-          git init -q
-          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          if git fetch -q --depth 1 origin results; then
-            git checkout -q -B results FETCH_HEAD
-          else
-            git checkout -q --orphan results
-            git rm -rq --cached . 2>/dev/null || true
-          fi
-          mkdir -p history
-          cp /tmp/publish-output.zip output.zip
-          cp /tmp/publish-output.zip "history/${SAFE}.zip"
           BYTES="$(stat -c %s /tmp/publish-output.zip)"
           SPINE="$(unzip -l /tmp/publish-output.zip | grep -c '\.spine$' || true)"
+          # index.json лежит в ветке results уже давно: читаем его ОТТУДА,
+          # иначе новый прогон затёр бы весь список истории.
+          export EXTRACT="history/index.json:$RUNNER_TEMP/results-index.json"
+          bash .codespace/publish-results.sh "читаем историю" || true
+          unset EXTRACT
           JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
           import json, os
-          path = "history/index.json"
+          path = os.environ["RUNNER_TEMP"] + "/results-index.json"
           items = []
           if os.path.exists(path):
               try:
@@ -630,9 +584,9 @@ jobs:
           }
           items = [i for i in items if i.get("job") != entry["job"]]
           items.insert(0, entry)
-          os.makedirs("history", exist_ok=True)
           json.dump({"items": items}, open(path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
           PY
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" add -A output.zip history
-          git -c user.name="3Spine-bot" -c user.email="3Spine-bot@users.noreply.github.com" commit -qm "results ${JOB} +<spine> ${NOW}"
-          git push -q origin results
+          bash .codespace/publish-results.sh "results ${JOB} +<spine> ${NOW}" \
+            "/tmp/publish-output.zip:output.zip" \
+            "/tmp/publish-output.zip:history/${SAFE}.zip" \
+            "$RUNNER_TEMP/results-index.json:history/index.json"
