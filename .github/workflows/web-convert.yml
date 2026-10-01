@@ -193,11 +193,20 @@ jobs:
       # ещё компилирует .spine.
       - name: Publish raw archive (карточки до компиляции)
         if: ${{ always() && steps.mode.outputs.mode == 'url' && hashFiles('input.zip') != '' }}
+        # Удобство для сайта, а не часть конвейера: если push не прошёл
+        # (например, архив перевалил за 100 МБ лимита GitHub), конверсия всё
+        # равно обязана дойти до компиляции — карточки появятся после него.
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           JOB="$(git log -1 --format=%s)"
+          SZ=$(stat -c%s "$GITHUB_WORKSPACE/input.zip")
+          if [ "$SZ" -gt 99000000 ]; then
+            echo "::warning::input.zip $((SZ / 1048576)) МБ — не влезает в ветку results (лимит 100 МБ), сырые карточки пропускаем"
+            exit 0
+          fi
           rm -rf publish-raw && mkdir publish-raw
           cd publish-raw
           git init -q

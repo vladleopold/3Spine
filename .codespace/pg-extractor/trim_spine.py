@@ -65,6 +65,27 @@ def page_blocks(lines: list[str]) -> list[tuple[str, int, int]]:
     return out
 
 
+def page_region_names(lines: list[str], start: int, end: int) -> list[str]:
+    """Имена регионов одной страницы атласа.
+
+    page_blocks() отдаёт тройки (страница, начало, конец), а не четвёрки:
+    лишнее распаковывание роняло весь trim_spine.py на первом же атласе, и
+    подрезка не выполнялась вовсе — архив уезжал за лимит GitHub.
+
+    Заголовков у страницы обычно пять (size/format/filter/repeat/rotate), но
+    их состав плавает, поэтому ориентируемся на вид строки, а не на счёт:
+    у заголовка первый токен кончается двоеточием, у региона — нет.
+    """
+    names: list[str] = []
+    for line in lines[start + 1:end]:      # lines[start] — имя самой страницы
+        if not line or line[0].isspace():
+            continue
+        if line.split(None, 1)[0].endswith(":"):
+            continue
+        names.append(line.strip())
+    return names
+
+
 def strip_pool_pages(proj: Path) -> int:
     """Убирает страницы-пул из проекта. Возвращает освобождённые байты.
 
@@ -101,11 +122,10 @@ def strip_pool_pages(proj: Path) -> int:
     need = needed_regions(proj, name)
     if need:
         pool_regions: set[str] = set()
-        for pn, _s, _e, _r in blocks:
+        for pn, _s, _e in blocks:
             if pn in drop:
                 pool_regions.update(
-                    atlas_region_name(l.strip()) for l in lines[_s + 5:_e]
-                    if l and not l[0].isspace()
+                    atlas_region_name(n) for n in page_region_names(lines, _s, _e)
                 )
         load_bearing = need & pool_regions
         if load_bearing:
