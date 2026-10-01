@@ -6,6 +6,7 @@
 #   OUT_DIR       default ./uht-assets/<symbol>
 #   SKIP_NA       default 3   (столько подряд 404 подряд → серия кончилась)
 #   HARD_MAX      default 200 (потолок перебора, страховка от бесконечного цикла)
+#   WINDOW        default 8   (сколько файлов серии качаем одновременно)
 #   PLATFORMS     default "desktop mobile"
 #                 (some games put UHTSpine only under mobile/, e.g. vswaysdragden)
 set -euo pipefail
@@ -15,6 +16,12 @@ OUT_DIR="${OUT_DIR:-./uht-assets/${SYMBOL}}"
 PLATFORMS="${PLATFORMS:-desktop mobile}"
 SKIP_NA="${SKIP_NA:-3}"
 HARD_MAX="${HARD_MAX:-200}"
+# Сколько файлов серии качать одновременно. Раньше было строго по одному:
+# 71 пакет main_resources × ~0.7 с = минута чистого ожидания curl, и ради
+# этих минут job стоял впустую. Окно идёт ВПЕРЁД от текущего места, а
+# остановка по-прежнему решается по порядку (пропуск засчитывается слева
+# направо), так что «дырки» в нумерации не сдвигают границу серии.
+WINDOW="${WINDOW:-8}"
 # Сколько раз пробуем скачать файл: DL_404_TRIES попыток на честный 404,
 # DL_RETRIES — на всё остальное (обрыв, 5xx, троттлинг, пустой ответ).
 DL_404_TRIES="${DL_404_TRIES:-2}"
@@ -95,21 +102,60 @@ fi
 SKIP_NA="${SKIP_NA:-3}"
 HARD_MAX="${HARD_MAX:-200}"
 
+# Качает кусок серии целиком параллельно. download пишет на диск и ничего не
+# возвращает наружу, поэтому запускаем его в фоне, а код возврата кладём рядом
+# с индексом: решение «пропусков хватило» принимает pull_series, и порядок там
+# остаётся строго возрастающим.
+STATUS_DIR="$(mktemp -d)"
+trap 'rm -rf "$STATUS_DIR"' EXIT
+
+fetch_window() {
+  local platform="$1" stem="$2" from="$3" to="$4" i
+  local -a pids=()
+  for (( i = from; i <= to; i++ )); do
+    local ii rc
+    ii=$(printf '%03d' "$i")
+    rc="${STATUS_DIR}/${platform}_${stem}_${ii}"
+    ( set +e
+      download "$platform" "game/${stem}${ii}.json"
+      printf '%s' "$?" > "$rc" ) &
+    pids+=("$!")
+  done
+  for p in "${pids[@]}"; do wait "$p" || true; done
+}
+
 # Скачивает game/<stem><NNN>.json по возрастанию, пока файлы не кончатся.
+# Файлы окна, оказавшиеся за точкой остановки, удаляем: иначе параллельная
+# закачка изменила бы состав выгрузки по сравнению с последовательным обходом.
 pull_series() {
   local platform="$1" stem="$2" limit="$3"
-  local miss=0 i=0 got=0
+  local miss=0 i=0 got=0 last="" to=0 j=0
   while [[ $i -le $limit ]]; do
-    local ii; ii=$(printf '%03d' "$i")
-    if download "$platform" "game/${stem}${ii}.json"; then
-      ok=$((ok+1)); miss=0; got=$((got+1))
-    else
-      fail=$((fail+1)); miss=$((miss+1))
-      [[ $miss -ge $SKIP_NA ]] && break
-    fi
-    i=$((i+1))
+    to=$(( i + WINDOW - 1 ))
+    (( to > limit )) && to=$limit
+    fetch_window "$platform" "$stem" "$i" "$to"
+    for (( j = i; j <= to; j++ )); do
+      local ii rc
+      ii=$(printf '%03d' "$j")
+      rc=1
+      [[ -f "${STATUS_DIR}/${platform}_${stem}_${ii}" ]] && rc="$(cat "${STATUS_DIR}/${platform}_${stem}_${ii}")"
+      i=$j
+      last=$ii
+      if [[ "$rc" == "0" ]]; then
+        ok=$((ok+1)); miss=0; got=$((got+1))
+      else
+        fail=$((fail+1)); miss=$((miss+1))
+        [[ $miss -ge $SKIP_NA ]] && break
+      fi
+    done
+    [[ $miss -ge $SKIP_NA ]] && break
+    i=$(( to + 1 ))
   done
-  log "серия ${stem}: скачано ${got} шт. (последняя попытка ${ii}, лимит ${limit})"
+  # Подчищаем хвост окна, скачанный «про запас».
+  for (( j = i + 1; j <= to; j++ )); do
+    rm -f "${OUT_DIR}/resources/${platform}/game/$(printf '%03d' "$j" | sed "s|^|${stem}|").json"
+  done
+  log "серия ${stem}: скачано ${got} шт. (последняя попытка ${last}, лимит ${limit})"
 }
 
 fetch_platform() {

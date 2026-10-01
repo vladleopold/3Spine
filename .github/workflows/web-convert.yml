@@ -48,73 +48,6 @@ jobs:
             echo "ссылки нет — берём input.zip, Node-захват пропускаем"
           fi
 
-      - name: Setup Node (URL-режим)
-        if: steps.mode.outputs.mode == 'url'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Node deps + Playwright Chromium (URL-режим)
-        if: steps.mode.outputs.mode == 'url'
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          # install не должен утащить весь job: 7 минут потолок на оба шага
-          timeout -k 10 420 bash -c 'npm ci --no-audit --no-fund && npx playwright install chromium --with-deps' \
-            > npm-install-log.txt 2>&1
-          RC=$?
-          tail -n 40 npm-install-log.txt
-          if [ "$RC" = "0" ]; then
-            echo "node_modules и Chromium готовы"
-          else
-            echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
-          fi
-          exit 0
-
-      - name: Fetch game assets by URL (если пришла ссылка)
-        run: |
-          set -euo pipefail
-          if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
-          URL=$(tr -d '\r\n' < fetch-url.txt)
-          echo "ссылка на игру: $URL"
-          # Playson не берём браузером: ассеты лежат в манифесте game.<hash>.js,
-          # их разбирает наш экстрактор следующим шагом.
-          case "$URL" in
-            *gameName=*|*box-int*|*playson*)
-              echo "Playson — браузерный сейвер пропускаю, дальше экстрактор"
-              exit 0 ;;
-          esac
-          python3 -m pip install --quiet playwright aiohttp brotli
-          # Resources Saver: кладём распакованное расширение рядом с браузером
-          EXT_DIR="${RUNNER_TEMP}/Resources-Saver/src"
-          if [ ! -d "$EXT_DIR" ]; then
-            git clone --depth 1 --quiet https://github.com/Alex313031/Resources-Saver.git \
-              "${RUNNER_TEMP}/Resources-Saver" || true
-          fi
-          echo "SPINE_EXT_DIR=$EXT_DIR" >> "$GITHUB_ENV"
-          [ -d "$EXT_DIR" ] && echo "расширение Resources-Saver: подключено" || echo "расширение: недоступно, работаем без него"
-          # страховка от зависания: весь шаг обязан уложиться в 9 минут
-          set +e
-          # файл + живой прогресс в логе; хвост читает отдельный процесс,
-          # поэтому браузер не может удержать шаг (в отличие от конвейера)
-          ( timeout -k 15 75 python3 -u .codespace/fetch_assets.py "$URL" -o input.zip \
-              --max-mb 300 --total-budget 55 --budget-ms 18000 > fetch-log.txt 2>&1 ) &
-          FETCH_PID=$!
-          tail -n +1 -f fetch-log.txt &
-          TAIL_PID=$!
-          wait $FETCH_PID
-          RC=$?
-          kill $TAIL_PID >/dev/null 2>&1 || true
-          pkill -f 'chrome|chromium' >/dev/null 2>&1 || true
-          set -e
-          echo "выкачивание завершено с кодой $RC"
-          if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then
-            echo "::warning::выкачивание не уложилось в 75 секунд — берём то, что успело"
-          fi
-          rm -f fetch-url.txt
-          unzip -l input.zip | head -30
-
       # Playson: ассеты не в UHT-паках, а в манифесте внутри game.<hash>.js;
       # скелеты бинарные. Для них нужен наш экстрактор, а не браузерный сейвер.
       - name: Playson — экстрактор Spine-пар
@@ -186,6 +119,87 @@ jobs:
           echo "input.zip собран универсальным экстрактором: $(unzip -l input.zip | tail -1)"
           echo "PLAYSAON=1" >> "$GITHUB_ENV"
           echo "pairs=$N" >> "$GITHUB_OUTPUT"
+
+      # ── Браузерный сейвер: запасной путь, а не основной ────────────────────
+      # Раньше он шёл ПЕРВЫМ и для каждой ссылки нагло браузером 60–75 секунд,
+      # после чего его input.zip перезаписывался экстрактором. Для игр, где
+      # экстрактор справляется, это была чистая потеря времени — больше всех
+      # стоила она на PragmaticPlay (62 с из 553). Теперь браузер включается
+      # только когда экстрактор не нашёл ни одной пары.
+      - name: Fetch game assets by URL (если экстрактор ничего не нашёл)
+        id: browser
+        if: ${{ always() && steps.mode.outputs.mode == 'url' && steps.universal.outputs.pairs == '0' }}
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ ! -f fetch-url.txt ]; then echo "ссылки нет — берём input.zip"; exit 0; fi
+          URL=$(tr -d '\r\n' < fetch-url.txt)
+          echo "ссылка на игру: $URL"
+          # Playson не берём браузером: ассеты лежат в манифесте game.<hash>.js,
+          # их разбирает наш экстрактор.
+          case "$URL" in
+            *gameName=*|*box-int*|*playson*)
+              echo "Playson — браузерный сейвер пропускаю, ассеты уже разобраны"
+              rm -f fetch-url.txt; exit 0 ;;
+          esac
+          python3 -m pip install --quiet playwright aiohttp brotli
+          # Resources Saver: кладём распакованное расширение рядом с браузером
+          EXT_DIR="${RUNNER_TEMP}/Resources-Saver/src"
+          if [ ! -d "$EXT_DIR" ]; then
+            git clone --depth 1 --quiet https://github.com/Alex313031/Resources-Saver.git \
+              "${RUNNER_TEMP}/Resources-Saver" || true
+          fi
+          echo "SPINE_EXT_DIR=$EXT_DIR" >> "$GITHUB_ENV"
+          [ -d "$EXT_DIR" ] && echo "расширение Resources-Saver: подключено" || echo "расширение: недоступно, работаем без него"
+          # страховка от зависания: весь шаг обязан уложиться в 75 секунд
+          set +e
+          # файл + живой прогресс в логе; хвост читает отдельный процесс,
+          # поэтому браузер не может удержать шаг (в отличие от конвейера)
+          ( timeout -k 15 75 python3 -u .codespace/fetch_assets.py "$URL" -o input.zip \
+              --max-mb 300 --total-budget 55 --budget-ms 18000 > fetch-log.txt 2>&1 ) &
+          FETCH_PID=$!
+          tail -n +1 -f fetch-log.txt &
+          TAIL_PID=$!
+          wait $FETCH_PID
+          RC=$?
+          kill $TAIL_PID >/dev/null 2>&1 || true
+          pkill -f 'chrome|chromium' >/dev/null 2>&1 || true
+          set -e
+          echo "выкачивание завершено с кодой $RC"
+          if [ "$RC" = "124" ] || [ "$RC" = "137" ]; then
+            echo "::warning::выкачивание не уложилось в 75 секунд — берём то, что успело"
+          fi
+          rm -f fetch-url.txt
+          unzip -l input.zip | head -30 || true
+
+      # ── Node-захват: Chromium нужен только запасному headless-сейверу ────────
+      # npm ci + playwright install chromium — это 35 секунд, которые до сих пор
+      # платили все игры без разбора. Ставим ровно тогда, когда сейвер реально
+      # понадобится: экстрактор не справился И это не Playson.
+      - name: Setup Node (только если нужен сейвер)
+        if: ${{ always() && steps.mode.outputs.mode == 'url' && steps.universal.outputs.pairs == '0' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Node deps + Playwright Chromium
+        if: ${{ always() && steps.mode.outputs.mode == 'url' && steps.universal.outputs.pairs == '0' && !contains(steps.mode.outputs.url, 'gameName=') && !contains(steps.mode.outputs.url, 'box-int') }}
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # install не должен утащить весь job: 7 минут потолок на оба шага
+          timeout -k 10 420 bash -c 'npm ci --no-audit --no-fund && npx playwright install chromium --with-deps' \
+            > npm-install-log.txt 2>&1
+          RC=$?
+          tail -n 40 npm-install-log.txt
+          if [ "$RC" = "0" ]; then
+            echo "node_modules и Chromium готовы"
+            echo "NODE_READY=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::установка Node/Chromium не удалась (код $RC) — сейвер пропустим"
+          fi
+          exit 0
 
       # ── Карточки сразу после обнаружения, не дожидаясь компиляции ─────────
       # Сайт умеет открыть архив по имени (download?archive=…), поэтому кладём

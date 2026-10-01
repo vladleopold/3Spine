@@ -27,6 +27,7 @@ import sys
 import time
 import urllib.request
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -58,13 +59,23 @@ def download_remote_textures(
     base_urls: list[str],
     tex_dir: Path,
 ) -> dict[str, Path]:
-    """Скачивает не-inline текстуры. base_urls пробуются по очереди."""
+    """Скачивает не-inline текстуры. base_urls пробуются по очереди.
+
+    Потоков столько же, сколько CPU: у игры их десятки, по 0.3–2 МБ каждая,
+    и по одному это минута чистого ожидания сети. Пул не даёт потерять ни
+    одну текстуру — результат собирается в тот же словарь, что и раньше.
+    """
     got: dict[str, Path] = {}
+    todo: list[tuple[str, str, Path]] = []
     for guid, rel in remotes.items():
         dest = tex_dir / Path(rel).name
         if dest.exists() and dest.stat().st_size > 32:
             got[guid] = dest
             continue
+        todo.append((guid, rel, dest))
+
+    def fetch(job: tuple[str, str, Path]) -> tuple[str, str, Path | None, str, int]:
+        guid, rel, dest = job
         for base in base_urls:
             url = base.rstrip("/") + "/" + rel.lstrip("./")
             try:
@@ -73,11 +84,19 @@ def download_remote_textures(
                     data = resp.read()
                 if len(data) > 32:
                     dest.write_bytes(data)
-                    got[guid] = dest
-                    print(f"GET  remote texture {dest.name} ({len(data)} bytes) ← {base}")
-                    break
+                    return guid, rel, dest, base, len(data)
             except Exception:
                 continue
+        return guid, rel, None, "", 0
+
+    if todo:
+        workers = max(1, min(16, (os.cpu_count() or 4) * 2))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for guid, _rel, dest, base, size in pool.map(fetch, todo):
+                if dest is None:
+                    continue
+                got[guid] = dest
+                print(f"GET  remote texture {dest.name} ({size} bytes) ← {base}", flush=True)
     return got
 
 
