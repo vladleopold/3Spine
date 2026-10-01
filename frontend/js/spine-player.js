@@ -546,6 +546,15 @@
   }
 
   // assets: { json, atlas, pages: [Blob, ...] }
+  // Есть ли в кадре хоть что-то нарисованное (грубая проверка по альфе).
+  function hasPixels(g2, w, h) {
+    try {
+      var d = g2.getImageData(0, 0, w, h).data;
+      for (var i = 3; i < d.length; i += 64) if (d[i] > 8) return true;
+      return false;
+    } catch (e) { return true; }
+  }
+
   // Один остановленный кадр скелета: рисуем позу и не запускаем цикл.
   // Состояние отдельное (S), иначе статичные кадры всех карточек затирали бы
   // то, что сейчас играет под курсором.
@@ -573,14 +582,25 @@
               try {
                 var sk = buildCanvas(ns, assets, images, S);
                 if (S.state && S.anims.length) S.state.setAnimation(0, S.anims[0].name, false);
-                for (var f = 0; f < 20; f++) {           // до первого видимого кадра
-                  if (S.state) { S.state.update(0.016); S.state.apply(sk); }
-                  if (typeof sk.update === "function") sk.update(0.016);
-                  sk.updateWorldTransform(0);
+                var advance = function (n) {
+                  for (var f = 0; f < n; f++) {
+                    if (S.state) { S.state.update(0.016); S.state.apply(sk); }
+                    if (typeof sk.update === "function") sk.update(0.016);
+                    sk.updateWorldTransform(0);
+                  }
+                };
+                var drew = false;
+                // Многие анимации (00_start, activation, появление) первые
+                // кадры пустые по определению — доводим до первого видимого.
+                for (var step = 0; step < 14 && !drew; step++) {
+                  advance(step === 0 ? 20 : 12);
+                  fit(sk, S);
+                  S.g2.clearRect(0, 0, S.cssW, S.cssH);
+                  S.renderer.draw(sk);
+                  drew = hasPixels(S.g2, S.canvas.width, S.canvas.height);
                 }
-                fit(sk, S);
-                S.g2.clearRect(0, 0, S.cssW, S.cssH);
-                S.renderer.draw(sk);
+                // Runtime подошёл — дальше рантаймы не пробуем, даже если
+                // кадр вышел пустым: пустой кадр — это данные, а не сборка.
                 return true;
               } catch (e) { return false; }
             });
