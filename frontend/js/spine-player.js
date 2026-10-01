@@ -94,24 +94,25 @@
 
   // Канвас-рендереры 4.x рисуют в 2D-контексте и считают координаты в CSS-пикселях,
   // поэтому рисуем с запасом под devicePixelRatio, иначе картинка мылится.
-  function sizeCanvas() {
-    var rect = st.host.getBoundingClientRect();
+  function sizeCanvas(S) {
+    S = S || st;
+    var rect = S.host.getBoundingClientRect();
     var w = Math.max(64, Math.round(rect.width) || 300);
     var h = Math.max(64, Math.round(rect.height) || 150);
     var dpr = Math.min(2, window.devicePixelRatio || 1);
-    st.canvas.width = Math.round(w * dpr);
-    st.canvas.height = Math.round(h * dpr);
-    st.cssW = w;
-    st.cssH = h;
-    st.g2 = st.canvas.getContext("2d");
-    st.g2.setTransform(dpr, 0, 0, dpr, 0, 0);
+    S.canvas.width = Math.round(w * dpr);
+    S.canvas.height = Math.round(h * dpr);
+    S.cssW = w;
+    S.cssH = h;
+    S.g2 = S.canvas.getContext("2d");
+    S.g2.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   function loadImage(blob) {
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(blob);
       var img = new Image();
-      img.onload = function () { resolve(img); };
+      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
       img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("не читается лист атласа")); };
       img.src = url;
     });
@@ -119,45 +120,46 @@
 
   // Канвас-API: TextureAtlas(atlasText) без загрузчика, текстуры вешаются
   // на страницы через page.setTexture(), а вложения грузит AtlasAttachmentLoader.
-  function buildCanvas(ns, assets, images) {
+  function buildCanvas(ns, assets, images, S) {
+    S = S || st;
     if (!ns.SkeletonRenderer || !ns.CanvasTexture) throw new Error("в сборке нет канвас-рендерера");
     var atlas = new ns.TextureAtlas(assets.atlas);
     var pages = atlas.pages || [];
     if (pages.length > images.length) throw new Error("в атласе " + pages.length + " листов, а есть " + images.length);
     pages.forEach(function (page, i) { page.setTexture(new ns.CanvasTexture(images[i])); });
     var json = JSON.parse(assets.json);
-    st.patched = patchMissingRegions(ns, atlas, json);
+    S.patched = patchMissingRegions(ns, atlas, json);
     var loader = new ns.AtlasAttachmentLoader(atlas);
     var sd = new ns.SkeletonJson(loader).readSkeletonData(json);
     var sk = new ns.Skeleton(sd);
     sk.setToSetupPose();
     sk.setSkin(0);
     sk.setSlotsToSetupPose();
-    st.skeleton = sk;
-    st.anims = sd.animations || [];
+    S.skeleton = sk;
+    S.anims = sd.animations || [];
     // В сборках 4.x список регионов один на весь атлас, у листов его нет
-    st.pages = pages.length;
-    st.regions = (atlas.regions || []).length;
-    st.textured = (atlas.regions || []).filter(function (r) { return !!r.texture; }).length;
-    st.slots = (sd.slots || []).length;
-    st.attached = sk.slots.filter(function (s) { return !!s.attachment; }).length;
-    st.imgs = images.map(function (i) { return i.naturalWidth + "x" + i.naturalHeight; }).join(",");
-    st.names = (atlas.regions || []).slice(0, 3).map(function (r) { return r.name; }).join(",");
-    st.db = (function () {
+    S.pages = pages.length;
+    S.regions = (atlas.regions || []).length;
+    S.textured = (atlas.regions || []).filter(function (r) { return !!r.texture; }).length;
+    S.slots = (sd.slots || []).length;
+    S.attached = sk.slots.filter(function (s) { return !!s.attachment; }).length;
+    S.imgs = images.map(function (i) { return i.naturalWidth + "x" + i.naturalHeight; }).join(",");
+    S.names = (atlas.regions || []).slice(0, 3).map(function (r) { return r.name; }).join(",");
+    S.db = (function () {
       var d = sk.data.bounds;
       return d ? Math.round(d.width) + "x" + Math.round(d.height) + "@" + Math.round(d.x) + "," + Math.round(d.y) : "null";
     })();
-    st.bounds = (function () {
+    S.bounds = (function () {
       var x = sk.data.x, y = sk.data.y, w = sk.data.width, h = sk.data.height;
       return w + "x" + h + "@" + x + "," + y;
     })();
-    st.root = (function () {
+    S.root = (function () {
       var b = sk.data.bones && sk.data.bones[0];
       return b ? Math.round(b.x) + "," + Math.round(b.y) : "?";
     })();
-    st.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
-    st.renderer = new ns.SkeletonRenderer(st.g2);
-    if (hasNonRegion(st.renderer, sd)) st.renderer.triangleRendering = true;
+    S.state = ns.AnimationState ? new ns.AnimationState(new ns.AnimationStateData(sd)) : null;
+    S.renderer = new ns.SkeletonRenderer(S.g2);
+    if (hasNonRegion(S.renderer, sd)) S.renderer.triangleRendering = true;
     return sk;
   }
 
@@ -364,7 +366,8 @@
     return null;
   }
 
-  function fit(skeleton) {
+  function fit(skeleton, S) {
+    S = S || st;
     if (skeleton.updateWorldTransform) skeleton.updateWorldTransform(0);
     var b = pickBounds(skeleton);
     if (!b || !(b.width > 0) || !(b.height > 0)) return false;
@@ -383,7 +386,7 @@
       }
     }
     var pad = 10;
-    var w = st.cssW || st.canvas.width, h = st.cssH || st.canvas.height;
+    var w = S.cssW || S.canvas.width, h = S.cssH || S.canvas.height;
     var scale = Math.min((w - pad * 2) / b.width, (h - pad * 2) / b.height);
     if (!isFinite(scale) || scale <= 0) return false;
     skeleton.scaleX = scale;
@@ -393,8 +396,8 @@
     // Страховка от NaN в сдвиге: с ним холст не рисует вообще ничего.
     if (!isFinite(skeleton.x)) skeleton.x = (w - b.width * scale) / 2;
     if (!isFinite(skeleton.y)) skeleton.y = (h - b.height * scale) / 2;
-    st.fitOk = true;
-    st.fitInfo = {
+    S.fitOk = true;
+    S.fitInfo = {
       w: Math.round(b.width), h: Math.round(b.height),
       x: Math.round(num(b.x, 0)), y: Math.round(num(b.y, 0)),
       масштаб: Math.round(scale * 1000) / 1000,
@@ -543,6 +546,58 @@
   }
 
   // assets: { json, atlas, pages: [Blob, ...] }
+  // Один остановленный кадр скелета: рисуем позу и не запускаем цикл.
+  // Состояние отдельное (S), иначе статичные кадры всех карточек затирали бы
+  // то, что сейчас играет под курсором.
+  function still(host, assetsPromise) {
+    return Promise.resolve(assetsPromise).then(function (assets) {
+      if (!assets) return false;
+      var S = { host: host, anims: [] };
+      var canvas = document.createElement("canvas");
+      canvas.className = "pv-still";
+      host.appendChild(canvas);
+      S.canvas = canvas;
+      sizeCanvas(S);
+      return Promise.all((assets.pages || []).map(loadImage)).then(function (images) {
+        if (!images.length) throw new Error("нет листов атласа");
+        var key = pickRuntime(readVersion(assets.json));
+        var list = (RUNTIMES[key] || []).slice();
+        if (key.charAt(0) === "3") {
+          list = list.concat(RUNTIMES["4.0"], RUNTIMES["4.1"], RUNTIMES["4.2"]);
+        }
+        return list.reduce(function (chain, url) {
+          return chain.then(function (done) {
+            if (done) return true;
+            return loadRuntime(url).then(function (ns) {
+              if (!ns || !ns.Skeleton) return false;
+              try {
+                var sk = buildCanvas(ns, assets, images, S);
+                if (S.state && S.anims.length) S.state.setAnimation(0, S.anims[0].name, false);
+                for (var f = 0; f < 20; f++) {           // до первого видимого кадра
+                  if (S.state) { S.state.update(0.016); S.state.apply(sk); }
+                  if (typeof sk.update === "function") sk.update(0.016);
+                  sk.updateWorldTransform(0);
+                }
+                fit(sk, S);
+                S.g2.clearRect(0, 0, S.cssW, S.cssH);
+                S.renderer.draw(sk);
+                return true;
+              } catch (e) { return false; }
+            });
+          });
+        }, Promise.resolve(false)).then(function (ok) {
+          // Канвас с нарисованным кадром остаётся в DOM, а скелет, атлас и
+          // картинки больше не нужны: отпускаем их, иначе на 60 карточках
+          // браузер держит сотни мегабайт распакованных текстур.
+          S.skeleton = null; S.state = null; S.renderer = null;
+          S.g2 = null; S.host = null;
+          if (!ok && canvas.parentNode) canvas.parentNode.removeChild(canvas);
+          return ok;
+        });
+      });
+    }).catch(function () { return false; });
+  }
+
   function play(host, assetsPromise, onReady) {
     stop();
     st.reason = "";
@@ -746,5 +801,5 @@
     };
   }
 
-  window.SpineCardPlayer = { probe: probe, play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug, note: function () { return st.reason || ""; } };
+  window.SpineCardPlayer = { probe: probe, still: still, play: play, stop: stop, select: select, current: current, version: readVersion, pick: pickRuntime, debug: debug, note: function () { return st.reason || ""; } };
 })();

@@ -441,7 +441,7 @@
   }
 
   async function waitStatus(job, t0, names) {
-    const deadline = t0 + 12 * 60 * 1000;
+    const deadline = t0 + 20 * 60 * 1000;
     const list = Array.isArray(names) ? names : [];
     let lastLog = 0;
     const started = [];
@@ -455,12 +455,12 @@
       if (d.ready) return;
       if (Date.now() - lastLog > 15000) {
         const sec = Math.round((Date.now() - t0) / 1000);
-        log("… ждём GitHub Actions (" + sec + " c): выкачивание идёт в браузере, обычно 1–3 мин, максимум 9 мин…", "dim");
+        log("… ждём GitHub Actions (" + sec + " c): выкачивание идёт в браузере, обычно 1–3 мин, максимум 20 мин…", "dim");
         lastLog = Date.now();
       }
       await sleep(3000);
     }
-    throw new Error("Превышено время ожидания (12 минут)");
+    throw new Error("Превышено время ожидания (20 минут)");
   }
 
   function logFromText(text, prefixRe, clsFn) {
@@ -666,6 +666,41 @@
   let resultZip = null;
   let panelTimer = 0;
   const previewUrls = [];
+
+  // Остановленные кадры скелетов рисуем ПАРАЛЛЕЛЬНО: карточек бывает 60+, и по
+  // одной они проявлялись бы десятки секунд. Одновременно держим не больше
+  // STILL_CONCURRENCY картинок в памяти — иначе браузер съест полгигабайта
+  // распакованных текстур и вкладка упадёт.
+  const STILL_CONCURRENCY = 8;
+  const stillQueue = [];
+  let stillBusy = 0;
+  function setNote(info, text) {
+    if (!info) return;
+    let line = info.querySelector(".pv-note");
+    if (text) {
+      if (!line) {
+        line = document.createElement("div");
+        line.className = "pv-note";
+        info.appendChild(line);
+      }
+      line.textContent = text;
+    } else if (line) {
+      line.remove();
+    }
+  }
+  function pumpStills() {
+    while (stillBusy < STILL_CONCURRENCY && stillQueue.length) {
+      const job = stillQueue.shift();
+      stillBusy++;
+      Promise.resolve()
+        .then(() => window.SpineCardPlayer.still(job.host, job.assets))
+        .then((ok) => {
+          if (ok === false) setNote(job.info, "не удалось показать кадр");
+        })
+        .catch((e) => setNote(job.info, "кадр: " + ((e && e.message) || e)))
+        .then(() => { stillBusy--; pumpStills(); });
+    }
+  }
 
   function dirOf(path) {
     const i = path.lastIndexOf("/");
@@ -994,24 +1029,6 @@
         });
       }
 
-      const pngFile = z.file(it.png);
-      if (pngFile) {
-        pngFile.async("blob").then((b) => {
-          const url = URL.createObjectURL(b);
-          previewUrls.push(url);
-          const img = document.createElement("img");
-          img.alt = "Превью: " + label + ".spine";
-          const drop = () => {
-            const k = previewUrls.indexOf(url);
-            if (k >= 0) previewUrls.splice(k, 1);
-            URL.revokeObjectURL(url);
-          };
-          img.addEventListener("load", drop, { once: true });
-          img.addEventListener("error", drop, { once: true });
-          shot.appendChild(img);
-        }).catch(() => { /* карточка останется без картинки */ });
-      }
-
       // бывшие строки из тултипа — теперь мелким текстом внизу карточки
       const info = document.createElement("div");
       info.className = "pv-info";
@@ -1022,6 +1039,13 @@
         d.textContent = line;
         info.appendChild(d);
       });
+
+      // Скриншотов нет: в карточке сразу остановленный кадр скелета, а под
+      // курсором он оживает. Все карточки стартуют параллельно (см. pumpStills).
+      if (window.SpineCardPlayer && window.SpineCardPlayer.still) {
+        stillQueue.push({ host: shot, info: info, assets: collectSpineAssets(it) });
+        pumpStills();
+      }
 
       const anim = document.createElement("select");
       anim.className = "pv-anim";
