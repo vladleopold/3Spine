@@ -245,6 +245,14 @@ def main() -> None:
 
     broken_versions: set = set()
     retried_versions: set = set()
+    refetched_versions: set = set()
+
+    def out_ok(path: str) -> bool:
+        """Редактор создал непустой файл .spine."""
+        try:
+            return os.path.exists(path) and os.path.getsize(path) > 0
+        except OSError:
+            return False
 
     def editor_installed(ver: str) -> bool:
         """Файл версии редактора существует и выглядит целым (норма — десятки МБ)."""
@@ -266,11 +274,17 @@ def main() -> None:
         if ("validating update file" in hint or "classformaterror" in hint
                 or "an error occurred starting" in hint or "[eof]" in hint):
             broken_versions.add(ver)
+            # Файл версии удаляем ЛЮБОГО размера: при ClassFormatError он
+            # остаётся на диске десятками мегабайт, и следующая попытка
+            # запускает ровно тот же битый редактор — все файлы подряд падают.
+            # Удаление заставляет лаунчер скачать версию заново.
             path = os.path.join(updates_dir(), ver)
             try:
-                if os.path.isfile(path) and os.path.getsize(path) < 1024:
+                if os.path.isfile(path):
+                    sz = os.path.getsize(path)
                     os.remove(path)
-                    print(f"compile-block: удалён битый файл версии {ver}")
+                    print(f"compile-block: удалён битый файл версии {ver} ({sz} байт) — "
+                          f"следующая попытка скачает редактор заново")
             except OSError:
                 pass
             return True
@@ -840,7 +854,8 @@ def main() -> None:
                         attempts = attempts * 2
                     rc = -1
                     for idx, cmd in enumerate(attempts):
-                        used = ("версия " + cmd[cmd.index("-u") + 1]) if "-u" in cmd else "последняя"
+                        ver_u = cmd[cmd.index("-u") + 1] if "-u" in cmd else ""
+                        used = ("версия " + ver_u) if ver_u else "последняя"
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             if os.environ.get("SPINE_PREVIEW", "1") == "1":
@@ -850,6 +865,21 @@ def main() -> None:
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
                         if idx < len(attempts) - 1:
                             time.sleep(1.5 + idx)
+                        # Редактор не выдал файл. Если версия указана и её файл
+                        # лежит на диске — сносим: скорее всего, скачался битый
+                        # редактор (ClassFormatError), и повторный запуск бьёт
+                        # в тот же файл. Следующая попытка скачает заново.
+                        if ver_u and not out_ok(out_spine):
+                            vpath = os.path.join(updates_dir(), ver_u)
+                            if os.path.isfile(vpath) and ver_u not in refetched_versions:
+                                refetched_versions.add(ver_u)
+                                try:
+                                    sz = os.path.getsize(vpath)
+                                    os.remove(vpath)
+                                    say(f"compile-block: {rel}: редактор {ver_u} не дал результат, "
+                                        f"удаляю его файл ({sz} байт) — перекачаю")
+                                except OSError:
+                                    pass
 
                     # запасной путь: другой движок → другой JSON → снова в редактор
                     alt = regen_with_other_engine(p)
