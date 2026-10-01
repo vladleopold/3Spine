@@ -245,7 +245,7 @@ def main() -> None:
 
     broken_versions: set = set()
     retried_versions: set = set()
-    refetched_versions: set = set()
+    refetched_versions: dict = {}   # версия -> сколько раз уже перекачивали
 
     def out_ok(path: str) -> bool:
         """Редактор создал непустой файл .spine."""
@@ -254,15 +254,53 @@ def main() -> None:
         except OSError:
             return False
 
-    def editor_installed(ver: str) -> bool:
-        """Файл версии редактора существует и выглядит целым (норма — десятки МБ)."""
-        if not ver:
-            return True
+    _install_cache: dict = {}
+
+    def drop_editor(ver: str, why: str) -> bool:
+        """Удаляем файл версии редактора и забываем результат проверки.
+        Сброс кеша обязателен: без него следующий проект увидит в кеше False
+        и снесёт файл, который лаунчер только что скачал заново."""
         path = os.path.join(updates_dir(), ver)
+        _install_cache.pop(ver, None)
         try:
-            return os.path.isfile(path) and os.path.getsize(path) > 5 * 1024 * 1024
+            if not os.path.isfile(path):
+                return False
+            sz = os.path.getsize(path)
+            os.remove(path)
+            print(f"compile-block: {ver}: {why} (удалено {sz} байт) — перекачаю")
+            return True
         except OSError:
             return False
+
+    def editor_zip_ok(path: str) -> bool:
+        """Файл версии — zip. Проверяем только центральный каталог: он в конце,
+        и недокачанный файл (обрыв загрузки) его не содержит. Полная проверка
+        всех записей не нужна и стоила бы секунды на 100 МБ."""
+        try:
+            import zipfile
+            with zipfile.ZipFile(path) as zf:
+                return zf.namelist() is not None
+        except Exception:
+            return False
+
+    def editor_installed(ver: str) -> bool:
+        """Файл версии редактора существует и целый."""
+        if not ver:
+            return True
+        if ver in _install_cache:
+            return _install_cache[ver]
+        path = os.path.join(updates_dir(), ver)
+        ok = False
+        try:
+            if os.path.isfile(path) and os.path.getsize(path) > 5 * 1024 * 1024:
+                ok = editor_zip_ok(path)
+                if not ok:
+                    print(f"compile-block: файл версии {ver} недокачан "
+                          f"({os.path.getsize(path)} байт), перекачаю")
+        except OSError:
+            ok = False
+        _install_cache[ver] = ok
+        return ok
 
     def editor_broken(ver: str, log_hint: str = "") -> bool:
         """Версия не запускается: помечаем, чтобы не тратить время на каждом файле."""
@@ -274,19 +312,10 @@ def main() -> None:
         if ("validating update file" in hint or "classformaterror" in hint
                 or "an error occurred starting" in hint or "[eof]" in hint):
             broken_versions.add(ver)
-            # Файл версии удаляем ЛЮБОГО размера: при ClassFormatError он
+            # Файл версии сносим ЛЮБОГО размера: при ClassFormatError он
             # остаётся на диске десятками мегабайт, и следующая попытка
             # запускает ровно тот же битый редактор — все файлы подряд падают.
-            # Удаление заставляет лаунчер скачать версию заново.
-            path = os.path.join(updates_dir(), ver)
-            try:
-                if os.path.isfile(path):
-                    sz = os.path.getsize(path)
-                    os.remove(path)
-                    print(f"compile-block: удалён битый файл версии {ver} ({sz} байт) — "
-                          f"следующая попытка скачает редактор заново")
-            except OSError:
-                pass
+            drop_editor(ver, "запуск упал с ClassFormatError")
             return True
         return False
 
@@ -714,9 +743,9 @@ def main() -> None:
                                     f"compile-block: ✓ {rel} → {os.path.basename(outjson)} "
                                     f"(skel→json, редактор {ver or 'текущий'})")
                             used = cmd[cmd.index("-u") + 1] if "-u" in cmd else ""
-                            if used and not editor_installed(used) and attempt == 0:
-                                # первый запуск сам докачает редактор
-                                pass
+                            # Проверять файл версии здесь нельзя: на первом
+                            # проходе редактора ещё нет на диске, и проверка
+                            # закешировала бы False навсегда.
                             last = run(cmd)
                             if os.path.exists(outjson) and os.path.getsize(outjson) > 0:
                                 return rel, True, (
@@ -837,12 +866,7 @@ def main() -> None:
                             return rel, True, (f"compile-block: ✓ {rel} → "
                                                f"{os.path.basename(out_spine)} (Spine {ver}, версия {v})")
                         if not editor_installed(v):
-                            path = os.path.join(updates_dir(), v)
-                            try:
-                                if os.path.exists(path):
-                                    os.remove(path)
-                            except OSError:
-                                pass
+                            drop_editor(v, f"{rel}: редактор недоступен")
                             broken_versions.add(v)
                             say(f"compile-block: {rel}: редактор {v} недоступен, "
                                 f"пробую другое написание версии")
@@ -856,6 +880,15 @@ def main() -> None:
                     for idx, cmd in enumerate(attempts):
                         ver_u = cmd[cmd.index("-u") + 1] if "-u" in cmd else ""
                         used = ("версия " + ver_u) if ver_u else "последняя"
+                        # Перед запуском: файл версии обязан быть целым zip.
+                        # Обрыв загрузки даёт файл вчетверо меньше нормы, и
+                        # редактор падает с ClassFormatError. Лаунчер сам
+                        # целостность не проверяет — проверяем мы.
+                        if ver_u and not editor_installed(ver_u):
+                            n = refetched_versions.get(ver_u, 0)
+                            if n < 3 and drop_editor(ver_u, f"{rel}: файл битый или недокачан "
+                                                            f"(попытка {n + 1} из 3)"):
+                                refetched_versions[ver_u] = n + 1
                         rc = run(cmd)
                         if os.path.exists(out_spine) and os.path.getsize(out_spine) > 0:
                             if os.environ.get("SPINE_PREVIEW", "1") == "1":
@@ -865,21 +898,14 @@ def main() -> None:
                             return rel, True, f"compile-block: ✓ {rel} → {os.path.basename(out_spine)} (Spine {ver}, {used})"
                         if idx < len(attempts) - 1:
                             time.sleep(1.5 + idx)
-                        # Редактор не выдал файл. Если версия указана и её файл
-                        # лежит на диске — сносим: скорее всего, скачался битый
-                        # редактор (ClassFormatError), и повторный запуск бьёт
-                        # в тот же файл. Следующая попытка скачает заново.
-                        if ver_u and not out_ok(out_spine):
-                            vpath = os.path.join(updates_dir(), ver_u)
-                            if os.path.isfile(vpath) and ver_u not in refetched_versions:
-                                refetched_versions.add(ver_u)
-                                try:
-                                    sz = os.path.getsize(vpath)
-                                    os.remove(vpath)
-                                    say(f"compile-block: {rel}: редактор {ver_u} не дал результат, "
-                                        f"удаляю его файл ({sz} байт) — перекачаю")
-                                except OSError:
-                                    pass
+                        # Редактор не выдал файл. Файл версии удаляем, только
+                        # если он и правда плох: целый редактор с неудобным JSON
+                        # перекачивать бессмысленно.
+                        if ver_u and not out_ok(out_spine) and not editor_installed(ver_u):
+                            n = refetched_versions.get(ver_u, 0)
+                            if n < 3 and drop_editor(ver_u, f"{rel}: редактор не дал результат "
+                                                            f"(попытка {n + 1} из 3)"):
+                                refetched_versions[ver_u] = n + 1
 
                     # запасной путь: другой движок → другой JSON → снова в редактор
                     alt = regen_with_other_engine(p)
