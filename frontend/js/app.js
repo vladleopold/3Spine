@@ -440,6 +440,35 @@
     return data.job;
   }
 
+  // Карточки показываем сразу после обнаружения Spine-пар, не дожидаясь
+  // компиляции: CI кладёт сырой архив в history/<job>-raw.zip, как только
+  // экстрактор закончил, а сайт открывает архив по имени. Потом, когда
+  // соберётся .spine, карточки перезальются уже готовыми.
+  async function showRawCards(job, t0) {
+    const deadline = t0 + 18 * 60 * 1000;
+    while (Date.now() < deadline && run.job === job) {
+      await sleep(4000);
+      let r;
+      try {
+        r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job + "-raw"), { method: "GET" });
+      } catch (e) { continue; }
+      if (!r.ok) continue;
+      const blob = await r.blob().catch(() => null);
+      if (!blob || blob.size < 2048) continue;
+      try {
+        if (!(await renderPreviews(blob))) continue;
+        const n = $("previews-grid").children.length;
+        log("… Spine-пар найдено: " + n + " анимаций. Показываю их до компиляции…", "ok");
+        setRunStep("Найдено анимаций: " + n + ". Компиляция .spine ещё идёт — карточки обновятся.");
+        showPreviewsPanel(true);
+      } catch (e) {
+        log("Сырой архив открылся не полностью (" + e.message + "), ждём компиляцию…", "dim");
+      }
+      return true;
+    }
+    return false;
+  }
+
   async function waitStatus(job, t0, names) {
     const deadline = t0 + 20 * 60 * 1000;
     const list = Array.isArray(names) ? names : [];
@@ -1198,6 +1227,9 @@
       }
       const taskNames = url ? [] : skeletonNames();
       if (url) log("… идёт выкачивание и конвертация, следим за логом задачи…", "dim");
+      // не ждём: карточки появятся сразу после обнаружения, параллельно с
+      // компиляцией, а в конце перезальются готовыми .spine
+      if (url) showRawCards(job, t0).catch(() => {});
       await waitStatus(job, t0, taskNames);
       log("> Результат готов, скачиваем…", "dim");
       lastZip = await fetchResult(job);
