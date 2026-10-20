@@ -139,9 +139,15 @@ def list_names(base: str) -> list[str]:
                 try:
                     from urllib.parse import urlsplit
                     u = urlsplit(raw)
-                    if u.netloc and u.netloc not in ("static.3oaks.com",):
+                    if u.netloc and u.netloc != "static.3oaks.com":
                         continue
-                    raw = u.path.lstrip("/")
+                    url_path = u.path.lstrip("/")
+                    base_path = urlsplit(base).path.strip("/")
+                    # Make absolute CDN URLs relative to the already-resolved game base.
+                    if base_path and url_path.startswith(base_path + "/"):
+                        raw = url_path[len(base_path) + 1:]
+                    else:
+                        raw = url_path
                 except Exception:
                     continue
             stem = os.path.splitext(os.path.basename(raw))[0]
