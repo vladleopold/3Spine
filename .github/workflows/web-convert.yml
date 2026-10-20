@@ -617,8 +617,8 @@ jobs:
                   page = urllib.request.urlopen(req, timeout=8).read(2_000_000).decode("utf-8", "ignore")
                   m = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
                   if m:
-                      title = html.unescape(re.sub(r"\\s+", " ", m.group(1))).strip()
-                      title = re.sub(r"\\s*[|–—-]\\s*[^|–—-]+$", "", title).strip()
+                      title = html.unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+                      title = re.sub(r"\s*[|–—-]\s*[^|–—-]+$", "", title).strip()
               except Exception:
                   pass
           # Report can preserve the source texture format even when the output
