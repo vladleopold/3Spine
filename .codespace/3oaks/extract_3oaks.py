@@ -113,20 +113,45 @@ def resolve_base(arg: str) -> str | None:
     return base
 
 
+# Подсказки путей, найденные в самом бандле. Это позволяет не предполагать
+# единственную структуру assets/packs/<resolution>/<name>.
+PATH_HINTS: dict[str, set[str]] = {}
+
 def list_names(base: str) -> list[str]:
-    """Имена скелетов из бандлов игры. Список полный — это манифест, не лог."""
+    """Имена скелетов и реальные каталоги из бандлов/манифестов игры."""
     names: set[str] = set()
     for rel in BUNDLES:
         data = get("%s/%s" % (base, rel), want=64 << 20)
         if not data:
             continue
+        text = data.decode("utf-8", "ignore")
         found = {m.group(1).decode() for m in NAME_RE.finditer(data)}
-        if found:
-            say("%s: имён в списке %d" % (rel, len(found)))
+        # Если бандл содержит путь целиком, используем его как первичный источник.
+        for m in re.finditer(r"""["']([^"'\\s]{1,240}\\.(?:atlas|skel|json))["']""", text, re.I):
+            raw = m.group(1).split("?", 1)[0].replace("\\\\", "/")
+            raw = raw.removeprefix("./").lstrip("/")
+            if raw.startswith(("http://", "https://")):
+                try:
+                    from urllib.parse import urlsplit
+                    u = urlsplit(raw)
+                    if u.netloc and u.netloc not in ("static.3oaks.com",):
+                        continue
+                    raw = u.path.lstrip("/")
+                except Exception:
+                    continue
+            stem = os.path.splitext(os.path.basename(raw))[0]
+            if stem:
+                names.add(stem)
+                parent = os.path.dirname(raw)
+                if parent and parent not in (".", "/"):
+                    PATH_HINTS.setdefault(stem, set()).add(parent)
         for fn in found:
-            names.add(os.path.splitext(fn)[0])
+            stem = os.path.splitext(fn)[0]
+            names.add(stem)
         if names and rel == "src/game.js":
-            break                            # game.js — главный источник
+            break
+    if PATH_HINTS:
+        say("путей из бандла: %d" % sum(len(v) for v in PATH_HINTS.values()))
     return sorted(names)
 
 
@@ -194,8 +219,16 @@ def fetch_one(base: str, name: str, out_root: str,
     order = list(VARIANTS)
     if sticky.get("v"):
         order = [sticky["v"]] + [v for v in order if v != sticky["v"]]
+    # Сначала проверяем реальные каталоги из JS, затем известные варианты,
+    # затем общие каталоги. Наличие/глубина промежуточных папок не критичны.
+    pdirs = []
+    for hint in sorted(PATH_HINTS.get(name, set())):
+        pdirs.append("%s/%s" % (base, hint.strip("/")))
     for var in order:
-        pdir = "%s/assets/packs/%s" % (base, var)
+        pdirs.append("%s/assets/packs/%s" % (base, var))
+    pdirs.extend("%s/%s" % (base, d) for d in PACK_DIRS)
+    pdirs = list(dict.fromkeys(pdirs))
+    for pdir in pdirs:
         atlas = get("%s/%s.atlas" % (pdir, name), want=8 << 20)
         if not atlas:
             continue
@@ -210,6 +243,7 @@ def fetch_one(base: str, name: str, out_root: str,
                 skel = js
         if not skel_ext:
             continue
+        var = pdir.rsplit("/", 1)[-1]
         sticky["v"] = var
         dst = os.path.join(out_root, name)
         os.makedirs(dst, exist_ok=True)
