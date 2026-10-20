@@ -600,7 +600,7 @@ jobs:
           bash .codespace/publish-results.sh "читаем историю" || true
           unset EXTRACT
           URL="${{ steps.mode.outputs.url }}" JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
-          import json, os, re, urllib.request, html
+          import json, os, re, urllib.request, urllib.parse, html
           path = os.environ["RUNNER_TEMP"] + "/results-index.json"
           items = []
           if os.path.exists(path):
