@@ -1495,7 +1495,7 @@
         let spineCount = 0;
         try {
           const archive = await JSZip.loadAsync(lastZip);
-          spineCount = Object.keys(archive.files).filter((name) => /\\.spine$/i.test(name) && !archive.files[name].dir).length;
+          spineCount = Object.keys(archive.files).filter((name) => /\.spine$/i.test(name) && !archive.files[name].dir).length;
         } catch (_) { /* ниже покажем отсутствие превью */ }
         markRunDone();
         if (spineCount === 0) {
