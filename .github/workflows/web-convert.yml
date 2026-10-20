@@ -617,9 +617,8 @@ jobs:
                   parts = [p for p in parsed.path.split("/") if p]
                   # 3Oaks play links identify the game in /games/<slug>/play.
                   if len(parts) >= 3 and parts[0] == "games" and parts[2] == "play":
-                      slug = parts[1].lower()
-                      known = {"rio_gems": "RIO", "space_coins": "Space Coins"}
-                      title = known.get(slug, re.sub(r"[_-]+", " ", slug).title())
+                      # Use the game slug exactly as it appears in the URL.
+                      title = parts[1]
               except Exception:
                   pass
               if not title:
