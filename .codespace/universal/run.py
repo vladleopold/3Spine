@@ -196,8 +196,14 @@ def strategy_3oaks(page_url: str, work: str, log) -> dict:
         return {"стратегия": "3oaks", "подошла": False, "причина": "нет скрипта"}
     out = os.path.join(work, "oaks-out")
     try:
-        subprocess.run([sys.executable, script, page_url, "--out", out],
-                       timeout=1800, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Keep provider diagnostics in the Actions log. Suppressing stdout/stderr
+        # made a failed extractor look like a successful generic fallback.
+        proc = subprocess.run([sys.executable, script, page_url, "--out", out],
+                              timeout=1800, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, text=True)
+        if proc.stdout:
+            for line in proc.stdout.splitlines()[-100:]:
+                log("3oaks: " + line[:500])
     except Exception as exc:
         log("3oaks: %s" % exc)
     d = os.path.join(out, "extracted", "spine")
