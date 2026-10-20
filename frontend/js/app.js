@@ -676,8 +676,9 @@
 
       const job = document.createElement("div");
       job.className = "h-job";
-      job.textContent = it.job;
-      job.title = (it.file || it.job) + " — клик покажет анимации этого прохода";
+      job.textContent = it.title || it.label || it.name || it.job;
+      job.title = (it.title ? it.job + " · " : "") +
+        (it.file || it.job) + " — клик покажет анимации этого прохода";
 
       const meta = document.createElement("div");
       meta.className = "h-meta";
