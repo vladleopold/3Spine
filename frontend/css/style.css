@@ -236,6 +236,30 @@ section {
   border-radius: 5px; padding: 1px 5px; white-space: nowrap;
 }
 .history-item a.btn { text-decoration: none; }
+.history-item.h-item-clickable,
+.history-item.h-item-clickable .h-job,
+.history-item.h-item-clickable .h-meta,
+.history-item.h-item-clickable .h-tag { cursor: pointer; }
+.history-item.h-item-clickable:hover {
+  border-color: rgba(255,138,31,.7);
+  background: #121820;
+}
+.history-item.h-item-loading { opacity: .82; pointer-events: none; }
+.history-item a.btn { cursor: pointer; }
+.h-spinner,
+.btn-loading::before {
+  content: "";
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+  border: 2px solid rgba(255,138,31,.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: -2px;
+}
+.btn-loading::before { margin-right: 7px; }
 
 footer {
   text-align: center;
@@ -377,6 +401,20 @@ canvas.pv-still {
 
 /* нативная анимация Spine поверх остановленного кадра */
 .pv-shot { position: relative; }
+
+.pv-card.pv-loading .pv-shot::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border: 2px solid rgba(255,138,31,.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .75s linear infinite;
+}
 
 canvas.pv-live {
   position: absolute;

@@ -51,9 +51,13 @@
     if (loadQueue[url]) return loadQueue[url];
     loadQueue[url] = new Promise(function (resolve, reject) {
       var s = document.createElement("script");
+      var timer = setTimeout(function () {
+        s.remove();
+        reject(new Error("таймаут загрузки " + url));
+      }, 12000);
       s.src = url;
-      s.onload = function () { resolve(window.spine); };
-      s.onerror = function () { reject(new Error("не скачался " + url)); };
+      s.onload = function () { clearTimeout(timer); resolve(window.spine); };
+      s.onerror = function () { clearTimeout(timer); reject(new Error("не скачался " + url)); };
       document.head.appendChild(s);
     });
     loadQueue[url] = loadQueue[url].catch(function (e) { delete loadQueue[url]; throw e; });
@@ -112,8 +116,19 @@
     return new Promise(function (resolve, reject) {
       var url = URL.createObjectURL(blob);
       var img = new Image();
-      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("не читается лист атласа")); };
+      var done = false;
+      var finish = function (fn, value) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        URL.revokeObjectURL(url);
+        fn(value);
+      };
+      var timer = setTimeout(function () {
+        finish(reject, new Error("таймаут листа атласа"));
+      }, 12000);
+      img.onload = function () { finish(resolve, img); };
+      img.onerror = function () { finish(reject, new Error("не читается лист атласа")); };
       img.src = url;
     });
   }

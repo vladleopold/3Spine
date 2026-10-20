@@ -11,6 +11,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Allow-Headers": "content-type, authorization, x-spine-token",
   "Access-Control-Max-Age": "86400",
+  "Cache-Control": "no-store, no-cache, must-revalidate",
 };
 
 function json(data, status = 200, extra = {}) {
@@ -187,13 +188,20 @@ async function handleConvert(request, env) {
 async function handleStatus(request, env) {
   const job = new URL(request.url).searchParams.get("job");
   if (!job) return json({ error: "job required" }, 400);
-  let b;
+  let res;
   try {
-    b = await resultsBranch(env);
+    res = await resultsTree(env);
   } catch (_) {
     return json({ ready: false });
   }
-  return json({ ready: (b.commit.commit.message || "").includes(job) });
+  const safe = safeName(job);
+  const entries = res.tree.tree || [];
+  // Результат каждой задачи неизменяемо лежит в history/<job>.zip.
+  // Проверка только HEAD ломалась, когда параллельная задача успевала
+  // записать следующий коммит в results раньше, чем браузер забирал архив.
+  const ready = entries.some((t) => t.type === "blob" && t.path === `history/${safe}.zip`);
+  const raw = entries.some((t) => t.type === "blob" && t.path === `history/${safe}-raw.zip`);
+  return json({ ready, raw });
 }
 
 async function handleDownload(request, env) {
@@ -218,10 +226,11 @@ async function handleDownload(request, env) {
     if (!entry) return json({ error: "archive not found: " + archive }, 404);
   } else {
     if (!job) return json({ error: "job required" }, 400);
-    if (!headMessage.includes(job)) return json({ ready: false }, 202);
-    // сначала неизменяемый архив конкретной задачи, иначе общий output.zip
+    // Сначала неизменяемый архив конкретной задачи. Он остаётся доступным,
+    // даже если другая конвертация уже сдвинула HEAD ветки results.
     const safe = safeName(job);
     const own = (tree.tree || []).find((t) => t.type === "blob" && t.path === `history/${safe}.zip`);
+    if (!own && !headMessage.includes(job)) return json({ ready: false }, 202);
     entry = own || (tree.tree || []).find((t) => t.type === "blob" && t.path === "output.zip");
     name = own ? `spine-${safe}.zip` : "spine-converted.zip";
     if (!entry) return json({ error: "output.zip not found in results" }, 500);

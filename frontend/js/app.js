@@ -37,7 +37,7 @@
 
   /* ---------------- панель текущего прохода ---------------- */
 
-  const run = { job: "", t0: 0, timer: 0, step: "" };
+  const run = { job: "", t0: 0, timer: 0, step: "", logTimerLine: null, finalReady: false };
 
   function setRunStep(text) {
     run.step = text || "";
@@ -52,13 +52,16 @@
 
   function startRunTicker() {
     stopRunTicker();
-    run.t0 = Date.now();
+    if (!run.t0) run.t0 = Date.now();
     run.timer = setInterval(() => {
       const txt = fmtElapsed(Date.now() - run.t0);
       const el = $("run-elapsed");
       if (el) el.textContent = txt;
       const m = document.querySelector("#history-list .history-item .h-meta");
       if (m && run.job) m.textContent = "сейчас идёт · прошло " + txt;
+      if (run.logTimerLine && els.log.contains(run.logTimerLine)) {
+        run.logTimerLine.textContent = "… ждём GitHub Actions · " + txt;
+      }
     }, 500);
   }
 
@@ -114,6 +117,20 @@
     els.log.appendChild(span);
     els.log.append("\n");
     els.log.scrollTop = els.log.scrollHeight;
+    return span;
+  }
+
+  function startLogTimer() {
+    if (run.logTimerLine && els.log.contains(run.logTimerLine)) return;
+    run.logTimerLine = log("… ждём GitHub Actions · " + fmtElapsed(Date.now() - run.t0), "dim");
+  }
+
+  function finishLogTimer(text, cls) {
+    if (run.logTimerLine && els.log.contains(run.logTimerLine)) {
+      run.logTimerLine.textContent = text;
+      run.logTimerLine.className = cls || "";
+    }
+    run.logTimerLine = null;
   }
 
   function setStatus(text, cls) {
@@ -446,15 +463,18 @@
   // соберётся .spine, карточки перезальются уже готовыми.
   async function showRawCards(job, t0) {
     const deadline = t0 + 18 * 60 * 1000;
-    while (Date.now() < deadline && run.job === job) {
+    while (Date.now() < deadline && run.job === job && !run.finalReady) {
       await sleep(4000);
       let r;
       try {
-        r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job + "-raw"), { method: "GET" });
+        r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job + "-raw"), {
+          method: "GET", cache: "no-store",
+        });
       } catch (e) { continue; }
       if (!r.ok) continue;
       const blob = await r.blob().catch(() => null);
       if (!blob || blob.size < 2048) continue;
+      if (run.finalReady || run.job !== job) return false;
       try {
         if (!(await renderPreviews(blob))) continue;
         const n = $("previews-grid").children.length;
@@ -472,23 +492,37 @@
   async function waitStatus(job, t0, names) {
     const deadline = t0 + 20 * 60 * 1000;
     const list = Array.isArray(names) ? names : [];
-    let lastLog = 0;
     const started = [];
     for (const n of list) {
       log("… конвертация " + n + "…", "dim");
       started.push(n);
     }
+    startLogTimer();
+    let failures = 0;
     while (Date.now() < deadline) {
-      const r = await fetch(BROKER + "/status?job=" + encodeURIComponent(job), { method: "GET" });
-      const d = await r.json().catch(() => ({}));
-      if (d.ready) return;
-      if (Date.now() - lastLog > 15000) {
-        const sec = Math.round((Date.now() - t0) / 1000);
-        log("… ждём GitHub Actions (" + sec + " c): выкачивание идёт в браузере, обычно 1–3 мин, максимум 20 мин…", "dim");
-        lastLog = Date.now();
+      try {
+        const ctl = new AbortController();
+        const timeout = setTimeout(() => ctl.abort(), 12000);
+        const r = await fetch(
+          BROKER + "/status?job=" + encodeURIComponent(job) + "&_=" + Date.now(),
+          { method: "GET", cache: "no-store", signal: ctl.signal }
+        ).finally(() => clearTimeout(timeout));
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        failures = 0;
+        if (d.ready) {
+          finishLogTimer("… GitHub Actions завершён · " + fmtElapsed(Date.now() - t0), "ok");
+          return;
+        }
+      } catch (_) {
+        // Сеть, GitHub API и Worker иногда кратко отвечают 5xx/timeout.
+        // Не обрываем проход: следующая проверка продолжится автоматически.
+        failures++;
+        if (failures >= 3) setRunStep("Связь временно прервалась — продолжаю проверять результат автоматически…");
       }
       await sleep(3000);
     }
+    finishLogTimer("… GitHub Actions: превышено время ожидания", "err");
     throw new Error("Превышено время ожидания (20 минут)");
   }
 
@@ -500,13 +534,25 @@
   }
 
   async function fetchResult(job) {
-    const r = await fetch(BROKER + "/download?job=" + encodeURIComponent(job), { method: "GET" });
-    if (r.status === 202) throw new Error("результат ещё не опубликован — посмотрите историю");
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      throw new Error(d.error || ("HTTP " + r.status));
+    let lastError = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        const r = await fetch(
+          BROKER + "/download?job=" + encodeURIComponent(job) + "&_=" + Date.now(),
+          { method: "GET", cache: "no-store" }
+        );
+        if (r.status === 202) throw new Error("результат ещё публикуется");
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || ("HTTP " + r.status));
+        }
+        return r.blob();
+      } catch (e) {
+        lastError = e;
+        if (attempt < 7) await sleep(2500);
+      }
     }
-    return r.blob();
+    throw lastError || new Error("результат не удалось скачать");
   }
 
   async function extractLog(name) {
@@ -537,13 +583,33 @@
 
   let activeJob = "";
 
+  function setHistoryBusy(row, on) {
+    if (!row) return;
+    row.classList.toggle("h-item-loading", !!on);
+    if (on) row.setAttribute("aria-busy", "true");
+    else row.removeAttribute("aria-busy");
+    let spin = row.querySelector(".h-spinner");
+    if (on && !spin) {
+      spin = document.createElement("span");
+      spin.className = "h-spinner";
+      spin.setAttribute("aria-hidden", "true");
+      row.appendChild(spin);
+    } else if (!on && spin) {
+      spin.remove();
+    }
+  }
+
   // Открыть сохранённый проход: тянем его архив и показываем анимации.
-  async function openJobArchive(job) {
+  async function openJobArchive(job, row) {
     if (!job) return;
     activeJob = job;
+    setHistoryBusy(row, true);
     setStatus("открываю " + job + "…", "run");
     try {
-      const r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job), { method: "GET" });
+      const r = await fetch(
+        BROKER + "/download?archive=" + encodeURIComponent(job) + "&_=" + Date.now(),
+        { method: "GET", cache: "no-store" }
+      );
       if (!r.ok) throw new Error("HTTP " + r.status);
       const blob = await r.blob();
       lastZip = blob;
@@ -559,6 +625,8 @@
     } catch (e) {
       log("Не удалось открыть проход " + job + ": " + e.message, "err");
       setStatus("ошибка", "err");
+    } finally {
+      setHistoryBusy(row, false);
     }
     loadHistory();
   }
@@ -602,8 +670,9 @@
     for (const it of items) {
       if (it.job === run.job) continue;
       const row = document.createElement("div");
-      row.className = "history-item" + (it.job === activeJob ? " h-item-active" : "");
-      if (it.job === activeJob) row.classList.add("h-item-clickable");
+      row.className = "history-item h-item-clickable" + (it.job === activeJob ? " h-item-active" : "");
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
 
       const job = document.createElement("div");
       job.className = "h-job";
@@ -629,11 +698,31 @@
       a.href = BROKER + "/download?archive=" + encodeURIComponent(it.job);
       a.textContent = "Весь пакет";
       a.setAttribute("download", "");
+      a.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        setHistoryBusy(row, true);
+        a.classList.add("h-download-busy");
+        a.setAttribute("aria-busy", "true");
+        const old = a.textContent;
+        a.textContent = "Скачиваю…";
+        setTimeout(() => {
+          if (!row.isConnected) return;
+          setHistoryBusy(row, false);
+          a.classList.remove("h-download-busy");
+          a.removeAttribute("aria-busy");
+          a.textContent = old;
+        }, 3500);
+      });
       row.appendChild(a);
 
       row.addEventListener("click", (ev) => {
         if (ev.target === a || a.contains(ev.target)) return;   // это ссылка на весь архив
-        openJobArchive(it.job);
+        openJobArchive(it.job, row);
+      });
+      row.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        ev.preventDefault();
+        openJobArchive(it.job, row);
       });
       els.histList.appendChild(row);
     }
@@ -641,7 +730,7 @@
 
   async function loadHistory() {
     try {
-      const r = await fetch(BROKER + "/history", { method: "GET" });
+      const r = await fetch(BROKER + "/history?_=" + Date.now(), { method: "GET", cache: "no-store" });
       const d = await r.json().catch(() => ({}));
       renderHistory(Array.isArray(d.items) ? d.items : []);
     } catch (_) {
@@ -653,9 +742,17 @@
     }
   }
 
-  els.histRefresh.addEventListener("click", () => {
-    loadHistory();
-    loadStats();
+  els.histRefresh.addEventListener("click", async () => {
+    const old = els.histRefresh.textContent;
+    els.histRefresh.disabled = true;
+    els.histRefresh.classList.add("btn-loading");
+    els.histRefresh.setAttribute("aria-busy", "true");
+    els.histRefresh.textContent = "Обновляю…";
+    await Promise.allSettled([loadHistory(), loadStats()]);
+    els.histRefresh.disabled = false;
+    els.histRefresh.classList.remove("btn-loading");
+    els.histRefresh.removeAttribute("aria-busy");
+    els.histRefresh.textContent = old;
   });
 
   /* ---------------- summary ---------------- */
@@ -697,12 +794,12 @@
   const previewUrls = [];
 
   // Остановленные кадры скелетов рисуем ПАРАЛЛЕЛЬНО: карточек бывает 60+, и по
-  // одной они проявлялись бы десятки секунд. Одновременно держим не больше
-  // STILL_CONCURRENCY картинок в памяти — иначе браузер съест полгигабайта
-  // распакованных текстур и вкладка упадёт.
-  const STILL_CONCURRENCY = 8;
-  const stillQueue = [];
-  let stillBusy = 0;
+  // одной они проявлялись бы десятки секунд. Ассеты загружаются только после
+  // попадания задачи в свободный слот: раньше collectSpineAssets запускался
+  // сразу для ВСЕХ карточек и мог заморозить вкладку на больших архивах.
+  const STILL_CONCURRENCY = 4;
+  const STILL_TIMEOUT = 25000;
+  let stillBatch = null;
   function setNote(info, text) {
     if (!info) return;
     let line = info.querySelector(".pv-note");
@@ -717,17 +814,51 @@
       line.remove();
     }
   }
-  function pumpStills() {
-    while (stillBusy < STILL_CONCURRENCY && stillQueue.length) {
-      const job = stillQueue.shift();
-      stillBusy++;
-      Promise.resolve()
-        .then(() => window.SpineCardPlayer.still(job.host, job.assets))
+  function withTimeout(promise, ms) {
+    let timer = 0;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("таймаут превью")), ms);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  function newStillBatch() {
+    if (stillBatch) {
+      stillBatch.cancelled = true;
+      stillBatch.queue.length = 0;
+    }
+    stillBatch = { queue: [], busy: 0, cancelled: false };
+    return stillBatch;
+  }
+
+  function pumpStills(batch) {
+    if (!batch || batch.cancelled) return;
+    while (batch.busy < STILL_CONCURRENCY && batch.queue.length) {
+      const job = batch.queue.shift();
+      batch.busy++;
+      withTimeout(
+        Promise.resolve()
+          .then(() => job.loadAssets())
+          .then((assets) => {
+            if (batch.cancelled || !job.host.isConnected) return false;
+            return window.SpineCardPlayer.still(job.host, Promise.resolve(assets));
+          }),
+        STILL_TIMEOUT
+      )
         .then((ok) => {
-          if (ok === false) setNote(job.info, "не удалось показать кадр");
+          if (!batch.cancelled && ok === false) setNote(job.info, "не удалось показать кадр");
         })
-        .catch((e) => setNote(job.info, "кадр: " + ((e && e.message) || e)))
-        .then(() => { stillBusy--; pumpStills(); });
+        .catch((e) => {
+          if (!batch.cancelled) setNote(job.info, "кадр: " + ((e && e.message) || e));
+        })
+        .finally(() => {
+          job.card.classList.remove("pv-loading");
+          job.card.removeAttribute("aria-busy");
+          batch.busy--;
+          pumpStills(batch);
+        });
     }
   }
 
@@ -973,6 +1104,7 @@
 
   async function renderPreviews(blob) {
     const grid = $("previews-grid");
+    const batch = newStillBatch();
     revokePreviewUrls();
     grid.innerHTML = "";
     resultZip = null;
@@ -1013,8 +1145,9 @@
       const it = items[i];
       const label = it.name || stemOf(it.spine);
       const card = document.createElement("div");
-      card.className = "pv-card";
+      card.className = "pv-card pv-loading";
       card.setAttribute("role", "listitem");
+      card.setAttribute("aria-busy", "true");
       card.style.animationDelay = Math.min(i * 45, 600) + "ms";
 
       const shot = document.createElement("div");
@@ -1072,8 +1205,15 @@
       // Скриншотов нет: в карточке сразу остановленный кадр скелета, а под
       // курсором он оживает. Все карточки стартуют параллельно (см. pumpStills).
       if (window.SpineCardPlayer && window.SpineCardPlayer.still) {
-        stillQueue.push({ host: shot, info: info, assets: collectSpineAssets(it) });
-        pumpStills();
+        batch.queue.push({
+          host: shot,
+          info: info,
+          card: card,
+          loadAssets: () => collectSpineAssets(it),
+        });
+      } else {
+        card.classList.remove("pv-loading");
+        card.removeAttribute("aria-busy");
       }
 
       const anim = document.createElement("select");
@@ -1161,6 +1301,7 @@
       frag.appendChild(card);
     }
     grid.appendChild(frag);
+    pumpStills(batch);
 
     showPreviewsPanel(true);
     announce("Показано скриншотов компиляции: " + items.length);
@@ -1182,6 +1323,13 @@
     revokePreviewUrls();
     showPreviewsPanel(false, true);
     els.log.textContent = "";
+    run.job = "";
+    run.t0 = 0;
+    run.step = "";
+    run.logTimerLine = null;
+    run.finalReady = false;
+    const badge = $("run-badge");
+    if (badge) badge.textContent = "in_progress";
     let job = null;
     const t0 = Date.now();
     showRunPanel(true, { title: "Запускаю проход…", step: "Отправляю задачу в GitHub Actions…" });
@@ -1229,8 +1377,10 @@
       if (url) log("… идёт выкачивание и конвертация, следим за логом задачи…", "dim");
       // не ждём: карточки появятся сразу после обнаружения, параллельно с
       // компиляцией, а в конце перезальются готовыми .spine
-      if (url) showRawCards(job, t0).catch(() => {});
+      const rawCardsTask = url ? showRawCards(job, t0).catch(() => false) : Promise.resolve(false);
       await waitStatus(job, t0, taskNames);
+      run.finalReady = true;
+      await rawCardsTask;
       log("> Результат готов, скачиваем…", "dim");
       lastZip = await fetchResult(job);
       if (url) log("… ассеты игры скачаны и сконвертированы", "ok");
