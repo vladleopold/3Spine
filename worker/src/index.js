@@ -72,7 +72,8 @@ async function resultsBranch(env) {
 
 async function resultsTree(env) {
   const b = await resultsBranch(env);
-  return { branch: b, tree: await j(env, "GET", `/repos/${REPO}/git/trees/${b.commit.sha}?recursive=1`) };
+  const commit = await j(env, "GET", `/repos/${REPO}/git/commits/${b.commit.sha}`);
+  return { branch: b, tree: await j(env, "GET", `/repos/${REPO}/git/trees/${commit.tree.sha}?recursive=1`) };
 }
 
 function safeName(job) {
@@ -239,7 +240,7 @@ async function handleDownload(request, env) {
   // большие архивы отдаём редиректом на raw.githubusercontent: держать
   // сотни мегабайт в памяти воркера нельзя (Cloudflare 1102)
   if (entry.size && entry.size > 6 * 1024 * 1024 && headSha) {
-    const raw = `https://raw.githubusercontent.com/${REPO}/${headSha}/${entry.path}`;
+    const raw = `https://raw.githubusercontent.com/${REPO}/${RESULTS}/${entry.path}`;
     return new Response(null, {
       status: 302,
       headers: {
