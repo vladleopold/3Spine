@@ -1,6 +1,13 @@
 {
  "items": [
   {
+   "job": "Проверка Space Coins WEBP",
+   "file": "history/_________________Space_Coins_WEBP.zip",
+   "bytes": 77212196,
+   "date": "2026-10-20T12:54:29Z",
+   "spine": true
+  },
+  {
    "job": "convert-mvgn75xe-v8omhn",
    "file": "history/convert-mvgn75xe-v8omhn.zip",
    "bytes": 1342696,
