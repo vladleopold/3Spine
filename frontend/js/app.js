@@ -1036,21 +1036,13 @@
     return Promise.all(use.map((n) => atlasPagePaths(n, idx))).then((pages) => {
       pages.forEach((list) => list.forEach((p) => set.add(p)));
 
-      // После нарезки картинки лежат рекурсивно в
-      // spine/<проект>/images/<атлас>/*.png. Старый код смотрел только рядом
-      // со .spine и поэтому отдавал ZIP без нарезанных PNG.
+      // В ZIP из истории PNG могут лежать в нескольких вложенных папках:
+      // images/<атлас>/, images/<проект>/, textures/ и рядом с атласом.
+      // Для выбранного проекта включаем все изображения из его корня рекурсивно,
+      // а не только изображения в одном ожидаемом пути.
       Object.keys(idx.byPath).forEach((name) => {
         if (!IMG_RE.test(name)) return;
-        for (const root of roots) {
-          if (!underRoot(name, root)) continue;
-          const rel = name.slice(root.length + 1);
-          const dedicated = baseOf(root).toLowerCase() === labelLower;
-          if (dedicated || dirOf(name) === root ||
-              rel.toLowerCase().indexOf("images/" + labelLower + "/") === 0) {
-            set.add(name);
-            break;
-          }
-        }
+        if (inProject(name)) set.add(name);
       });
       if (item.png && idx.byPath.has(item.png) && IMG_RE.test(item.png)) set.add(item.png);
 
