@@ -120,7 +120,7 @@ def resolve_base(arg: str) -> str | None:
 
 # Подсказки путей, найденные в самом бандле. Это позволяет не предполагать
 # единственную структуру assets/packs/<resolution>/<name>.
-PATH_HINTS: dict[str, set[str]] = {}
+PATH_HINTS: dict[str, dict[str, set[str]]] = {}
 
 def list_names(base: str) -> list[str]:
     """Имена скелетов и реальные каталоги из бандлов/манифестов игры."""
@@ -155,14 +155,15 @@ def list_names(base: str) -> list[str]:
                 names.add(stem)
                 parent = os.path.dirname(raw)
                 if parent and parent not in (".", "/"):
-                    PATH_HINTS.setdefault(stem, set()).add(parent)
+                    ext = os.path.splitext(raw)[1].lower()
+                    PATH_HINTS.setdefault(stem, {}).setdefault(ext, set()).add(parent)
         for fn in found:
             stem = os.path.splitext(fn)[0]
             names.add(stem)
         if names and rel == "src/game.js":
             break
     if PATH_HINTS:
-        say("путей из бандла: %d" % sum(len(v) for v in PATH_HINTS.values()))
+        say("путей из бандла: %d" % sum(len(paths) for by_ext in PATH_HINTS.values() for paths in by_ext.values()))
     return sorted(names)
 
 
@@ -226,72 +227,84 @@ def safe_page_path(root: str, page: str) -> str:
 
 def fetch_one(base: str, name: str, out_root: str,
               sticky: dict) -> tuple[str, str, int, str] | None:
-    """Качает одну пару: скелет + атлас + страницы. Возвращает (имя, вид, байт)."""
+    """Качает скелет, атлас и страницы независимо от их каталогов."""
+    hints = PATH_HINTS.get(name, {})
     order = list(VARIANTS)
     if sticky.get("v"):
         order = [sticky["v"]] + [v for v in order if v != sticky["v"]]
-    # Сначала проверяем реальные каталоги из JS, затем известные варианты,
-    # затем общие каталоги. Наличие/глубина промежуточных папок не критичны.
-    pdirs = []
-    for hint in sorted(PATH_HINTS.get(name, set())):
-        pdirs.append("%s/%s" % (base, hint.strip("/")))
-    for var in order:
-        pdirs.append("%s/assets/packs/%s" % (base, var))
-    pdirs.extend("%s/%s" % (base, d) for d in PACK_DIRS)
-    pdirs = list(dict.fromkeys(pdirs))
-    for pdir in pdirs:
-        atlas = get("%s/%s.atlas" % (pdir, name), want=8 << 20)
-        if not atlas:
-            continue
-        skel_ext = None
-        skel = get("%s/%s.skel" % (pdir, name), want=64 << 20)
-        if skel and len(skel) > 128:
-            skel_ext = ".skel"
+
+    defaults = ["%s/assets/packs/%s" % (base, var) for var in order]
+    defaults.extend("%s/%s" % (base, d) for d in PACK_DIRS)
+    defaults = list(dict.fromkeys(defaults))
+    skel_dirs = ["%s/%s" % (base, p.strip("/")) for ext in (".skel", ".json")
+                 for p in sorted(hints.get(ext, set()))]
+    atlas_dirs = ["%s/%s" % (base, p.strip("/"))
+                  for p in sorted(hints.get(".atlas", set()))]
+    skel_dirs = list(dict.fromkeys(skel_dirs + defaults))
+    atlas_dirs = list(dict.fromkeys(atlas_dirs + defaults + skel_dirs))
+
+    skel = None
+    skel_ext = None
+    skel_dir = ""
+    for pdir in skel_dirs:
+        candidate = get("%s/%s.skel" % (pdir, name), want=64 << 20)
+        if candidate and len(candidate) > 128:
+            skel, skel_ext, skel_dir = candidate, ".skel", pdir
+            break
+        candidate = get("%s/%s.json" % (pdir, name), want=96 << 20)
+        if candidate and len(candidate) > 128 and is_spine_json(candidate):
+            skel, skel_ext, skel_dir = candidate, ".json", pdir
+            break
+    if not skel or not skel_ext:
+        return None
+
+    atlas = None
+    atlas_dir = ""
+    for pdir in atlas_dirs:
+        candidate = get("%s/%s.atlas" % (pdir, name), want=8 << 20)
+        if candidate and len(candidate) > 20:
+            atlas, atlas_dir = candidate, pdir
+            break
+    if not atlas:
+        return None
+
+    sticky["v"] = atlas_dir.rsplit("/", 1)[-1]
+    dst = os.path.join(out_root, name)
+    os.makedirs(dst, exist_ok=True)
+    total = 0
+    with open(os.path.join(dst, name + skel_ext), "wb") as f:
+        f.write(skel)
+    total += len(skel)
+
+    atlas_text = atlas.decode("utf-8", "replace")
+    replacements: dict[str, str] = {}
+    for page in atlas_pages(atlas_text, atlas_dir):
+        dest = safe_page_path(dst, page)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if not os.path.exists(dest) or os.path.getsize(dest) < 256:
+            blob = get("%s/%s" % (atlas_dir, page.lstrip("/")), want=48 << 20)
+            if not blob:
+                warn("%s: не докачал страницу %s из %s" % (name, page, atlas_dir))
+                continue
+            with open(dest, "wb") as f:
+                f.write(blob)
+            total += len(blob)
         else:
-            js = get("%s/%s.json" % (pdir, name), want=96 << 20)
-            if js and len(js) > 128 and is_spine_json(js):
-                skel_ext = ".json"
-                skel = js
-        if not skel_ext:
-            continue
-        var = pdir.rsplit("/", 1)[-1]
-        sticky["v"] = var
-        dst = os.path.join(out_root, name)
-        os.makedirs(dst, exist_ok=True)
-        total = 0
-        with open(os.path.join(dst, name + skel_ext), "wb") as f:
-            f.write(skel)
-        total += len(skel)
-        atlas_text = atlas.decode("utf-8", "replace")
-        replacements: dict[str, str] = {}
-        for page in atlas_pages(atlas_text, pdir):
-            dest = safe_page_path(dst, page)
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if not os.path.exists(dest) or os.path.getsize(dest) < 256:
-                blob = get("%s/%s" % (pdir, page), want=48 << 20)
-                if not blob:
-                    warn("%s: не докачал страницу %s" % (name, page))
-                    continue
-                with open(dest, "wb") as f:
-                    f.write(blob)
-                total += len(blob)
-            else:
-                total += os.path.getsize(dest)
-            png = to_png(dest)
-            if not png:
-                return None
-            if os.path.abspath(png) != os.path.abspath(dest):
-                page_dir = page.replace("\\", "/").rsplit("/", 1)
-                new_name = os.path.basename(png)
-                replacements[page] = (page_dir[0] + "/" + new_name) if len(page_dir) == 2 else new_name
-                total += os.path.getsize(png)
-        atlas_text = rewrite_atlas_pages(atlas_text, replacements)
-        with open(os.path.join(dst, name + ".atlas"), "w", encoding="utf-8", newline="") as f:
-            f.write(atlas_text)
-        total += len(atlas_text.encode("utf-8"))
-        # страницы лежат рядом со скелетом, атлас их ищет по имени — ок
-        return (name, skel_ext, total, var)
-    return None
+            total += os.path.getsize(dest)
+        png = to_png(dest)
+        if not png:
+            return None
+        if os.path.abspath(png) != os.path.abspath(dest):
+            page_dir = page.replace("\\", "/").rsplit("/", 1)
+            new_name = os.path.basename(png)
+            replacements[page] = (page_dir[0] + "/" + new_name) if len(page_dir) == 2 else new_name
+            total += os.path.getsize(png)
+
+    atlas_text = rewrite_atlas_pages(atlas_text, replacements)
+    with open(os.path.join(dst, name + ".atlas"), "w", encoding="utf-8", newline="") as f:
+        f.write(atlas_text)
+    total += len(atlas_text.encode("utf-8"))
+    return (name, skel_ext, total, sticky["v"])
 
 
 def main() -> int:
