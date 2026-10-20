@@ -56,7 +56,12 @@ NAME_RE = re.compile(
     rb'["\'](?:\./)?(?:[^"\']*/)?([A-Za-z0-9_][A-Za-z0-9_.-]{1,100}\.(?:skel|json))["\']',
     re.I,
 )
-OG_RE = re.compile(rb'property="og:image"\s+content="([^"]+)"')
+# Порядок атрибутов meta не фиксирован в HTML.
+OG_RE = re.compile(
+    rb'<meta\b(?=[^>]*\bproperty=["\']og:image["\'])'
+    rb'(?=[^>]*\bcontent=["\']([^"\']+)["\'])[^>]*>',
+    re.I,
+)
 BUNDLES = ("src/game.js", "src/libs.js", "init.js", "src/main.js")
 
 # Диагностика
@@ -128,7 +133,7 @@ def list_names(base: str) -> list[str]:
         found = {m.group(1).decode() for m in NAME_RE.finditer(data)}
         # Если бандл содержит путь целиком, используем его как первичный источник.
         for m in re.finditer(r"""["']([^"'\\s]{1,240}\\.(?:atlas|skel|json))["']""", text, re.I):
-            raw = m.group(1).split("?", 1)[0].replace("\\\\", "/")
+            raw = m.group(1).split("?", 1)[0].replace("\\", "/")
             raw = raw.removeprefix("./").lstrip("/")
             if raw.startswith(("http://", "https://")):
                 try:
