@@ -199,7 +199,7 @@ def strategy_3oaks(page_url: str, work: str, log) -> dict:
         # Keep provider diagnostics in the Actions log. Suppressing stdout/stderr
         # made a failed extractor look like a successful generic fallback.
         proc = subprocess.run([sys.executable, script, page_url, "--out", out],
-                              timeout=1800, stdout=subprocess.PIPE,
+                              timeout=240, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True)
         if proc.stdout:
             for line in proc.stdout.splitlines()[-100:]:
