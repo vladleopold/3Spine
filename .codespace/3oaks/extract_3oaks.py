@@ -77,13 +77,13 @@ def warn(msg: str) -> None:
     print("::warning::3oaks: %s" % msg, flush=True)
 
 
-def get(url: str, want: int = 1 << 30) -> bytes | None:
+def get(url: str, want: int = 1 << 30, timeout: int = TIMEOUT) -> bytes | None:
     """GET с запасным вариантом на случай временной ошибки сети."""
     last: Exception | None = None
     for attempt in range(2):
         req = urllib.request.Request(url, headers={"User-Agent": UA})
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 data = r.read(want)
             return data
         except urllib.error.HTTPError as e:
@@ -233,25 +233,30 @@ def fetch_one(base: str, name: str, out_root: str,
     if sticky.get("v"):
         order = [sticky["v"]] + [v for v in order if v != sticky["v"]]
 
-    defaults = ["%s/assets/packs/%s" % (base, var) for var in order]
-    defaults.extend("%s/%s" % (base, d) for d in PACK_DIRS)
-    defaults = list(dict.fromkeys(defaults))
-    skel_dirs = ["%s/%s" % (base, p.strip("/")) for ext in (".skel", ".json")
-                 for p in sorted(hints.get(ext, set()))]
-    atlas_dirs = ["%s/%s" % (base, p.strip("/"))
-                  for p in sorted(hints.get(".atlas", set()))]
-    skel_dirs = list(dict.fromkeys(skel_dirs + defaults))
-    atlas_dirs = list(dict.fromkeys(atlas_dirs + defaults + skel_dirs))
+    variant_dirs = ["%s/assets/packs/%s" % (base, var) for var in order]
+    hinted_skel_dirs = ["%s/%s" % (base, p.strip("/")) for ext in (".skel", ".json")
+                        for p in sorted(hints.get(ext, set()))]
+    hinted_atlas_dirs = ["%s/%s" % (base, p.strip("/"))
+                         for p in sorted(hints.get(".atlas", set()))]
+    if hinted_skel_dirs or hinted_atlas_dirs:
+        # Exact paths from the bundle take priority; only then probe known
+        # resolution variants as fallback, avoiding a huge blind URL matrix.
+        skel_dirs = list(dict.fromkeys(hinted_skel_dirs + variant_dirs))
+        atlas_dirs = list(dict.fromkeys(hinted_atlas_dirs + variant_dirs + skel_dirs))
+    else:
+        fallback_dirs = variant_dirs + ["%s/%s" % (base, d) for d in PACK_DIRS]
+        skel_dirs = list(dict.fromkeys(fallback_dirs))
+        atlas_dirs = list(dict.fromkeys(fallback_dirs))
 
     skel = None
     skel_ext = None
     skel_dir = ""
     for pdir in skel_dirs:
-        candidate = get("%s/%s.skel" % (pdir, name), want=64 << 20)
+        candidate = get("%s/%s.skel" % (pdir, name), want=64 << 20, timeout=12)
         if candidate and len(candidate) > 128:
             skel, skel_ext, skel_dir = candidate, ".skel", pdir
             break
-        candidate = get("%s/%s.json" % (pdir, name), want=96 << 20)
+        candidate = get("%s/%s.json" % (pdir, name), want=96 << 20, timeout=12)
         if candidate and len(candidate) > 128 and is_spine_json(candidate):
             skel, skel_ext, skel_dir = candidate, ".json", pdir
             break
@@ -261,7 +266,7 @@ def fetch_one(base: str, name: str, out_root: str,
     atlas = None
     atlas_dir = ""
     for pdir in atlas_dirs:
-        candidate = get("%s/%s.atlas" % (pdir, name), want=8 << 20)
+        candidate = get("%s/%s.atlas" % (pdir, name), want=8 << 20, timeout=12)
         if candidate and len(candidate) > 20:
             atlas, atlas_dir = candidate, pdir
             break
@@ -282,7 +287,7 @@ def fetch_one(base: str, name: str, out_root: str,
         dest = safe_page_path(dst, page)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         if not os.path.exists(dest) or os.path.getsize(dest) < 256:
-            blob = get("%s/%s" % (atlas_dir, page.lstrip("/")), want=48 << 20)
+            blob = get("%s/%s" % (atlas_dir, page.lstrip("/")), want=48 << 20, timeout=20)
             if not blob:
                 warn("%s: не докачал страницу %s из %s" % (name, page, atlas_dir))
                 continue
