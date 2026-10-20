@@ -599,8 +599,8 @@ jobs:
           export EXTRACT="history/index.json:$RUNNER_TEMP/results-index.json"
           bash .codespace/publish-results.sh "читаем историю" || true
           unset EXTRACT
-          JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
-          import json, os
+          URL="${{ steps.mode.outputs.url }}" JOB="$JOB" SAFE="$SAFE" NOW="$NOW" BYTES="$BYTES" SPINE="$SPINE" python3 - <<'PY'
+          import json, os, re, urllib.request, html
           path = os.environ["RUNNER_TEMP"] + "/results-index.json"
           items = []
           if os.path.exists(path):
@@ -608,8 +608,34 @@ jobs:
                   items = json.load(open(path, encoding="utf-8")).get("items", [])
               except Exception:
                   items = []
+          title = ""
+          fmt = ""
+          url = os.environ.get("URL", "").strip()
+          if url:
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                  page = urllib.request.urlopen(req, timeout=8).read(2_000_000).decode("utf-8", "ignore")
+                  m = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
+                  if m:
+                      title = html.unescape(re.sub(r"\\s+", " ", m.group(1))).strip()
+                      title = re.sub(r"\\s*[|–—-]\\s*[^|–—-]+$", "", title).strip()
+              except Exception:
+                  pass
+          # Report can preserve the source texture format even when the output
+          # archive contains normalized PNG files.
+          report_path = os.path.join(os.environ.get("RUNNER_TEMP", ""), "universal", "universal-report.json")
+          try:
+              report_text = open(report_path, encoding="utf-8").read().lower()
+              if "webp" in report_text:
+                  fmt = "WEBP"
+              elif "avif" in report_text:
+                  fmt = "AVIF"
+          except Exception:
+              pass
+          display = title + (" | " + fmt if title and fmt else "")
           entry = {
               "job": os.environ["JOB"],
+              "title": display,
               "file": "history/%s.zip" % os.environ["SAFE"],
               "bytes": int(os.environ["BYTES"]),
               "date": os.environ["NOW"],
