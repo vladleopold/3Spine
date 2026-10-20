@@ -27,6 +27,7 @@ async function buildZip() {
   z.file("res/hero.spine", "SPINE");
   z.file("res/hero.atlas", "hero.png\nsize: 1,1\n");
   z.file("res/hero.png", png1x1());
+  z.file("res/images/hero/body.png", png1x1());
   z.file("res/logo.spine", "SPINE");
   z.file("res/logo.atlas", "logo.png\nsize: 1,1\n");
   z.file("res/logo.png", png1x1());
@@ -120,6 +121,13 @@ async function buildZip() {
   await page.locator("#previews-grid .pv-card .btn").first().click();
   const file = await dl;
   ok(!!file, "клик по блоку анимации запускает скачивание (" + (file ? await file.suggestedFilename() : "нет файла") + ")");
+  if (file) {
+    const saved = await file.path();
+    const pair = await JSZip.loadAsync(require("fs").readFileSync(saved));
+    const names = Object.keys(pair.files);
+    ok(names.includes("res/images/hero/body.png"),
+       "поштучный ZIP содержит вложенный нарезанный PNG");
+  }
 
   console.log("\nAPI вызовы: " + seen.slice(0, 8).join(", "));
   console.log(fails.length ? "\nПРОВАЛЕНО: " + fails.length + " → " + fails.join("; ") : "\nВСЕ ПРОВЕРКИ ПРОЙДЕНЫ");

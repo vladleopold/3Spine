@@ -982,30 +982,82 @@
     });
   }
 
+  function bundleProjectRoots(item, idx) {
+    const label = (item.name || stemOf(item.spine || "")).toLowerCase();
+    const roots = [];
+    const add = (root) => {
+      if (root && root !== "previews" && roots.indexOf(root) < 0) roots.push(root);
+    };
+    const addFrom = (path) => {
+      const parts = path.split("/");
+      if ((parts[0] === "spine" || parts[0] === "spine_projects") && parts.length > 2) {
+        add(parts.slice(0, 2).join("/"));
+      } else {
+        add(dirOf(path));
+      }
+    };
+
+    if (item.spine && idx.byPath.has(item.spine)) addFrom(item.spine);
+    Object.keys(idx.byPath).forEach((name) => {
+      if (stemOf(name).toLowerCase() !== label) return;
+      if (!/\.(spine|skel|json|atlas|atlas\.txt)$/i.test(name)) return;
+      addFrom(name);
+    });
+    ["spine/" + (item.name || ""), "spine_projects/" + (item.name || "")]
+      .forEach((root) => {
+        if (root !== "spine/" && root !== "spine_projects/" &&
+            Array.from(idx.byPath.keys()).some((name) => name.indexOf(root + "/") === 0)) add(root);
+      });
+    return roots;
+  }
+
   function collectBundle(item) {
     const idx = buildIndexes();
-    const spine = idx.byPath.has(item.spine) ? item.spine : item.spine.replace(/\.json$/i, ".spine");
-    if (!idx.byPath.has(spine)) return Promise.reject(new Error("в архиве нет " + baseOf(spine)));
-    const dir = dirOf(spine);
-    const stem = stemOf(spine);
-    const set = new Set([spine]);
-    [".json", ".skel"].forEach((e) => {
-      const p = dir ? dir + "/" + stem + e : stem + e;
-      if (idx.byPath.has(p)) set.add(p);
+    const label = item.name || stemOf(item.spine || "animation");
+    const labelLower = label.toLowerCase();
+    const roots = bundleProjectRoots(item, idx);
+    const underRoot = (name, root) => name.indexOf(root + "/") === 0;
+    const inProject = (name) => roots.some((root) => underRoot(name, root));
+    const set = new Set();
+
+    // Берём настоящий проект, а не только маленькую копию из previews/.
+    Object.keys(idx.byPath).forEach((name) => {
+      if (!inProject(name) && name !== item.spine) return;
+      if (/\.(spine|skel|json)$/i.test(name) && stemOf(name).toLowerCase() === labelLower) set.add(name);
     });
-    const atlases = Object.keys(idx.byPath).filter((n) => {
-      if (dirOf(n) !== dir) return false;
-      return n.toLowerCase().endsWith(".atlas") || n.toLowerCase().endsWith(".atlas.txt");
-    });
-    const preferred = atlases.filter((n) => stemOf(n) === stem);
+    if (item.spine && idx.byPath.has(item.spine)) set.add(item.spine);
+
+    const atlases = Object.keys(idx.byPath).filter((name) =>
+      inProject(name) && (/\.atlas$/i.test(name) || /\.atlas\.txt$/i.test(name))
+    );
+    const preferred = atlases.filter((name) => stemOf(name).toLowerCase() === labelLower);
     const use = preferred.length ? preferred : atlases;
     use.forEach((n) => set.add(n));
     return Promise.all(use.map((n) => atlasPagePaths(n, idx))).then((pages) => {
       pages.forEach((list) => list.forEach((p) => set.add(p)));
-      if (!pages.some((l) => l.length)) {
-        Object.keys(idx.byPath).forEach((n) => {
-          if (dirOf(n) === dir && IMG_RE.test(n)) set.add(n);
-        });
+
+      // После нарезки картинки лежат рекурсивно в
+      // spine/<проект>/images/<атлас>/*.png. Старый код смотрел только рядом
+      // со .spine и поэтому отдавал ZIP без нарезанных PNG.
+      Object.keys(idx.byPath).forEach((name) => {
+        if (!IMG_RE.test(name)) return;
+        for (const root of roots) {
+          if (!underRoot(name, root)) continue;
+          const rel = name.slice(root.length + 1);
+          const dedicated = baseOf(root).toLowerCase() === labelLower;
+          if (dedicated || dirOf(name) === root ||
+              rel.toLowerCase().indexOf("images/" + labelLower + "/") === 0) {
+            set.add(name);
+            break;
+          }
+        }
+      });
+      if (item.png && idx.byPath.has(item.png) && IMG_RE.test(item.png)) set.add(item.png);
+
+      const pictures = Array.from(set).filter((name) => IMG_RE.test(name));
+      if (!pictures.length) return Promise.reject(new Error("в комплекте не найдены картинки"));
+      if (!Array.from(set).some((name) => /\.(spine|skel|json)$/i.test(name))) {
+        return Promise.reject(new Error("в комплекте не найден скелет"));
       }
       if (set.size > BUNDLE_MAX_FILES) {
         return Promise.reject(new Error("в комплекте " + set.size + " файлов — скачайте общий архив"));
@@ -1022,8 +1074,30 @@
           out.file(n, buf, { createFolders: false, binary: true });
         }));
       });
-      return Promise.all(jobs).then(() => out.generateAsync({ type: "blob", compression: "DEFLATE" }));
+      return Promise.all(jobs).then(() => out.generateAsync({ type: "blob", compression: "DEFLATE" }))
+        .then((blob) => ({
+          blob: blob,
+          files: set.size,
+          pictures: pictures.length,
+          png: pictures.filter((name) => /\.png$/i.test(name)).length,
+        }));
     });
+  }
+
+  async function collectReadyBundle(item) {
+    const ready = item.zip && resultZip ? resultZip.file(item.zip) : null;
+    if (!ready) throw new Error("готового комплекта нет");
+    const bytes = await ready.async("uint8array");
+    const nested = await JSZip.loadAsync(bytes);
+    const names = Object.keys(nested.files).filter((name) => !nested.files[name].dir);
+    const pictures = names.filter((name) => IMG_RE.test(name));
+    if (!pictures.length) throw new Error("готовый комплект тоже не содержит картинок");
+    return {
+      blob: new Blob([bytes], { type: "application/zip" }),
+      files: names.length,
+      pictures: pictures.length,
+      png: pictures.filter((name) => /\.png$/i.test(name)).length,
+    };
   }
 
   // Ассеты для нативного проигрывания: skeleton JSON, его атлас и первая страница.
@@ -1255,18 +1329,22 @@
         const old = withImg.textContent;
         withImg.textContent = "Собираем…";
         try {
-          // У Playson CI уже собирает готовый zip пары (скелет+атлас+лист) —
-          // берём его, иначе собираем комплект в браузере.
-          const ready = it.zip && resultZip ? resultZip.file(it.zip) : null;
-          if (ready) {
-            const blob = await ready.async("blob");
-            saveBlob(blob, label + ".zip");
-            log("… превью: готовая пара " + label + " скачана", "dim");
-          } else {
-            const out = await collectBundle(it);
-            saveBlob(out, label + "-spine.zip");
-            log("… превью: комплект " + label + " собран", "dim");
+          let out;
+          try {
+            out = await collectBundle(it);
+          } catch (primaryError) {
+            // Старые провайдеры иногда хранят комплект только во вложенном
+            // pairs/*.zip. Он остаётся запасным путём, но скачивается лишь
+            // после проверки, что внутри действительно есть картинка.
+            try {
+              out = await collectReadyBundle(it);
+            } catch (readyError) {
+              throw new Error(primaryError.message + "; " + readyError.message);
+            }
           }
+          saveBlob(out.blob, label + "-spine-images.zip");
+          log("… превью: комплект " + label + " собран · PNG " + out.png +
+              " · картинок " + out.pictures + " · файлов " + out.files, "dim");
         } catch (e) {
           log("Превью: " + e.message, "err");
         } finally {
