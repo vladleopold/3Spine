@@ -465,6 +465,17 @@
     const deadline = t0 + 18 * 60 * 1000;
     while (Date.now() < deadline && run.job === job && !run.finalReady) {
       await sleep(4000);
+      // Не запрашиваем архив, пока Worker не подтвердит его публикацию.
+      // Иначе ожидаемый промежуточный 404 засоряет консоль на каждом цикле.
+      let status;
+      try {
+        const sr = await fetch(BROKER + "/status?job=" + encodeURIComponent(job) + "&_=" + Date.now(), {
+          method: "GET", cache: "no-store",
+        });
+        if (!sr.ok) continue;
+        status = await sr.json();
+      } catch (e) { continue; }
+      if (!status.raw) continue;
       let r;
       try {
         r = await fetch(BROKER + "/download?archive=" + encodeURIComponent(job + "-raw"), {
