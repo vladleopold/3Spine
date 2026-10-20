@@ -132,7 +132,7 @@ def list_names(base: str) -> list[str]:
         text = data.decode("utf-8", "ignore")
         found = {m.group(1).decode() for m in NAME_RE.finditer(data)}
         # Если бандл содержит путь целиком, используем его как первичный источник.
-        for m in re.finditer(r"""["']([^"'\\s]{1,240}\\.(?:atlas|skel|json))["']""", text, re.I):
+        for m in re.finditer(r"""["']([^"'\s]{1,240}\.(?:atlas|skel|json))["']""", text, re.I):
             raw = m.group(1).split("?", 1)[0].replace("\\", "/")
             raw = raw.removeprefix("./").lstrip("/")
             if raw.startswith(("http://", "https://")):
