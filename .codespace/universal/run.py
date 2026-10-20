@@ -208,17 +208,31 @@ def strategy_3oaks(page_url: str, work: str, log) -> dict:
 # ─────────────────────── сборка проектов из пула ───────────────────────
 
 def gather(roots: list[str], pool: str) -> int:
-    """Сливает каталоги в один пул, сохраняя имена (в т.ч. разные папки)."""
+    """Объединяет деревья ресурсов без потери относительных путей.
+
+    Если разные источники содержат один и тот же относительный путь, приоритет
+    получает первый источник. Файлы с одинаковыми именами в разных каталогах
+    остаются раздельными и не перезаписывают друг друга.
+    """
     n = 0
+    os.makedirs(pool, exist_ok=True)
     for r in roots:
         if not r or not os.path.isdir(r):
             continue
         for dirpath, _d, names in os.walk(r):
             for name in names:
                 src = os.path.join(dirpath, name)
-                dst = os.path.join(pool, name)
-                if os.path.exists(dst) or os.path.getsize(src) < 8:
+                try:
+                    if os.path.getsize(src) < 8:
+                        continue
+                except OSError:
                     continue
+                rel = os.path.relpath(src, r)
+                dst = os.path.join(pool, rel)
+                # Same relative path: preserve the established source priority.
+                if os.path.exists(dst):
+                    continue
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copyfile(src, dst)
                 n += 1
     return n
