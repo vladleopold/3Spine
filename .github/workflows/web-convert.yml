@@ -632,17 +632,8 @@ jobs:
                           title = re.sub(r"\s*[|–—-]\s*[^|–—-]+$", "", title).strip()
                   except Exception:
                       pass
-          # Report can preserve the source texture format even when the output
-          # archive contains normalized PNG files.
-          report_path = os.path.join(os.environ.get("RUNNER_TEMP", ""), "universal", "universal-report.json")
-          try:
-              report_text = open(report_path, encoding="utf-8").read().lower()
-              if "webp" in report_text:
-                  fmt = "WEBP"
-              elif "avif" in report_text:
-                  fmt = "AVIF"
-          except Exception:
-              pass
+          # Не выводим формат по упоминанию в отчёте: это может быть
+          # формат нормализации, а не исходных файлов игры. Без подтверждения оставляем только имя игры.
           display = title + (" | " + fmt if title and fmt else "")
           entry = {
               "job": os.environ["JOB"],
