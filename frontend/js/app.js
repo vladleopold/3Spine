@@ -1452,9 +1452,9 @@
       await waitStatus(job, t0, taskNames);
       run.finalReady = true;
       await rawCardsTask;
-      log("> Результат готов, скачиваем…", "dim");
+      log("> Архив получен, проверяем результат…", "dim");
       lastZip = await fetchResult(job);
-      if (url) log("… ассеты игры скачаны и сконвертированы", "ok");
+      if (url) log("… архив получен, проверяем состав результата", "dim");
 
       const unpackText = await extractLog("unpack-log.txt");
       if (unpackText) {
@@ -1478,8 +1478,6 @@
         }
       }
       await logSummary();
-      setStatus("готово", "ok");
-      markRunDone();
       els.download.href = BROKER + "/download?job=" + encodeURIComponent(job);
       els.download.classList.remove("hidden");
       let hasPreviews = false;
@@ -1489,12 +1487,29 @@
         log("Превью: " + e.message, "err");
       }
       if (hasPreviews) {
+        setStatus("готово", "ok");
+        markRunDone();
         log("… анимаций в сборке: " + $("previews-grid").children.length, "dim");
         setRunStep("Готово — анимации показаны ниже, нажми на блок чтобы скачать одну пару.");
       } else {
-        showRunPanel(true, { title: "Проход завершён", step: "Скриншоты анимаций не собрались — архив можно скачать целиком." });
-        const badge = $("run-badge");
-        if (badge) badge.textContent = "готово";
+        let spineCount = 0;
+        try {
+          const archive = await JSZip.loadAsync(lastZip);
+          spineCount = Object.keys(archive.files).filter((name) => /\\.spine$/i.test(name) && !archive.files[name].dir).length;
+        } catch (_) { /* ниже покажем отсутствие превью */ }
+        markRunDone();
+        if (spineCount === 0) {
+          setStatus("нет анимаций", "err");
+          log("Ошибка: архив получен, но конвертер не создал ни одного .spine-файла. Результат не считается успешным.", "err");
+          showRunPanel(true, { title: "Анимации не созданы", step: "Конвертация завершилась без .spine-файлов. Архив доступен для диагностики." });
+          const badge = $("run-badge");
+          if (badge) badge.textContent = "ошибка";
+        } else {
+          setStatus("готово без превью", "ok");
+          showRunPanel(true, { title: "Файлы созданы, но превью отсутствует", step: "Архив содержит .spine-файлы, однако карточки анимаций не сформированы." });
+          const badge = $("run-badge");
+          if (badge) badge.textContent = "без превью";
+        }
         document.body.classList.remove("running");
         stopRunTicker();
       }
