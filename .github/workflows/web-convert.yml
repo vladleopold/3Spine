@@ -99,6 +99,10 @@ jobs:
           URL: ${{ steps.mode.outputs.url }}
         run: |
           set -uo pipefail
+          # 3Oaks может отдавать только WEBP/AVIF. Pillow нужен точному
+          # экстрактору до запуска браузерного fallback.
+          python3 -m pip install --quiet Pillow pillow-avif-plugin || \
+            python3 -m pip install --quiet Pillow
           echo "pairs=0" >> "$GITHUB_OUTPUT"
           OUT="$RUNNER_TEMP/universal"
           rm -rf "$OUT"
@@ -117,7 +121,21 @@ jobs:
             exit 0
           fi
           echo "input.zip собран универсальным экстрактором: $(unzip -l input.zip | tail -1)"
-          echo "PLAYSAON=1" >> "$GITHUB_ENV"
+          # Не меняем старый skip-путь Playson/Pragmatic. Только для 3Oaks
+          # включаем обязательную нарезку атласов после WEBP/AVIF→PNG.
+          if python3 - <<'PY'
+          import json, os
+          p = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "universal",
+                                          "universal-report.json"), encoding="utf-8"))
+          raise SystemExit(0 if any(x.get("стратегия") == "3oaks" and x.get("подошла")
+                                    for x in p.get("стратегии", [])) else 1)
+          PY
+          then
+            echo "THREE_OAKS=1" >> "$GITHUB_ENV"
+            echo "3Oaks: PNG-нормализация и нарезка включены"
+          else
+            echo "PLAYSAON=1" >> "$GITHUB_ENV"
+          fi
           echo "pairs=$N" >> "$GITHUB_OUTPUT"
 
       # ── Браузерный сейвер: запасной путь, а не основной ────────────────────
@@ -340,10 +358,11 @@ jobs:
           python3 .codespace/prepare_input.py input.zip input.zip
 
       - name: Unpack block → /images (atlases → subfolders, параллельно)
-        if: ${{ env.PLAYSAON != '1' }}
+        if: ${{ env.PLAYSAON != '1' || env.THREE_OAKS == '1' }}
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet Pillow
+          python3 -m pip install --quiet Pillow pillow-avif-plugin || \
+            python3 -m pip install --quiet Pillow
           python3 .codespace/unpack_block.py input.zip input.zip
 
       - name: Convert input.zip (native Linux converter, параллельно)

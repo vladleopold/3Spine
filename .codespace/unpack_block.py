@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from unpack_atlases import unpack  # noqa: E402
+from image_normalize import normalize_tree  # noqa: E402
 
 
 def unzip(zin_path: str, dst: str) -> None:
@@ -113,6 +114,15 @@ def main() -> None:
         src = os.path.join(tmp, "in")
         os.makedirs(src)
         unzip(zin, src)
+
+        # Дополнительный универсальный путь: создаём PNG-копии WEBP/AVIF и
+        # standalone DataURI независимо от глубины каталога. Исходники не
+        # удаляются, поэтому маршруты других провайдеров остаются прежними.
+        normalized = normalize_tree(src)
+        loglines.append(
+            "image-normalize: WEBP/AVIF→PNG %d, DataURI→PNG %d, ошибок %d" %
+            (normalized["converted"], normalized["data_uri"], normalized["failed"]))
+        print(loglines[-1])
 
         out_img = os.path.join(src, "images")
         os.makedirs(out_img, exist_ok=True)

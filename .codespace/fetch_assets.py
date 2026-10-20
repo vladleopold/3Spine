@@ -31,7 +31,9 @@ from concurrent.futures import ThreadPoolExecutor
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
-IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".ktx", ".pvr", ".avif")
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".avif", ".heif", ".heic",
+             ".gif", ".bmp", ".tiff", ".tif", ".svg", ".ktx", ".ktx2",
+             ".basis", ".pvr", ".dds")
 SPINE_EXT = (".json", ".atlas", ".atlas.txt")
 NORMAL_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -382,14 +384,20 @@ def pick_assets(urls, kinds) -> dict:
     json берём только если рядом есть atlas/скелет или в пути есть spine-маркер,
     иначе это конфиги движка (spritesheet, settings) — они в конвейере бесполезны.
     """
-    atlas = {u for u in urls if u.lower().endswith((".atlas", ".atlas.txt", ".fnt"))}
-    skels = {u for u in urls if u.lower().endswith((".skel", ".scn"))}
+    def path_lower(url):
+        try:
+            return urlsplit(url).path.lower()
+        except Exception:
+            return url.lower().split("?", 1)[0].split("#", 1)[0]
+
+    atlas = {u for u in urls if path_lower(u).endswith((".atlas", ".atlas.txt", ".fnt"))}
+    skels = {u for u in urls if path_lower(u).endswith((".skel", ".scn"))}
     jsons, pages, others = [], [], []
     for u in urls:
-        low = u.lower()
+        low = path_lower(u)
         if looks_junk(u):
             continue
-        if low.endswith((".png", ".jpg", ".jpeg", ".webp", ".ktx")):
+        if low.endswith(IMAGE_EXT):
             pages.append(u)
         elif low.endswith((".json", ".data", ".unityweb", ".bundle", ".bin", ".pck", ".zip")):
             hint = any(h in low for h in SPINE_HINTS)
@@ -767,18 +775,24 @@ def discover(url: str, tmp: str, budget_ms: int = 18000, depth: int = 2,
 
 
 def atlas_page_refs(atlas_text: str) -> list:
+    """Read page paths structurally and keep nested/modern texture formats."""
     names = []
-    for line in atlas_text.split("\n"):
-        for part in re.split(r"[,\s]+", line.strip()):
-            if re.search(r"\.(png|jpg|jpeg|webp)$", part, re.I):
-                names.append(part.strip())
+    lines = atlas_text.splitlines()
+    for i, line in enumerate(lines[:-1]):
+        if not line.strip() or line[:1].isspace():
+            continue
+        page = line.strip().replace("\\", "/")
+        if page.lower().endswith(IMAGE_EXT) and lines[i + 1].strip().startswith("size:"):
+            names.append(page)
     return names
 
 
 DEFAULT_KINDS = ("json", "atlas", "png")
 
 
-REF_RE = re.compile(r"[A-Za-z0-9_./\\-]{1,140}\.(?:atlas|skel|scn|json|png|webp|ktx)(?:\.txt)?", re.I)
+REF_RE = re.compile(
+    r"[A-Za-z0-9_./\\-]{1,180}\.(?:atlas|skel|scn|json|png|jpe?g|webp|avif|"
+    r"heic?|ktx2?|basis|pvr|dds|tiff?)(?:\.txt)?", re.I)
 PACKED_EXT = (".data", ".unityweb", ".bundle", ".bin", ".pck", ".zip", ".pak", ".db", ".assets")
 
 
@@ -1601,7 +1615,7 @@ def main() -> int:
             fp = os.path.join(dirpath, fn)
             if fn.lower().endswith((".atlas", ".atlas.txt", ".fnt")):
                 atlas_files.append(fp)
-            elif fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            elif fn.lower().endswith(IMAGE_EXT):
                 pages.append(fp)
     have = {os.path.basename(p).lower() for p in pages}
     need_urls = []

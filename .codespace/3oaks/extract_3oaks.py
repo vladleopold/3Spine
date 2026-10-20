@@ -41,12 +41,21 @@ import sys
 import urllib.error
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from image_normalize import convert_to_png  # noqa: E402
+
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " \
      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 TIMEOUT = 45
 VARIANTS = ("720", "720_webp", "720_avif")          # PNG → WebP → AVIF
 PAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".avif", ".ktx")
-NAME_RE = re.compile(rb'"([A-Za-z0-9_][A-Za-z0-9_.-]{1,60}\.(?:skel|json))"')
+# Старые игры кладут просто "hero.skel", новые — полный srcs-путь
+# "./assets/packs/720_webp/hero.skel". Берём оба варианта и дальше
+# проверяем реальный файл/Spine-JSON, поэтому посторонние JSON безопасны.
+NAME_RE = re.compile(
+    rb'["\'](?:\./)?(?:[^"\']*/)?([A-Za-z0-9_][A-Za-z0-9_.-]{1,100}\.(?:skel|json))["\']',
+    re.I,
+)
 OG_RE = re.compile(rb'property="og:image"\s+content="([^"]+)"')
 BUNDLES = ("src/game.js", "src/libs.js", "init.js", "src/main.js")
 
@@ -144,26 +153,39 @@ def atlas_pages(atlas_text: str, atlas_dir: str) -> list[str]:
     return out
 
 
-def to_png(path: str) -> bool:
-    """WebP/AVIF-страницу переводим в PNG: наш конвейер умеет только PNG/JPEG."""
+def to_png(path: str) -> str | None:
+    """Возвращает PNG-путь; оригинал остаётся для совместимости провайдеров."""
+    out = convert_to_png(path)
+    if out:
+        return out
     if path.lower().endswith((".png", ".jpg", ".jpeg")):
-        return True
-    try:
-        from PIL import Image
-    except Exception as e:
-        warn("нет Pillow, нечем перевести %s: %s" % (os.path.basename(path), e))
-        return False
-    try:
-        with Image.open(path) as im:
-            im.convert("RGBA").save(os.path.splitext(path)[0] + ".png", optimize=True)
-    except Exception as e:
-        warn("не перевёл %s: %s" % (os.path.basename(path), e))
-        return False
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-    return True
+        return path
+    warn("не перевёл %s в PNG" % os.path.basename(path))
+    return None
+
+
+def rewrite_atlas_pages(text: str, replacements: dict[str, str]) -> str:
+    """Меняет только структурные строки страниц, не имена регионов."""
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines[:-1]):
+        raw = line.rstrip("\r\n")
+        if not raw or raw[:1].isspace():
+            continue
+        if not lines[i + 1].strip().startswith("size:"):
+            continue
+        new = replacements.get(raw.strip())
+        if new:
+            ending = "\r\n" if line.endswith("\r\n") else ("\n" if line.endswith("\n") else "")
+            lines[i] = new + ending
+    return "".join(lines)
+
+
+def safe_page_path(root: str, page: str) -> str:
+    """Сохраняет вложенный путь страницы, блокируя абсолютные пути и ``..``."""
+    parts = [p for p in page.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or any(p == ".." for p in parts):
+        parts = [os.path.basename(page)]
+    return os.path.join(root, *parts)
 
 
 def fetch_one(base: str, name: str, out_root: str,
@@ -195,11 +217,11 @@ def fetch_one(base: str, name: str, out_root: str,
         with open(os.path.join(dst, name + skel_ext), "wb") as f:
             f.write(skel)
         total += len(skel)
-        with open(os.path.join(dst, name + ".atlas"), "wb") as f:
-            f.write(atlas)
-        total += len(atlas)
-        for page in atlas_pages(atlas.decode("utf-8", "replace"), pdir):
-            dest = os.path.join(dst, os.path.basename(page))
+        atlas_text = atlas.decode("utf-8", "replace")
+        replacements: dict[str, str] = {}
+        for page in atlas_pages(atlas_text, pdir):
+            dest = safe_page_path(dst, page)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
             if not os.path.exists(dest) or os.path.getsize(dest) < 256:
                 blob = get("%s/%s" % (pdir, page), want=48 << 20)
                 if not blob:
@@ -210,8 +232,18 @@ def fetch_one(base: str, name: str, out_root: str,
                 total += len(blob)
             else:
                 total += os.path.getsize(dest)
-            if not to_png(dest):
+            png = to_png(dest)
+            if not png:
                 return None
+            if os.path.abspath(png) != os.path.abspath(dest):
+                page_dir = page.replace("\\", "/").rsplit("/", 1)
+                new_name = os.path.basename(png)
+                replacements[page] = (page_dir[0] + "/" + new_name) if len(page_dir) == 2 else new_name
+                total += os.path.getsize(png)
+        atlas_text = rewrite_atlas_pages(atlas_text, replacements)
+        with open(os.path.join(dst, name + ".atlas"), "w", encoding="utf-8", newline="") as f:
+            f.write(atlas_text)
+        total += len(atlas_text.encode("utf-8"))
         # страницы лежат рядом со скелетом, атлас их ищет по имени — ок
         return (name, skel_ext, total, var)
     return None

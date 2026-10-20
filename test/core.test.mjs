@@ -9,8 +9,8 @@ import {
 } from '../scripts/download-resources.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'core-'));
-const write = (rel, body) => {
-  const p = path.join(...rel.split('/'));
+const write = (base, rel, body) => {
+  const p = path.join(base, ...rel.split('/'));
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, body);
 };
@@ -29,24 +29,24 @@ test('stripQuerySuffix: короткий хвост и его отсутстви
 
 test('countSpine: 3oaks — atlas и skel с РАЗНЫМИ query дают одну пару', () => {
   const d = tmp();
-  write('arrow-PzdlMjBlM2.atlas', 'atlas');
-  write('arrow-Pzg0NTc5Mz.skel', 'skel');
-  write('y.atlas', 'atlas');     // без бинаря
-  write('z.skel', 'skel');       // без атласа
+  write(d, 'arrow-PzdlMjBlM2.atlas', 'atlas');
+  write(d, 'arrow-Pzg0NTc5Mz.skel', 'skel');
+  write(d, 'y.atlas', 'atlas');     // без бинаря
+  write(d, 'z.skel', 'skel');       // без атласа
   assert.equal(countSpine(d), 1);
 });
 
 test('countSpine: полная пара в подкаталоге images/hero', () => {
   const d = tmp();
-  write('images/hero/hero.atlas', 'atlas');
-  write('images/hero/hero.bin', 'bin');
+  write(d, 'images/hero/hero.atlas', 'atlas');
+  write(d, 'images/hero/hero.bin', 'bin');
   assert.equal(countSpine(d), 1);
 });
 
 test('countSpine: одинаковые имена в разных папках парой не считаются', () => {
   const d = tmp();
-  write('images/hero/hero.atlas', 'atlas');
-  write('hero.skel', 'skel');
+  write(d, 'images/hero/hero.atlas', 'atlas');
+  write(d, 'hero.skel', 'skel');
   assert.equal(countSpine(d), 0);
 });
 

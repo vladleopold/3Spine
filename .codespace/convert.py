@@ -14,7 +14,9 @@ sys.path.insert(0, HERE)
 from skeleton_router import classify, engine_order  # анализатор-детектор  # noqa: E402
 CONVERTER = os.path.join(HERE, "..", "backend", "converter", "SpineSkeletonDataConverter")
 RESTORE = os.path.join(HERE, "spine_restore", "spine_restore.py")
-IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+IMG_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".avif", ".heif", ".heic",
+            ".gif", ".bmp", ".tiff", ".tif", ".svg", ".ktx", ".ktx2",
+            ".basis", ".pvr", ".dds"}
 # готовые проекты Spine и сопутствующие данные — пробрасываем как есть
 # .skel нужен, чтобы compile-job увидел бинарные скелеты и собрал из них .spine;
 # .zip — готовые комплекты пар (pairs/<имя>.zip) для сайта.

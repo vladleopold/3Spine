@@ -323,7 +323,7 @@ def open_image(path: str):
 
 
 _TREE_INDEX_LOCK = threading.Lock()
-_TREE_INDEX: Dict[str, str] = {}          # case-insensitive basename -> абсолютный путь
+_TREE_INDEX: Dict[str, str] = {}          # basename/stem keys -> абсолютный путь
 _TREE_INDEX_DIRS: Optional[Tuple[str, ...]] = None
 
 
@@ -353,6 +353,15 @@ def _build_tree_index(roots: List[str]) -> Dict[str, str]:
                 # при коллизии базовых имён оставляем самую «глубокую» (упакованную) копию
                 if prev is None or len(full) > len(prev):
                     index[key] = full
+                # Additive fallback: an atlas may still name page.webp while a
+                # normalizer produced page.png in another/nested directory.
+                stem_key = "stem:" + os.path.splitext(fn)[0].lower()
+                old = index.get(stem_key)
+                priority = {'.png': 0, '.webp': 1, '.avif': 2,
+                            '.jpg': 3, '.jpeg': 3, '.bmp': 4}
+                if old is None or priority.get(os.path.splitext(full)[1].lower(), 9) < \
+                        priority.get(os.path.splitext(old)[1].lower(), 9):
+                    index[stem_key] = full
     return index
 
 
@@ -379,7 +388,7 @@ def _tree_index_find(tree_index: Dict[str, str], image_name: str) -> Optional[st
         return hit
     stem, ext = os.path.splitext(base)
     if stem:
-        hit = tree_index.get((stem + ext).lower())
+        hit = tree_index.get((stem + ext).lower()) or tree_index.get("stem:" + stem.lower())
         if hit:
             return hit
     return None
