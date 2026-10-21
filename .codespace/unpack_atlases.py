@@ -565,19 +565,13 @@ def extract_regions(atlas_path: str, pages: List[Dict[str, Any]], atlas_dir: str
                 box = (x, y, x + w, y + h)
             cropped = img.crop(box)
             if r.get('rotate'):
-                # Spine rotate true means region is stored 90° CW, need to rotate CCW (90) to restore
-                # Use 90 CCW by default; allow rotate_mode to override but normalize
+                # Spine rotate true means region is stored 90° CW. For this Spine version
+                # (4.2) the restored region comes out 180° off, so rotate 270° (90 + 180).
                 try:
                     angle = int(rotate_mode)
-                    # if angle is -90, convert to 90 CCW for correct restoration
-                    if angle == -90:
-                        angle = 90
-                    elif angle == 90:
-                        angle = 90
-                    else:
-                        angle = 90
+                    angle = 270
                 except Exception:
-                    angle = 90
+                    angle = 270
                 cropped = cropped.rotate(angle, expand=True)
             # preserve directory structure if region name contains '/'
             raw_name = r.get('name', '')
