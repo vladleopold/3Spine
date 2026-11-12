@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="PSD to Spine animation using a private cloud animation service">
+<title>3Spine — Animator</title>
+<style>
+:root{color-scheme:dark;font:16px/1.5 system-ui,sans-serif;background:#0e0e12;color:#f0f0f5}
+*{box-sizing:border-box}body{margin:0}header,main,footer{max-width:900px;margin:auto;padding:24px}
+header{display:flex;align-items:center;gap:12px}h1{font-size:1.3rem;letter-spacing:.09em;margin:0}
+small,p.note,footer{color:#acacbb}main{display:grid;gap:18px}.card{border:1px solid #373744;border-radius:12px;background:#1c1c23;padding:20px}
+h2{margin:0 0 12px;font-size:1.05rem}label{display:block;margin:10px 0 6px}
+input[type=url],textarea{width:100%;background:#111116;color:#fff;border:1px solid #555566;padding:12px;border-radius:7px;font:inherit}
+textarea{min-height:110px;resize:vertical}button,.download{display:inline-block;background:#f08748;color:#161115;padding:11px 20px;border:0;border-radius:7px;text-decoration:none;font:inherit;font-weight:650;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}#preview{display:none;max-width:100%;max-height:360px;margin:12px auto}
+#download{display:none}#status{white-space:pre-wrap;overflow-wrap:anywhere;min-height:2em}a{color:#ffad75}
+</style>
+<script defer src="https://cdn.jsdelivr.net/npm/ag-psd@14.5.2/dist/bundle.js"></script>
+<script defer src="./app.js"></script></head>
+<body><header><h1>3SPINE</h1><small>v1.0</small></header>
+<main><section class="card"><h2>Source</h2><label for="url">PSD URL</label>
+<input id="url" type="url" autocomplete="off" placeholder="Direct HTTPS PSD link">
+<label for="file">Or open a file</label><input id="file" type="file" accept=".psd,image/vnd.adobe.photoshop">
+<canvas id="preview" aria-label="PSD source preview"></canvas><p id="info" class="note">No examples. Your original artwork stays the source.</p></section>
+<section class="card"><h2>Motion</h2><label for="prompt">Describe the animation</label>
+<textarea id="prompt" placeholder="Describe the motion"></textarea>
+<p><button id="create">Сделать всё</button> <a id="download" class="download" download="spine-animation.zip">Download</a></p>
+<div id="status" role="status" aria-live="polite"></div></section></main>
+<footer>Browser interface only. No decompiler, licensed Spine Editor, or private animation-agent code is published here.</footer></body></html>
