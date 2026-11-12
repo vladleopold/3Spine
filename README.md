@@ -1,13 +1,15 @@
-# Spine Animator — Public Website Source
+# 3Spine — public web interface
 
-This repository is generated from an explicit **frontend-only allowlist** maintained in the private development pipeline. It is not a mirror of 3Spine or the proprietary 2Spine animation agent.
+**Website:** https://vladleopold.github.io/3Spine/
 
-## Boundary
+This public repository is a **fresh, frontend-only release**. It contains only:
+- `index.html` — the static browser interface;
+- `app.js` — browser-side PSD preview and requests to separate API services;
+- `.nojekyll` — a static-site marker;
+- this README.
 
-Published: website HTML, CSS and user-facing JavaScript to accept PSD artwork, request a cloud animation, and download a server-generated ZIP.
+The website is served by the separate public personal GitHub Pages repository `vladleopold/vladleopold.github.io`, at `/3Spine/`.
 
-Not published: Spine Editor license, Linux executables, 3Spine decompiler, private PSD tools, animation engine internals, CI secrets, servers, test fixtures or source repository history.
+**Not included:** the proprietary 3Spine engine, backend, licensed Spine Editor, automation, CI credentials, source assets, or the private development repository's Git history. Those remain private.
 
-The browser sends PSD artwork layer pixels and motion instructions to separate Cloudflare endpoints. Users should not consider a response an artistically approved Spine project until verified in the licensed Editor.
-
-GitHub Pages deploys from the separately generated public `SpineAnimator/SpineAnimator.github.io` repository. The publishing pipeline must never force-push a private source tree into either public repository.
+Browser requests are handled by separately hosted services. Publishing the interface does not publish the engine or make the complete processing pipeline publicly auditable.
